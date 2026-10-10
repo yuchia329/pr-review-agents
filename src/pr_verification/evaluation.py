@@ -12,7 +12,7 @@ from pathlib import Path
 
 from pr_verification.core import PullRequest, run
 from pr_verification.model import Model
-from pr_verification.report import Report, Verdict
+from pr_verification.report import BudgetSpend, Report, Verdict
 
 EntryPoint = Callable[[PullRequest, Model], Report]
 """The shape of the core's entry point, `pr_verification.core.run`."""
@@ -57,7 +57,7 @@ class Case:
 class CaseRun:
     """What one run of one case through the entry point gave."""
 
-    case: str
+    name: str
     """The case's name."""
 
     repetition: int
@@ -70,14 +70,12 @@ class CaseRun:
     """The Verdict of each Claim in the report, in the report's order. Empty when the report
     has no Claims and when there is no report."""
 
-    seconds: float | None
-    """The time the report says was spent, or None when there is no report."""
-
-    dollars: float | None
-    """The money the report says was spent, or None when there is no report."""
+    spend: BudgetSpend | None
+    """The time and money the report says were spent, or None when there is no report."""
 
     no_report: str | None
-    """Why the run gave no report, as the error raised said it, or None when it gave one."""
+    """Why the run gave no report, as the error raised said it, or None when it gave one.
+    It may quote a model's response, so it is Untrusted Content."""
 
 
 @dataclass(frozen=True)
@@ -92,16 +90,21 @@ class Scores:
     - expected Refuted, given Confirmed: a False Assurance;
     - given Inconclusive, whatever was expected: inconclusive.
 
-    A run with no Verdicts, whether its report has no Claims or it gave no report, is scored as
-    one Claim left Inconclusive: every case makes at least one Claim, so that run left at
-    least one undecided.
-
     So `decided + false_blocks + false_assurances + inconclusive` equals `claims`, which
-    equals `true_claims + false_claims`. A rate whose denominator is 0 is 0.0.
+    equals `true_claims + false_claims`.
+
+    A run that gave no Verdicts, whether its report has no Claims or it gave no report, adds
+    no Claim to these counts. It is counted in `runs_without_verdicts`, so that a system
+    that finds no Claims is seen, and is not scored as if nothing were wrong.
+
+    A rate whose denominator is 0 is None: there is nothing to take a share of.
     """
 
     runs: int
     """How many runs were scored: one per pull request per repetition."""
+
+    runs_without_verdicts: int
+    """How many of those runs gave no Verdicts."""
 
     true_claims: int
     """Claims scored whose expected Verdict is Confirmed."""
@@ -119,15 +122,15 @@ class Scores:
     """False Claims given a Confirmed Verdict."""
 
     inconclusive: int
-    """Claims given an Inconclusive Verdict, with one for each run that gave no Verdicts."""
+    """Claims given an Inconclusive Verdict."""
 
     seconds_per_pull_request: float | None
-    """The mean of `CaseRun.seconds` over the runs where it is known, or None when it is
-    known for none."""
+    """The mean of `CaseRun.spend.seconds` over the runs where it is known, or None when it
+    is known for none."""
 
     dollars_per_pull_request: float | None
-    """The mean of `CaseRun.dollars` over the runs where it is known, or None when it is
-    known for none."""
+    """The mean of `CaseRun.spend.dollars` over the runs where it is known, or None when it
+    is known for none."""
 
     @property
     def claims(self) -> int:
@@ -135,17 +138,17 @@ class Scores:
         raise NotImplementedError
 
     @property
-    def decided_rate(self) -> float:
+    def decided_rate(self) -> float | None:
         """The Decided Rate: `decided / claims`."""
         raise NotImplementedError
 
     @property
-    def false_block_rate(self) -> float:
+    def false_block_rate(self) -> float | None:
         """`false_blocks / true_claims`: the share of true Claims that were Refuted."""
         raise NotImplementedError
 
     @property
-    def false_assurance_rate(self) -> float:
+    def false_assurance_rate(self) -> float | None:
         """`false_assurances / false_claims`: the share of false Claims that were Confirmed."""
         raise NotImplementedError
 
@@ -203,8 +206,8 @@ class Evaluation:
 
         Each part holds `scores`, `by_repetition` (a list), and `varying` (a list of names).
         Each scores object holds every field of `Scores` under its own name, and `claims`,
-        `decided_rate`, `false_block_rate`, and `false_assurance_rate`. A mean that is not
-        known is null.
+        `decided_rate`, `false_block_rate`, and `false_assurance_rate`. A rate or a mean that
+        is None is null.
         """
         raise NotImplementedError
 
@@ -213,7 +216,7 @@ def evaluate(
     cases: Iterable[Case],
     model: Model,
     *,
-    repetitions: int = 1,
+    repetitions: int,
     entry_point: EntryPoint = run,
 ) -> Evaluation:
     """Run each case `repetitions` times through the entry point and score what comes back.
@@ -224,11 +227,11 @@ def evaluate(
     model)`: nothing else of the case is passed on.
 
     Each run becomes one `CaseRun`, in the `PartEvaluation` of its case's part, with
-    `verdicts` taken from the report's Claims and `seconds` and `dollars` from its
-    `budget_spend`. A run that raises
-    `InvalidPullRequest`, `ModelFailed`, or `ClaimExtractionFailed`, the errors for which the
-    command-line tool prints no report, is recorded with `no_report` and the evaluation
-    carries on. Any other exception is raised.
+    `verdicts` taken from the report's Claims and `spend` from its `budget_spend`.
+
+    A run that raises `InvalidPullRequest`, `ModelFailed`, or `ClaimExtractionFailed` is
+    recorded with `no_report` and the evaluation carries on: these say that one pull request
+    could not be verified. Any other exception is a fault in the system and is raised.
 
     Raises `ValueError` before running anything when `repetitions` is less than 1, when two
     cases share a name, or when a case expects Inconclusive.
@@ -239,14 +242,15 @@ def evaluate(
 def hand_made_cases(directory: Path) -> tuple[Case, ...]:
     """A handful of small hand-made cases, so the harness can run against the core as it is.
 
-    Builds each case's repository in a directory of its own under `directory`, which must
-    exist, and returns the cases:
+    Each pull request is a small change to a Python repository whose text states a
+    Behavioural Claim. Builds each case's repository in a directory of its own under
+    `directory`, which must exist, and returns the cases:
 
     - there are between 3 and 10, and every name is different and starts with `hand-made/`;
     - at least one is in each `Part`;
     - at least one expects Confirmed and at least one expects Refuted;
-    - each pull request's two commits are in its repository and differ, and its text states
-      at least one Behavioural Claim.
+    - each pull request's two commits are in its repository and differ, and its title is
+      not empty.
 
     Called again with another directory, it gives the same names, parts, pull request text,
     and expected Verdicts, in the same order.
