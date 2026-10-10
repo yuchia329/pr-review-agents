@@ -1,6 +1,5 @@
 """The core's entry point: a pull request goes in, a structured report comes out."""
 
-import os
 import subprocess
 import time
 from dataclasses import dataclass
@@ -9,6 +8,7 @@ from pathlib import Path
 from pr_verification.claims import extract_claims
 from pr_verification.model import Model
 from pr_verification.report import BudgetSpend, Claim, Report, Verdict
+from pr_verification.repository import git_environment
 
 NOT_VERIFIED_YET = "This Claim has not been verified yet: no Evidence was gathered for it."
 
@@ -44,14 +44,11 @@ def run(pull_request: PullRequest, model: Model) -> Report:
 
 
 def _resolve_commit(repository: Path, role: str, commit: str) -> str:
-    # Only the named directory may answer: not a repository above it, nor one from the environment.
-    environment = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE")}
-    environment["GIT_CEILING_DIRECTORIES"] = str(repository.resolve().parent)
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--verify", "--end-of-options", f"{commit}^{{commit}}"],
             cwd=repository,
-            env=environment,
+            env=git_environment(repository),
             capture_output=True,
             text=True,
         )

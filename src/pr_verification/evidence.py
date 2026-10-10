@@ -1,7 +1,7 @@
 """Gathering Evidence by running code in the Sandbox."""
 
-from pr_verification.report import RunEvidence
-from pr_verification.sandbox import Command, Limits, Phase, Sandbox
+from pr_verification.report import EvidenceSource, RunEvidence
+from pr_verification.sandbox import Command, Limits, Phase, RunResult, Sandbox
 
 
 def run_on_both_commits(
@@ -24,4 +24,20 @@ def run_on_both_commits(
     `after` happens whatever the run against `before` did. Raises `SandboxFailed` when the
     Sandbox itself cannot do a run.
     """
-    raise NotImplementedError
+    results = [
+        sandbox.run(command, commit=commit, phase=phase, limits=limits)
+        for commit in (before, after)
+    ]
+    return RunEvidence(
+        source=EvidenceSource.RAN_CODE,
+        observation=f"before: {_ending(results[0])}; after: {_ending(results[1])}",
+        command=command,
+        before=results[0],
+        after=results[1],
+    )
+
+
+def _ending(result: RunResult) -> str:
+    if result.limit_hit is not None:
+        return f"stopped at the {result.limit_hit} limit"
+    return f"exit status {result.exit_status}"
