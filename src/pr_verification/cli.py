@@ -6,7 +6,9 @@ import traceback
 from collections.abc import Sequence
 from pathlib import Path
 
+from pr_verification.claims import ClaimExtractionFailed
 from pr_verification.core import InvalidPullRequest, PullRequest, run
+from pr_verification.model import Model
 from pr_verification.report import Gate, GateDecision
 
 EXIT_PASS = 0
@@ -18,8 +20,14 @@ def exit_code(gate: Gate) -> int:
     return EXIT_BLOCK if gate.decision is GateDecision.BLOCK else EXIT_PASS
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None, model: Model | None = None) -> int:
     arguments = _parser().parse_args(argv)
+    if model is None:
+        # Only the scripted stand-in exists so far, and it cannot be named on the command line.
+        print(
+            "pr-verification: no model is configured, so nothing can be verified", file=sys.stderr
+        )
+        return EXIT_NO_REPORT
     try:
         report = run(
             PullRequest(
@@ -29,10 +37,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 title=arguments.title,
                 description=_read(arguments.description_file),
                 linked_issue=_read(arguments.linked_issue_file),
-            )
+            ),
+            model,
         )
         print(report.to_json(), flush=True)
-    except (InvalidPullRequest, OSError, UnicodeDecodeError) as error:
+    except (InvalidPullRequest, ClaimExtractionFailed, OSError, UnicodeDecodeError) as error:
         print(f"pr-verification: {error}", file=sys.stderr)
         return EXIT_NO_REPORT
     except Exception:

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from conftest import FixtureRepository
+from conftest import FixtureRepository, model_listing
 
 from pr_verification.core import InvalidPullRequest, PullRequest, run
 from pr_verification.report import GateDecision
@@ -16,7 +16,8 @@ def test_pull_request_with_no_claims_passes_the_gate_with_nothing_to_verify(
             before=fixture_repository.before,
             after=fixture_repository.after,
             title="Tidy up",
-        )
+        ),
+        model_listing(),
     )
 
     assert report.claims == ()
@@ -30,7 +31,8 @@ def test_report_names_the_two_commits_it_compared_in_full(
     report = run(
         PullRequest(
             repository=fixture_repository.path, before="HEAD~1", after="HEAD", title="Tidy up"
-        )
+        ),
+        model_listing(),
     )
 
     assert report.before == fixture_repository.before
@@ -46,7 +48,8 @@ def test_report_for_no_claims_has_no_findings_and_no_model_spend(
             before=fixture_repository.before,
             after=fixture_repository.after,
             title="Tidy up",
-        )
+        ),
+        model_listing(),
     )
 
     assert report.findings == ()
@@ -63,12 +66,18 @@ def test_commit_that_is_not_in_the_repository_is_rejected(
     commits[missing] = "0" * 40
 
     with pytest.raises(InvalidPullRequest, match=missing):
-        run(PullRequest(repository=fixture_repository.path, title="Tidy up", **commits))
+        run(
+            PullRequest(repository=fixture_repository.path, title="Tidy up", **commits),
+            model_listing(),
+        )
 
 
 def test_directory_that_is_not_a_repository_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(InvalidPullRequest):
-        run(PullRequest(repository=tmp_path, before="HEAD~1", after="HEAD", title="Tidy up"))
+        run(
+            PullRequest(repository=tmp_path, before="HEAD~1", after="HEAD", title="Tidy up"),
+            model_listing(),
+        )
 
 
 def test_directory_inside_a_repository_is_not_taken_for_the_repository(
@@ -78,7 +87,10 @@ def test_directory_inside_a_repository_is_not_taken_for_the_repository(
     inside.mkdir()
 
     with pytest.raises(InvalidPullRequest):
-        run(PullRequest(repository=inside, before="HEAD~1", after="HEAD", title="Tidy up"))
+        run(
+            PullRequest(repository=inside, before="HEAD~1", after="HEAD", title="Tidy up"),
+            model_listing(),
+        )
 
 
 def test_repository_named_on_the_call_wins_over_one_named_in_the_environment(
@@ -89,7 +101,8 @@ def test_repository_named_on_the_call_wins_over_one_named_in_the_environment(
     report = run(
         PullRequest(
             repository=fixture_repository.path, before="HEAD~1", after="HEAD", title="Tidy up"
-        )
+        ),
+        model_listing(),
     )
 
     assert report.after == fixture_repository.after

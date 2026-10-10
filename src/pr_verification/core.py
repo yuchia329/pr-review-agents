@@ -6,7 +6,11 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from pr_verification.report import BudgetSpend, Report
+from pr_verification.claims import extract_claims
+from pr_verification.model import Model
+from pr_verification.report import BudgetSpend, Claim, Report, Verdict
+
+NOT_VERIFIED_YET = "This Claim has not been verified yet: no Evidence was gathered for it."
 
 
 @dataclass(frozen=True)
@@ -23,14 +27,17 @@ class InvalidPullRequest(Exception):
     """The pull request as given cannot be verified at all, so there is no report."""
 
 
-def run(pull_request: PullRequest) -> Report:
+def run(pull_request: PullRequest, model: Model) -> Report:
     started = time.monotonic()
     before = _resolve_commit(pull_request.repository, "before", pull_request.before)
     after = _resolve_commit(pull_request.repository, "after", pull_request.after)
+    claims = extract_claims(
+        model, pull_request.title, pull_request.description, pull_request.linked_issue
+    )
     return Report(
         before=before,
         after=after,
-        claims=(),
+        claims=tuple(Claim(text, Verdict.INCONCLUSIVE, NOT_VERIFIED_YET) for text in claims),
         findings=(),
         budget_spend=BudgetSpend(seconds=time.monotonic() - started, dollars=0.0, steps=0),
     )
