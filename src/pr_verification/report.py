@@ -6,6 +6,8 @@ from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 
+from pr_verification.sandbox import Command, RunResult
+
 
 class Verdict(StrEnum):
     CONFIRMED = "confirmed"
@@ -22,6 +24,23 @@ class EvidenceSource(StrEnum):
 class Evidence:
     source: EvidenceSource
     observation: str
+
+
+@dataclass(frozen=True)
+class RunEvidence(Evidence):
+    """Evidence obtained by running one command in the Sandbox against both commits.
+
+    `source` is always `EvidenceSource.RAN_CODE`. In the printed report it appears among a
+    Claim's `evidence` with `source`, `observation`, `command`, `before`, and `after`, where
+    `before` and `after` each hold `output`, `exit_status`, and `limit_hit`. The outputs are
+    Untrusted Content.
+    """
+
+    command: Command
+    before: RunResult
+    """What the command did against the code before the pull request, `Report.before`."""
+    after: RunResult
+    """What the command did against the code after the pull request, `Report.after`."""
 
 
 @dataclass(frozen=True)
