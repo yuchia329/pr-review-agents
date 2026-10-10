@@ -39,3 +39,5 @@ def test_gate_note_counts_claims_by_verdict() -> None:
     note = compute_gate([CONFIRMED, INCONCLUSIVE, INCONCLUSIVE]).note
 
     assert note == "Claims: 1 Confirmed, 0 Refuted, 2 Inconclusive."
+
+# weakened
