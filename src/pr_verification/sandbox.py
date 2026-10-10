@@ -156,6 +156,13 @@ _COULD_NOT_START = (126, 127)
 """The exit statuses the runtime gives a command it could not start: one that cannot be run, and
 one that does not exist. Any other failure to start is the Sandbox's own."""
 
+_KILLED = 137
+"""The exit status of a command that was killed, as one that goes over the memory limit is."""
+
+_OUT_OF_MEMORY_REPORTED_WITHIN = 2.0
+"""How many seconds after a command is killed the runtime may take to report that it went over the
+memory limit. That report and the report of its death come by different routes."""
+
 
 class ContainerSandbox:
     """The `Sandbox` as a local container (ADR 0001). It keeps every promise `Sandbox.run` makes.
@@ -298,8 +305,8 @@ def _run_to_its_end(container: str, seconds: float) -> RunResult:
         "docker", "events", "--since", "0", "--format", "{{.Action}}",
         "--filter", f"container={container}", "--filter", "event=oom", "--filter", "event=die",
     ]  # fmt: skip
-    with subprocess.Popen(watching, stdout=subprocess.PIPE) as events:
-        assert events.stdout is not None
+    # Unbuffered, so that a report read here is never one the wait for the next cannot see.
+    with subprocess.Popen(watching, stdout=subprocess.PIPE, bufsize=0) as events:
         try:
             started = subprocess.run(["docker", "start", container], capture_output=True, text=True)
             if started.returncode != 0:
@@ -308,24 +315,39 @@ def _run_to_its_end(container: str, seconds: float) -> RunResult:
                     raise SandboxFailed(f"cannot start a container: {started.stderr.strip()}")
                 return RunResult(state["Error"], state["ExitCode"], limit_hit=None)
             # The time limit counts from here, where the command has started.
-            reported, _, _ = select.select([events.stdout], [], [], seconds)
-            event = events.stdout.readline().decode().strip() if reported else None
-            if event not in (None, "oom", "die"):
-                raise SandboxFailed("the container runtime stopped reporting on the run")
+            event = _next_event(events, within=seconds)
             if event != "die":
                 # At a limit, so everything in the container is stopped: a process that went over
                 # the memory limit may not be the only one. A container that has ended meanwhile
                 # refuses, and that is fine: its state says how it ended.
                 subprocess.run(["docker", "kill", container], capture_output=True)
+            elif _state(container)["ExitCode"] == _KILLED:
+                # The command itself may have gone over the memory limit, with its death reported
+                # first.
+                event = _next_event(events, within=_OUT_OF_MEMORY_REPORTED_WITHIN) or event
         finally:
             events.kill()
     output = _docker("logs", container, stderr=subprocess.STDOUT)
     state = _state(container)
-    if state["OOMKilled"]:
+    if event == "oom" or state["OOMKilled"]:
         return RunResult(output, exit_status=None, limit_hit=LimitHit.MEMORY)
     if event is None:
         return RunResult(output, exit_status=None, limit_hit=LimitHit.TIME)
     return RunResult(output, state["ExitCode"], limit_hit=None)
+
+
+def _next_event(events: subprocess.Popen[bytes], within: float) -> str | None:
+    """What the runtime next reports of a watched container: `oom` when a process in it goes over
+    the memory limit, `die` when it ends, or None when it reports nothing within that many seconds.
+    """
+    assert events.stdout is not None
+    reported, _, _ = select.select([events.stdout], [], [], within)
+    if not reported:
+        return None
+    event = events.stdout.readline().decode().strip()
+    if event not in ("oom", "die"):
+        raise SandboxFailed("the container runtime stopped reporting on the run")
+    return event
 
 
 def _archive_commit(repository: Path, commit: str, tar: tarfile.TarFile) -> None:
