@@ -429,6 +429,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
+    { name = "packaging" },
 ]
 
 [package.dev-dependencies]
@@ -440,7 +441,10 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "httpx", specifier = ">=0.28.1" }]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "packaging", specifier = ">=24" },
+]
 
 [package.metadata.requires-dev]
 dev = [

@@ -5,6 +5,7 @@ description = "Verifies the Claims a pull request makes about its own changes."
 requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28.1",
+    "packaging>=24",
 ]
 
 [project.scripts]

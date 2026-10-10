@@ -108,4 +108,12 @@ def find_commands(repository: Path, commit: str) -> Commands | Unsupported:
     can, returns `Unsupported`. While the system has one Ecosystem, the reason is that
     Ecosystem's own.
     """
-    raise NotImplementedError
+    # Imported here because each Ecosystem's module imports this one.
+    from pr_verification.python_ecosystem import PythonEcosystem
+
+    ecosystems: tuple[Ecosystem, ...] = (PythonEcosystem(),)
+    for ecosystem in ecosystems:
+        answer = ecosystem.commands(repository, commit)
+        if isinstance(answer, Commands):
+            break
+    return answer
