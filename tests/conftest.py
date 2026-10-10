@@ -1,5 +1,7 @@
 import json
+import shutil
 import subprocess
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,6 +34,25 @@ def commit(path: Path, message: str) -> str:
         "commit", "-m", message,
     )  # fmt: skip
     return git(path, "rev-parse", "HEAD")
+
+
+def commit_snapshots(path: Path, *snapshots: Mapping[str, str]) -> tuple[str, ...]:
+    """Make a repository at `path` with one commit per snapshot, each holding exactly its files.
+
+    A snapshot maps a file's path within the repository to its text. Returns the commits in order.
+    """
+    path.mkdir(parents=True)
+    git(path, "init", "--quiet")
+    commits = []
+    for number, snapshot in enumerate(snapshots, start=1):
+        for entry in path.iterdir():
+            if entry.name != ".git":
+                shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
+        for name, text in snapshot.items():
+            (path / name).parent.mkdir(parents=True, exist_ok=True)
+            (path / name).write_text(text)
+        commits.append(commit(path, f"Snapshot {number}"))
+    return tuple(commits)
 
 
 @pytest.fixture(autouse=True)
