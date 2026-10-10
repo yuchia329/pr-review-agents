@@ -2,7 +2,6 @@
 
 import os
 import re
-import subprocess
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -84,8 +83,13 @@ class PythonEcosystem:
         Returns `Unsupported` with the reason `NOT_A_PYTHON_PROJECT` when the commit matches
         none of the layouts.
         """
-        listing = git(repository, "ls-tree", "-r", "-z", "--name-only", "--end-of-options", commit)
-        files = os.fsdecode(listing).split("\0")
+        # Each entry is `<mode> <type> <object>\t<path>`. A submodule is listed and is not a file.
+        listing = os.fsdecode(git(repository, "ls-tree", "-r", "-z", "--end-of-options", commit))
+        files = [
+            path
+            for details, _, path in (entry.partition("\t") for entry in listing.split("\0"))
+            if " blob " in details
+        ]
         at_root = {name for name in files if "/" not in name}
         pyproject = _pyproject(repository, commit) if "pyproject.toml" in at_root else {}
         packaged = (
@@ -153,11 +157,11 @@ class PythonEcosystem:
 
 
 def _pyproject(repository: Path, commit: str) -> dict[str, Any]:
-    """The tables of the commit's `pyproject.toml`, or none when it is not a file of TOML."""
+    """The tables of the commit's `pyproject.toml`, or none when it cannot be parsed."""
     try:
         text = git(repository, "cat-file", "blob", f"{commit}:pyproject.toml").decode()
         parsed = tomllib.loads(text)
-    except (subprocess.CalledProcessError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError):
         return {}
     return {name: table for name, table in parsed.items() if isinstance(table, dict)}
 
