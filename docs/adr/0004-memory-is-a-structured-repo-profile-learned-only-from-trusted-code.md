@@ -1,0 +1,5 @@
+# Memory between runs is a structured Repo Profile learned only from trusted code
+
+Without memory, every run rediscovers how to install and test the repository, which is the slowest and most repeated work. We keep one kind of memory between runs: a Repo Profile, a fixed set of facts such as the install command, the test command, and the test layout. A fact is saved only after a successful run in the Sandbox has proven it, it is learned only from the target branch and never from pull request content, and it is read only from a store that a pull request cannot modify. It is discarded when the dependency lock file changes or a stored command stops working.
+
+We rejected free-form agent memory, where agents write notes that later runs retrieve. Text influenced by one pull request would persist and shape the verification of later ones, so a single successful prompt injection would outlive its pull request. Defending that would need provenance tracking and review, and it was unclear what agents would usefully learn across pull requests beyond the environment facts the Repo Profile already holds.

@@ -11,7 +11,12 @@ dependencies = [
 pr-verification = "pr_verification.cli:main"
 
 [dependency-groups]
-dev = ["mypy>=1.11", "pytest>=8", "ruff>=0.6"]
+dev = [
+    "hypothesis>=6.168.5",
+    "mypy>=1.11",
+    "pytest>=8",
+    "ruff>=0.6",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -22,10 +27,11 @@ packages = ["src/pr_verification"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["tools"]
 
 [tool.mypy]
 strict = true
-files = ["src", "tests"]
+files = ["src", "tests", "tools"]
 
 [tool.ruff]
 line-length = 100
