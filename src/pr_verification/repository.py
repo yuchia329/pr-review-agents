@@ -26,3 +26,9 @@ def git(repository: Path, *arguments: str) -> bytes:
         capture_output=True,
     )
     return done.stdout
+
+
+def resolve_commit(repository: Path, commit: str) -> str:
+    """The full ID of the commit that `commit` names in `repository`. Raises as `git` does."""
+    name = f"{commit}^{{commit}}"
+    return git(repository, "rev-parse", "--verify", "--end-of-options", name).decode().strip()

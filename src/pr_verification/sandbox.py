@@ -18,7 +18,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import IO, Any, Protocol, Self
 
-from pr_verification.repository import git, git_environment
+from pr_verification.repository import git, git_environment, resolve_commit
 
 Command = tuple[str, ...]
 """A program and its arguments. It is started directly, never through a shell."""
@@ -140,6 +140,23 @@ class Sandbox(Protocol):
         ...
 
 
+_VOLUME = "/sandbox"
+"""Where a commit's volume sits inside the container."""
+
+_WORKING_COPY = "workspace"
+"""The directory in a commit's volume that holds the files of the commit."""
+
+_HOME = "home"
+"""The directory in a commit's volume that is the home directory of its runs."""
+
+_USER_ID = 1000
+"""The user ID and group ID a command runs as, and that own its working copy. Not root's."""
+
+_COULD_NOT_START = (126, 127)
+"""The exit statuses the runtime gives a command it could not start: one that cannot be run, and
+one that does not exist. Any other failure to start is the Sandbox's own."""
+
+
 class ContainerSandbox:
     """The `Sandbox` as a local container (ADR 0001). It keeps every promise `Sandbox.run` makes.
 
@@ -161,14 +178,23 @@ class ContainerSandbox:
         self._image = image
         # The volume that holds the working copy and the home directory of each commit run so far.
         self._volumes: dict[str, str] = {}
-        _docker("version", "--format", "{{.Server.Version}}")
+        # Asking also finds out whether there is a runtime to use.
+        self._processors = int(_docker("info", "--format", "{{.NCPU}}"))
 
     def run(self, command: Command, *, commit: str, phase: Phase, limits: Limits) -> RunResult:
         """See `Sandbox.run`."""
-        volume = self._volume_for(commit)
+        try:
+            return self._run(command, self._volume_for(commit), phase, limits)
+        except (OSError, subprocess.CalledProcessError) as error:
+            # git or the container runtime could not be run, or git could not read the commit.
+            raise SandboxFailed(f"the Sandbox could not do the run: {error}") from error
+
+    def _run(self, command: Command, volume: str, phase: Phase, limits: Limits) -> RunResult:
         # Nothing of the starting process is passed in: no environment, and no file but the volume.
         container = _docker(
             "create",
+            # The command is started directly, not handed to a program the image names.
+            "--entrypoint", "",
             "--volume", f"{volume}:{_VOLUME}",
             "--workdir", f"{_VOLUME}/{_WORKING_COPY}",
             "--env", f"HOME={_VOLUME}/{_HOME}",
@@ -179,7 +205,8 @@ class ContainerSandbox:
             "--memory", str(limits.memory_bytes),
             # The same again for memory and swap together leaves no swap to spill into.
             "--memory-swap", str(limits.memory_bytes),
-            "--cpus", str(limits.processors),
+            # The runtime refuses a limit above what it has, where what it has is the limit.
+            "--cpus", str(min(limits.processors, self._processors)),
             # Whatever the runtime is set up to do with output, it must be able to give it back.
             "--log-driver", "json-file",
             self._image,
@@ -188,13 +215,14 @@ class ContainerSandbox:
         try:
             return _run_to_its_end(container, limits.seconds)
         finally:
-            _docker("rm", "--force", container)
+            _docker("rm", "--force", "--volumes", container)
 
     def close(self) -> None:
         """Remove everything this Sandbox made. Calling it again does nothing."""
-        while self._volumes:
-            _, volume = self._volumes.popitem()
-            _docker("volume", "rm", volume)
+        volumes, self._volumes = list(self._volumes.values()), {}
+        if volumes:
+            # One request, so that a volume the runtime will not remove does not keep the rest.
+            _docker("volume", "rm", *volumes)
 
     def __enter__(self) -> Self:
         """Returns this Sandbox."""
@@ -212,11 +240,9 @@ class ContainerSandbox:
     def _volume_for(self, commit: str) -> str:
         """The volume for a commit, made and filled the first time the commit is run."""
         try:
-            name = f"{commit}^{{commit}}"
-            resolved = git(self._repository, "rev-parse", "--verify", "--end-of-options", name)
-        except (OSError, subprocess.CalledProcessError) as error:
+            commit = resolve_commit(self._repository, commit)
+        except subprocess.CalledProcessError as error:
             raise SandboxFailed(f"commit {commit!r} is not in {self._repository}") from error
-        commit = resolved.decode().strip()
         if commit not in self._volumes:
             volume = _docker("volume", "create").strip()
             try:
@@ -239,21 +265,7 @@ class ContainerSandbox:
                 archive.seek(0)
                 _docker("cp", "-", f"{holder}:{_VOLUME}", stdin=archive)
         finally:
-            _docker("rm", "--force", holder)
-
-
-_VOLUME = "/sandbox"
-"""Where a commit's volume sits inside the container."""
-
-_WORKING_COPY = "workspace"
-_HOME = "home"
-
-_USER_ID = 1000
-"""The user ID and group ID a command runs as, and that own its working copy. Not root's."""
-
-_COULD_NOT_START = (126, 127)
-"""The exit statuses the runtime gives a command it could not start: one that cannot be run, and
-one that does not exist. Any other failure to start is the Sandbox's own."""
+            _docker("rm", "--force", "--volumes", holder)
 
 
 def _docker(*arguments: str, stdin: IO[bytes] | None = None, stderr: int = subprocess.PIPE) -> str:
@@ -270,8 +282,8 @@ def _docker(*arguments: str, stdin: IO[bytes] | None = None, stderr: int = subpr
     except OSError as error:
         raise SandboxFailed(f"cannot run the container runtime: {error}") from error
     if done.returncode != 0:
-        said = (done.stderr or done.stdout).strip()
-        raise SandboxFailed(f"the container runtime failed to {arguments[0]}: {said}")
+        refusal = (done.stderr or done.stdout).strip()
+        raise SandboxFailed(f"the container runtime failed to {arguments[0]}: {refusal}")
     return done.stdout
 
 
@@ -296,8 +308,8 @@ def _run_to_its_end(container: str, seconds: float) -> RunResult:
                     raise SandboxFailed(f"cannot start a container: {started.stderr.strip()}")
                 return RunResult(state["Error"], state["ExitCode"], limit_hit=None)
             # The time limit counts from here, where the command has started.
-            happened, _, _ = select.select([events.stdout], [], [], seconds)
-            event = events.stdout.readline().decode().strip() if happened else None
+            reported, _, _ = select.select([events.stdout], [], [], seconds)
+            event = events.stdout.readline().decode().strip() if reported else None
             if event not in (None, "oom", "die"):
                 raise SandboxFailed("the container runtime stopped reporting on the run")
             if event != "die":
@@ -347,8 +359,8 @@ def _archive_commit(repository: Path, commit: str, tar: tarfile.TarFile) -> None
         assert blobs.stdin is not None and blobs.stdout is not None
         # Each entry is `<mode> <type> <object>\t<path>`, a directory before what it holds.
         for entry in git(repository, "ls-tree", "-r", "-t", "-z", commit).split(b"\0")[:-1]:
-            described, path = entry.split(b"\t", 1)
-            mode, kind, object_id = described.split()
+            details, path = entry.split(b"\t", 1)
+            mode, kind, object_id = details.split()
             name = f"{_WORKING_COPY}/{os.fsdecode(path)}"
             if kind != b"blob":
                 # A directory, or a submodule: its files belong to another repository.
@@ -356,8 +368,10 @@ def _archive_commit(repository: Path, commit: str, tar: tarfile.TarFile) -> None
                 continue
             blobs.stdin.write(object_id + b"\n")
             blobs.stdin.flush()
-            size = int(blobs.stdout.readline().split()[2])
-            content = blobs.stdout.read(size)
+            answer = blobs.stdout.readline().split()
+            if answer[1:2] != [b"blob"]:
+                raise SandboxFailed(f"cannot read {name} at commit {commit} from {repository}")
+            content = blobs.stdout.read(int(answer[2]))
             blobs.stdout.read(1)  # The line feed that ends each object.
             if mode == b"120000":
                 add(name, tarfile.SYMTYPE, 0o777, target=os.fsdecode(content))

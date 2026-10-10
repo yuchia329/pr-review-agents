@@ -8,7 +8,7 @@ from pathlib import Path
 from pr_verification.claims import extract_claims
 from pr_verification.model import Model
 from pr_verification.report import BudgetSpend, Claim, Report, Verdict
-from pr_verification.repository import git_environment
+from pr_verification.repository import resolve_commit
 
 NOT_VERIFIED_YET = "This Claim has not been verified yet: no Evidence was gathered for it."
 
@@ -45,17 +45,11 @@ def run(pull_request: PullRequest, model: Model) -> Report:
 
 def _resolve_commit(repository: Path, role: str, commit: str) -> str:
     try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--verify", "--end-of-options", f"{commit}^{{commit}}"],
-            cwd=repository,
-            env=git_environment(repository),
-            capture_output=True,
-            text=True,
-        )
+        return resolve_commit(repository, commit)
     except OSError as error:
         raise InvalidPullRequest(f"cannot run git in {repository}: {error}") from error
-    if result.returncode != 0:
+    except subprocess.CalledProcessError as error:
+        refusal = error.stderr.decode(errors="replace").strip()
         raise InvalidPullRequest(
-            f"cannot resolve the {role} commit {commit!r} in {repository}: {result.stderr.strip()}"
-        )
-    return result.stdout.strip()
+            f"cannot resolve the {role} commit {commit!r} in {repository}: {refusal}"
+        ) from error

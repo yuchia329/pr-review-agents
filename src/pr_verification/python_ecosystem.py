@@ -2,6 +2,7 @@
 
 import os
 import re
+import subprocess
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -20,8 +21,8 @@ NOT_A_PYTHON_PROJECT = (
 PYTHON_VERSIONS = ("3.14", "3.13", "3.12", "3.11", "3.10")
 """The Python versions a repository can be run on, newest first."""
 
-_TEST_DEPENDENCIES = ("test", "tests", "testing", "dev")
-"""The names of the extras and dependency groups that hold a project's test dependencies."""
+_TEST_NAMES = ("test", "tests", "testing", "dev")
+"""What an extra or a dependency group that holds a project's test dependencies is named."""
 
 _REQUIREMENTS = (
     "requirements.txt",
@@ -30,13 +31,15 @@ _REQUIREMENTS = (
     "dev-requirements.txt",
     "test-requirements.txt",
 )
+"""The root files that list what a project needs: the first to run, the rest to be tested."""
 
 # Into the home directory, which is the one place the Sandbox's user can install to.
 _INSTALL = ("python", "-m", "pip", "install", "--user")
 
-# `-rA` has pytest end with one line for each test, which is what `read_results` reads. One file
-# that cannot be collected would otherwise stop every other file's tests from running.
-_TEST = ("python", "-m", "pytest", "-rA", "--continue-on-collection-errors")
+# `-rA` has pytest end with one line for each test, which is what `read_results` reads, and
+# `--verbosity=0` keeps those lines as they are read whatever the repository's own settings ask.
+# One file that cannot be collected would otherwise stop every other file's tests from running.
+_TEST = ("python", "-m", "pytest", "-rA", "--verbosity=0", "--continue-on-collection-errors")
 
 _SUMMARY_STARTS = re.compile(r"^=+ short test summary info =+$", re.MULTILINE)
 _SESSION_ENDED = re.compile(r"^=+ .+ in \d[\d.]*s( \([\d:]+\))? =+$", re.MULTILINE)
@@ -94,20 +97,20 @@ class PythonEcosystem:
         if not (packaged or "requirements.txt" in at_root or any(f.endswith(".py") for f in files)):
             return Unsupported(NOT_A_PYTHON_PROJECT)
 
-        wanted = ["pytest"]
+        to_install = ["pytest"]
         if packaged:
             extras = _named_for_tests(_table(_table(pyproject, "project"), "optional-dependencies"))
-            wanted.append(f".[{','.join(extras)}]" if extras else ".")
+            to_install.append(f".[{','.join(extras)}]" if extras else ".")
         for group in _named_for_tests(_table(pyproject, "dependency-groups")):
-            wanted += ["--group", group]
+            to_install += ["--group", group]
         for requirements in _REQUIREMENTS:
             if requirements in at_root:
-                wanted += ["--requirement", requirements]
+                to_install += ["--requirement", requirements]
         return Commands(
             ecosystem=self,
             image=_image(pyproject),
             # pip reads dependency groups only from 25.1 on, and some of the images hold an older.
-            install=((*_INSTALL, "--upgrade", "pip"), (*_INSTALL, *wanted)),
+            install=((*_INSTALL, "--upgrade", "pip"), (*_INSTALL, *to_install)),
             test=_TEST,
         )
 
@@ -150,11 +153,11 @@ class PythonEcosystem:
 
 
 def _pyproject(repository: Path, commit: str) -> dict[str, Any]:
-    """The tables of the commit's `pyproject.toml`, or none when it cannot be parsed."""
+    """The tables of the commit's `pyproject.toml`, or none when it is not a file of TOML."""
     try:
         text = git(repository, "cat-file", "blob", f"{commit}:pyproject.toml").decode()
         parsed = tomllib.loads(text)
-    except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+    except (subprocess.CalledProcessError, UnicodeDecodeError, tomllib.TOMLDecodeError):
         return {}
     return {name: table for name, table in parsed.items() if isinstance(table, dict)}
 
@@ -167,7 +170,7 @@ def _table(tables: dict[str, Any], name: str) -> dict[str, Any]:
 
 def _named_for_tests(table: dict[str, Any]) -> list[str]:
     """The extras or dependency groups in a table that hold test dependencies, as written."""
-    return [name for name in table if name.lower() in _TEST_DEPENDENCIES]
+    return [name for name in table if name.lower() in _TEST_NAMES]
 
 
 def _image(pyproject: dict[str, Any]) -> str:

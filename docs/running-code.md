@@ -35,7 +35,12 @@ runner being short-lived, and by the key being narrowly scoped. The Sandbox boun
 method wide so that a remote virtual machine can take the container's place.
 
 Also not limited: the disk space a run may fill, the number of processes it may start, and the
-length of the output it may write.
+length of the output it may write. The Sandbox returns within its stated time of a limit being
+reached only while the container runtime answers promptly and the output is of ordinary length.
+
+Proxy settings in the container runtime's own configuration (`proxies` in
+`~/.docker/config.json`) are passed into every container by the `docker` command. Keep
+credentials out of them.
 
 In the install phase the network is open, so code that runs while installing, such as a
 `setup.py`, can send out anything it can read. That is the files of the commit and nothing else.
@@ -74,8 +79,11 @@ The image is `python:<version>-slim`, for the newest of Python 3.14 to 3.10 that
   afresh by pip.
 - Extras declared only in `setup.py` or `setup.cfg` are not installed, because finding them would
   mean running the file.
-- When `requires-python` allows none of the versions, the newest is used and the install fails
-  with pip's own message.
+- When `requires-python` allows none of the versions as they are written, such as `3.12`, the
+  newest is used and the install fails with pip's own message. A bound on the patch release
+  together with an upper bound, such as `~=3.12.4`, is one way to get there.
+- A `requirements.txt` that pins hashes makes the install fail, because pytest and the project
+  itself are installed alongside it without one.
 - Test results are read from the summary pytest prints. A failed test whose name holds ` - ` is
   named only up to there, because that is also how pytest sets off the error's message.
 - The summary is printed by a process the pull request's code runs in, so that code can write
