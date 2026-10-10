@@ -34,6 +34,13 @@ def _commit(path: Path, message: str) -> str:
     return _git(path, "rev-parse", "HEAD")
 
 
+@pytest.fixture(autouse=True)
+def no_model_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A model configured on the developer's machine must not be reached from a test."""
+    for name in ("PR_VERIFICATION_ENDPOINT", "PR_VERIFICATION_MODEL", "PR_VERIFICATION_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture
 def fixture_repository(tmp_path: Path) -> FixtureRepository:
     """A small repository with one commit before the pull request and one after."""

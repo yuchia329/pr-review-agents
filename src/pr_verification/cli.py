@@ -1,6 +1,7 @@
 """Command line for the core. Exit code: 0 the Gate passes, 1 the Gate blocks, 2 no report."""
 
 import argparse
+import os
 import sys
 import traceback
 from collections.abc import Sequence
@@ -8,7 +9,8 @@ from pathlib import Path
 
 from pr_verification.claims import ClaimExtractionFailed
 from pr_verification.core import InvalidPullRequest, PullRequest, run
-from pr_verification.model import Model
+from pr_verification.model import Model, ModelFailed
+from pr_verification.openai_compatible import model_from_environment
 from pr_verification.report import Gate, GateDecision
 
 EXIT_PASS = 0
@@ -22,13 +24,17 @@ def exit_code(gate: Gate) -> int:
 
 def main(argv: Sequence[str] | None = None, model: Model | None = None) -> int:
     arguments = _parser().parse_args(argv)
-    if model is None:
-        # Only the scripted stand-in exists so far, and it cannot be named on the command line.
-        print(
-            "pr-verification: no model is configured, so nothing can be verified", file=sys.stderr
-        )
-        return EXIT_NO_REPORT
     try:
+        if model is None:
+            model = model_from_environment(os.environ)
+        if model is None:
+            print(
+                "pr-verification: no model is configured, so nothing can be verified: "
+                "set PR_VERIFICATION_API_KEY, or PR_VERIFICATION_ENDPOINT for a model that "
+                "needs no key",
+                file=sys.stderr,
+            )
+            return EXIT_NO_REPORT
         report = run(
             PullRequest(
                 repository=arguments.repo,
@@ -41,7 +47,13 @@ def main(argv: Sequence[str] | None = None, model: Model | None = None) -> int:
             model,
         )
         print(report.to_json(), flush=True)
-    except (InvalidPullRequest, ClaimExtractionFailed, OSError, UnicodeDecodeError) as error:
+    except (
+        InvalidPullRequest,
+        ModelFailed,
+        ClaimExtractionFailed,
+        OSError,
+        UnicodeDecodeError,
+    ) as error:
         print(f"pr-verification: {error}", file=sys.stderr)
         return EXIT_NO_REPORT
     except Exception:

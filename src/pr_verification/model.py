@@ -13,6 +13,10 @@ class ModelRequest:
     data: str
 
 
+class ModelFailed(Exception):
+    """The model could not be reached or gave no usable response. Its message is safe to print."""
+
+
 class Model(Protocol):
     def complete(self, request: ModelRequest) -> str: ...
 

@@ -1,0 +1,9 @@
+# The local model for PR Verification, with its context size set explicitly.
+#
+# Ollama's OpenAI-compatible endpoint cannot take a context size on a request, and Ollama's own
+# default can be as small as 4096 tokens, beyond which a prompt is cut short without any error.
+# The size is therefore fixed here, in the model itself.
+#
+#   ollama create pr-verification-qwen -f ollama/Modelfile
+FROM qwen3.6
+PARAMETER num_ctx 32768

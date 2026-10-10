@@ -5,7 +5,7 @@ import pytest
 from conftest import FixtureRepository, model_listing
 
 from pr_verification.cli import exit_code, main
-from pr_verification.model import ScriptedModel
+from pr_verification.model import ModelFailed, ModelRequest, ScriptedModel
 from pr_verification.report import (
     BudgetSpend,
     Claim,
@@ -162,6 +162,57 @@ def test_command_line_exits_two_without_a_report_when_no_model_is_configured(
     assert captured.out == ""
     assert "no model is configured" in captured.err
     assert "Traceback" not in captured.err
+
+
+class FailingModel:
+    def complete(self, request: ModelRequest) -> str:
+        raise ModelFailed("some-model at https://provider.example/v1 answered with HTTP 503")
+
+
+def test_command_line_exits_two_without_a_report_when_the_model_fails(
+    fixture_repository: FixtureRepository, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = main(
+        [
+            "--repo", str(fixture_repository.path),
+            "--before", fixture_repository.before,
+            "--after", fixture_repository.after,
+            "--title", "Fix the crash on empty input",
+        ],
+        FailingModel(),
+    )  # fmt: skip
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert captured.out == ""
+    assert captured.err == (
+        "pr-verification: some-model at https://provider.example/v1 answered with HTTP 503\n"
+    )
+
+
+def test_command_line_exits_two_not_one_when_the_configured_key_cannot_be_sent(
+    fixture_repository: FixtureRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("PR_VERIFICATION_MODEL", "some-model")
+    monkeypatch.setenv("PR_VERIFICATION_API_KEY", "clé-secrète")
+
+    code = main(
+        [
+            "--repo", str(fixture_repository.path),
+            "--before", fixture_repository.before,
+            "--after", fixture_repository.after,
+            "--title", "Fix the crash on empty input",
+        ]
+    )  # fmt: skip
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert captured.out == ""
+    assert "some-model at https://api.minimax.io/v1" in captured.err
+    assert "Traceback" not in captured.err
+    assert "secr" not in captured.err
 
 
 def _report_with(*claims: Claim) -> Report:
