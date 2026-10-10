@@ -13,6 +13,9 @@ from typing import Protocol, Self
 Command = tuple[str, ...]
 """A program and its arguments. It is started directly, never through a shell."""
 
+STOP_WITHIN_SECONDS = 10.0
+"""How long the Sandbox may take, beyond a run's time limit, to start the command and stop it."""
+
 
 class Phase(StrEnum):
     """What a run is for, which decides whether it can reach the network. Neither holds secrets."""
@@ -107,9 +110,14 @@ class Sandbox(Protocol):
             Exceeding a limit is reported in the result and never raised. A command still
             running when `limits.seconds` have passed is stopped, along with everything it
             started, and `run` returns without waiting for it to finish: the result has
-            `limit_hit` `LimitHit.TIME`. When the command and everything it started
-            try to hold more than `limits.memory_bytes` between them, the whole run is stopped,
-            whichever of its processes went over: the result has `limit_hit` `LimitHit.MEMORY`.
+            `limit_hit` `LimitHit.TIME`. Once an earlier run against the same commit has
+            returned, so that the image is fetched and the working copy exists, `run` returns
+            no later than `limits.seconds + STOP_WITHIN_SECONDS` after it was called.
+
+            When the command and everything it started try to hold more than
+            `limits.memory_bytes` between them, the whole run is stopped, whichever of its
+            processes went over: the result has `limit_hit` `LimitHit.MEMORY`.
+
             In both cases `exit_status` is None and `output` holds what was written before the
             stop. `limits.processors` is enforced by slowing the run, as `Limits` describes.
 
