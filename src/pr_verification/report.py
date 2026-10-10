@@ -37,6 +37,7 @@ class RunEvidence(Evidence):
     """
 
     command: Command
+    """The command that was run against both commits."""
     before: RunResult
     """What the command did against the code before the pull request, `Report.before`."""
     after: RunResult

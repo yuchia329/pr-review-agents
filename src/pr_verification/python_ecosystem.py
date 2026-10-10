@@ -2,13 +2,16 @@
 
 from pathlib import Path
 
-from pr_verification.ecosystem import Instructions, Results, Unreadable, Unsupported
+from pr_verification.ecosystem import Commands, Results, Unreadable, Unsupported
 from pr_verification.sandbox import RunResult
 
 NOT_A_PYTHON_PROJECT = (
-    "No Python project was found at this commit: the repository has no pyproject.toml, "
-    "setup.py, setup.cfg, requirements.txt, or .py file."
+    "No Python project was found at this commit: the repository has no packaging metadata, "
+    "no requirements.txt, and no .py file."
 )
+
+PYTHON_VERSIONS = ("3.14", "3.13", "3.12", "3.11", "3.10")
+"""The Python versions a repository can be run on, newest first."""
 
 
 class PythonEcosystem:
@@ -25,8 +28,8 @@ class PythonEcosystem:
     A repository that is none of these is not a Python project.
     """
 
-    def instructions(self, repository: Path, commit: str) -> Instructions | Unsupported:
-        """See `Ecosystem.instructions`.
+    def commands(self, repository: Path, commit: str) -> Commands | Unsupported:
+        """See `Ecosystem.commands`.
 
         The install commands, once all have exited with status 0, leave these importable in
         the test phase:
@@ -43,7 +46,9 @@ class PythonEcosystem:
         tests, so a Python project always has a test command, and a repository with no tests
         yet is still supported.
 
-        `image` is an official Python image, named `python:<version>-slim`.
+        `image` is the official Python image `python:<version>-slim`, where the version is the
+        first in `PYTHON_VERSIONS` that `requires-python` in `pyproject.toml` allows, or the
+        first of all when the commit does not state one there.
 
         Returns `Unsupported` with the reason `NOT_A_PYTHON_PROJECT` when the commit matches
         none of the layouts.

@@ -10,7 +10,8 @@ def run_on_both_commits(
     """Run the same command against the code before the pull request and the code after it.
 
     Runs `command` in `sandbox` against `before`, then against `after`, each with `phase` and
-    `limits`, and records both results as one piece of Evidence obtained by running code:
+    `limits`, and so both in that Sandbox's one image. Records both results as one piece of
+    Evidence obtained by running code:
 
     - `source` is `EvidenceSource.RAN_CODE`;
     - `command` is the command as given;
