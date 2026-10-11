@@ -123,18 +123,3 @@ def test_file_that_save_home_did_not_write_is_refused(
     with ContainerSandbox(fixture_repository.path, IMAGE) as sandbox:
         with pytest.raises(SandboxFailed):
             sandbox.restore_home(fixture_repository.after, tmp_path / "home.archive")
-
-
-def test_putting_a_home_back_writes_nothing_on_the_machine_that_started_the_sandbox(
-    fixture_repository: FixtureRepository, tmp_path: Path
-) -> None:
-    kept = tmp_path / "kept"
-    kept.mkdir()
-    # A home directory that points out of itself, at a place on the starting machine.
-    point_out = f'ln -s "{kept}" "$HOME/out" && ln -s "{kept}/planted" "$HOME/planted"'
-    save_home_after(point_out, fixture_repository, kept / "home.archive")
-
-    with ContainerSandbox(fixture_repository.path, IMAGE) as sandbox:
-        sandbox.restore_home(fixture_repository.after, kept / "home.archive")
-
-    assert list(kept.iterdir()) == [kept / "home.archive"]

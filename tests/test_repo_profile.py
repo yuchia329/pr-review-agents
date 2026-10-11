@@ -17,6 +17,7 @@ from conftest import commit_snapshots, git
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from pr_verification import ecosystem, repo_profile
 from pr_verification.ecosystem import Commands, Results, Unreadable, Unsupported, find_commands
 from pr_verification.python_ecosystem import PythonEcosystem
 from pr_verification.repo_profile import (
@@ -36,6 +37,7 @@ from pr_verification.sandbox import (
     Limits,
     Phase,
     RunResult,
+    SandboxFailed,
     SandboxWithHomes,
 )
 
@@ -109,9 +111,12 @@ def no_discovery(repository: Path, commit: str) -> Commands | Unsupported:
 class RecordingSandbox:
     """A stand-in Sandbox that answers each command as prepared and records what it was asked."""
 
-    def __init__(self, image: str, answers: Mapping[Command, RunResult]) -> None:
+    def __init__(
+        self, image: str, answers: Mapping[Command, RunResult], restores: bool = True
+    ) -> None:
         self.image = image
         self._answers = answers
+        self._restores = restores
         self.events: list[Event] = []
 
     def run(self, command: Command, *, commit: str, phase: Phase, limits: Limits) -> RunResult:
@@ -124,21 +129,26 @@ class RecordingSandbox:
 
     def restore_home(self, commit: str, archive: Path) -> None:
         self.events.append(("restore_home", commit, archive))
+        if not self._restores:
+            raise SandboxFailed(f"cannot put back {archive}")
 
 
 class Sandboxes:
     """A stand-in for opening Sandboxes: each call gives a new one, and all are kept."""
 
-    def __init__(self, answers: Mapping[Command, RunResult] | None = None) -> None:
+    def __init__(
+        self, answers: Mapping[Command, RunResult] | None = None, restores: bool = True
+    ) -> None:
         self._answers = {TEST: TESTS_PASSED, **(answers or {})}
+        self._restores = restores
         self.opened: list[RecordingSandbox] = []
 
     def __call__(self, image: str) -> RecordingSandbox:
-        self.opened.append(RecordingSandbox(image, self._answers))
+        self.opened.append(RecordingSandbox(image, self._answers, self._restores))
         return self.opened[-1]
 
 
-class MemoryStore:
+class RecordingStore:
     """A stand-in store that keeps profiles in memory and records what it was asked to do."""
 
     def __init__(self) -> None:
@@ -172,7 +182,7 @@ class Setting:
     """The pull request's commit, which leaves the lock file alone."""
     relocking_pull_request: str
     """A pull request's commit that changes the lock file."""
-    store: MemoryStore = field(default_factory=MemoryStore)
+    store: RecordingStore = field(default_factory=RecordingStore)
 
     @property
     def repository(self) -> Path:
@@ -182,9 +192,9 @@ class Setting:
     def cache(self) -> DependencyCache:
         return DependencyCache(self.directory / "kept" / "dependencies")
 
-    def archive(self, commit: str) -> Path:
+    def archive(self, commit: str, image: str = "tap:1") -> Path:
         digest = digest_lock_files(self.repository, commit, LOCK_FILES)
-        return self.cache.archive(self.repository, digest)
+        return self.cache.archive(self.repository, image, digest)
 
     def prepare(
         self, sandboxes: Sandboxes, discover: Discovery | None = None, target: str | None = None
@@ -404,6 +414,17 @@ def test_stored_profile_saves_the_home_directory_when_the_cache_holds_no_archive
     ]
 
 
+def test_archive_that_cannot_be_put_back_is_deleted_so_the_next_run_does_not_meet_it(
+    setting: Setting,
+) -> None:
+    setting.learn()
+
+    with pytest.raises(SandboxFailed):
+        setting.prepare(Sandboxes(restores=False))
+
+    assert not setting.archive(setting.target).exists()
+
+
 # Discarding a stale profile
 
 
@@ -422,11 +443,12 @@ def test_changed_lock_file_discards_the_profile_and_it_is_learned_again(setting:
         setting.repository, setting.relocked_target, LOCK_FILES
     )
     assert setting.store.load(setting.repository) == prepared.profile
-    # None of the stored commands was run, and nothing installed for the old lock file was used.
+    # No Sandbox was opened for the stored profile, and nothing installed for the old lock file
+    # was used.
     assert [sandbox.image for sandbox in sandboxes.opened] == ["tap:2"]
     assert sandboxes.opened[0].events == [
         run(("new-installer",), setting.relocked_target, Phase.INSTALL),
-        ("save_home", setting.relocked_target, setting.archive(setting.relocked_target)),
+        ("save_home", setting.relocked_target, setting.archive(setting.relocked_target, "tap:2")),
         run(TEST, setting.relocked_target, Phase.TEST),
     ]
 
@@ -481,9 +503,12 @@ def test_profile_discarded_because_its_test_command_stopped_working_is_learned_a
 
 
 def test_pull_request_commit_is_installed_with_the_commands_of_the_targets_profile(
-    setting: Setting,
+    setting: Setting, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     prepared = setting.learn()
+    # Discovery would read the pull request's own files, so it is not to be run from anywhere.
+    monkeypatch.setattr(ecosystem, "find_commands", no_discovery)
+    monkeypatch.setattr(repo_profile, "find_commands", no_discovery)
 
     answer, events = setting.prepare_pull_request(prepared, setting.relocking_pull_request)
 
@@ -755,49 +780,52 @@ def test_archive_belongs_under_the_caches_directory_and_is_not_there_until_saved
 ) -> None:
     repository = a_repository(tmp_path / "repository")
 
-    archive = DependencyCache(tmp_path / "kept").archive(repository, "0a1b2c")
+    archive = DependencyCache(tmp_path / "kept").archive(repository, "tap:1", "0a1b2c")
 
     assert (tmp_path / "kept").resolve() in archive.resolve().parents
     assert archive.parent.is_dir()
     assert not archive.exists()
 
 
-def test_same_repository_and_digest_give_the_same_archive_from_any_cache_on_the_directory(
+def test_same_repository_image_and_digest_give_the_same_archive_from_any_cache_on_the_directory(
     tmp_path: Path,
 ) -> None:
     repository = a_repository(tmp_path / "repository")
     (tmp_path / "link").symlink_to(repository, target_is_directory=True)
 
-    archive = DependencyCache(tmp_path / "kept").archive(repository, "0a1b2c")
+    archive = DependencyCache(tmp_path / "kept").archive(repository, "tap:1", "0a1b2c")
 
-    assert DependencyCache(tmp_path / "kept").archive(tmp_path / "link", "0a1b2c") == archive
+    again = DependencyCache(tmp_path / "kept").archive(tmp_path / "link", "tap:1", "0a1b2c")
+    assert again == archive
 
 
-@given(digests=st.lists(st.text(), min_size=2, max_size=2, unique=True))
-def test_archive_for_one_digest_is_never_the_file_of_another(digests: list[str]) -> None:
+@given(keys=st.lists(st.tuples(st.text(), st.text()), min_size=2, max_size=2, unique=True))
+def test_archive_for_one_image_and_digest_is_never_the_file_of_another(
+    keys: list[tuple[str, str]],
+) -> None:
     with tempfile.TemporaryDirectory() as directory:
         repository = a_repository(Path(directory) / "repository")
         cache = DependencyCache(Path(directory) / "kept")
 
-        cache.archive(repository, digests[0]).write_bytes(b"installed for the first")
+        cache.archive(repository, *keys[0]).write_bytes(b"installed for the first")
 
-        assert not cache.archive(repository, digests[1]).exists()
+        assert not cache.archive(repository, *keys[1]).exists()
 
 
 def test_two_repositories_with_the_same_lock_file_never_share_an_archive(tmp_path: Path) -> None:
     cache = DependencyCache(tmp_path / "kept")
     one, other = a_repository(tmp_path / "one"), a_repository(tmp_path / "other")
 
-    cache.archive(one, "0a1b2c").write_bytes(b"installed for one")
+    cache.archive(one, "tap:1", "0a1b2c").write_bytes(b"installed for one")
 
-    assert not cache.archive(other, "0a1b2c").exists()
+    assert not cache.archive(other, "tap:1", "0a1b2c").exists()
 
 
 def test_cache_refuses_a_directory_that_a_pull_request_could_modify(
     tmp_path: Path, modifiable: Path
 ) -> None:
     with pytest.raises(ValueError):
-        DependencyCache(modifiable).archive(tmp_path / "repository", "0a1b2c")
+        DependencyCache(modifiable).archive(tmp_path / "repository", "tap:1", "0a1b2c")
 
 
 # A real Sandbox and the Python Ecosystem
@@ -854,12 +882,11 @@ def test_repeat_run_in_a_real_sandbox_skips_discovery_and_uses_what_the_first_ru
     assert discovery.asked == []
     assert second.profile == first.profile == store.load(repository)
     assert (first.profile.test_framework, first.profile.test_layout) == ("pytest", ("tests",))
-    assert cache.archive(
-        repository, digest_lock_files(repository, target, first.profile.lock_files)
-    ).is_file()
+    digest = digest_lock_files(repository, target, first.profile.lock_files)
+    assert cache.archive(repository, first.profile.image, digest).is_file()
     assert failed is None
     name = "tests/test_rate.py::test_rate"
-    assert [PythonEcosystem().read_results(run) for run in tested] == [
+    assert [PythonEcosystem().read_results(result) for result in tested] == [
         Results(passed=(name,), failed=(), could_not_run=()),
         Results(passed=(), failed=(name,), could_not_run=()),
     ]
