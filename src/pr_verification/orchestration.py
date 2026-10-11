@@ -37,10 +37,6 @@ where the command is its parts with a space between them and the ending is as
 `run_on_both_commits` writes one, and is what the exception said for a `SandboxFailed`. It holds
 none of the output."""
 
-CLAIM_FAILED = "The work on this Claim failed inside the system: {failure}"
-"""Why one Claim is Inconclusive when the work on it raised. `failure` is the name of the
-exception's class, then `: `, then what it said."""
-
 OpenSandbox = Callable[[Path, str], AbstractContextManager[SandboxWithHomes]]
 """Opens a Sandbox for the commits of the repository named, running in the image named. The
 Sandbox is the one in use inside the `with`, and leaving the `with` closes it.
@@ -126,19 +122,20 @@ class FixedPipeline:
         Evidence and `COULD_NOT_PREPARE` filled in. An `Unsupported` from step 2 is treated as
         one from step 1.
 
-        A failure while working on one Claim does not stop work on the others. When
-        `write_reproduction` raises any `Exception` for a Claim, that Claim is given no
-        Evidence and `CLAIM_FAILED` filled in, and the next Claim is worked on as if nothing
-        had happened. Each Claim's work is its own call, so nothing of one Claim reaches the
-        role working on another.
+        A failure while working on one Claim does not stop work on the others. When the
+        model or the Sandbox fails during a Claim's work, `write_reproduction` answers with
+        the reason and no Evidence, and the next Claim is worked on as if nothing had
+        happened: every Claim is worked on, whatever came of those before it. Each Claim's
+        work is its own call, so nothing of one Claim reaches the role working on another.
 
         A model's word is never Evidence here. The only Evidence a Claim is given is what
         `write_reproduction` recorded from runs in the Sandbox.
 
         Every Sandbox opened is closed before the answer is given or an exception goes on.
 
-        Raises `ValueError` as `prepare_target` does. Nothing else is raised for what the
-        repository, the pull request, or the model does.
+        Raises `ValueError` as `prepare_target` does. Any other exception is a fault in the
+        system and is raised, as `write_reproduction` raises it: it is not turned into an
+        Inconclusive Verdict.
         """
         raise NotImplementedError
 
