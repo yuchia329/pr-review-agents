@@ -109,12 +109,13 @@ Jev takes 32k of its own tokens for the state and the question, and publishes no
 token is seldom shorter than a byte, so `JevDecider` refuses an input over 30,000 bytes of UTF-8
 with `InputTooLong` and sends nothing. That refuses some inputs Jev would take. Whether it
 keeps every input within Jev's limit is not confirmed: how Jev counts a state, and what it does
-with one that is too long, could not be checked without a key.
+with one that is too long, has not been tried.
 
-**Jev has not been reached from this project.** It is in early access and there is no key. The
-client was written from TypeSafe's API reference and checked two ways on 2026-10-10: against
+The client was written from TypeSafe's API reference and first checked on 2026-10-10 against
 the response shapes that reference documents, replayed locally, and against `laya-serve`, which
-serves the same request and response shape. Its first run against Jev itself is still to do.
+serves the same request and response shape. It first reached Jev itself on 2026-10-11, in the
+comparison below: 30 choices asked, 30 answered. A yes-or-no question, an input over the limit,
+and a wrong key have not been tried against Jev itself.
 
 ## The three-way comparison
 
@@ -128,17 +129,20 @@ uv run --extra laya python tools/compare_deciders.py
 Laya is always compared; Jev when `PR_VERIFICATION_JEV_API_KEY` is set; the small LLM when a
 model is configured.
 
-### Results, 2026-10-10
+### Results, 2026-10-10 and 2026-10-11
 
 Thirty Claims written by hand for this comparison, fifteen of each kind, each asked the Claim
-classifier's question. One run. The small LLM was `qwen3-vl:8b` through Ollama on the same
-machine, the model on hand, and not the model the project means to use for light work.
+classifier's question. Two runs of the same cases on the same machine: Laya with the small LLM
+on 2026-10-10, and Laya with Jev on 2026-10-11. Laya gave the same 17 of 30 both times. The
+small LLM was `qwen3-vl:8b` through Ollama on the same machine, the model on hand, and not the
+model the project means to use for light work. Jev's dollars are its published price for a
+decision of this size, given to the tool as an argument, and not a bill.
 
 | Implementation | Decision Accuracy | Seconds per decision | Dollars per decision |
 | --- | --- | --- | --- |
 | Laya (English checkpoint, processor only) | 17 of 30 (0.57) | 0.056 | 0 |
 | Small LLM (`qwen3-vl:8b`, local) | 27 of 30 (0.90) | 22.9 | 0 |
-| Jev (`jev-1.13.0`) | not measured: no key | | |
+| Jev (`jev-1.13.0`, over the network) | 29 of 30 (0.97) | 0.101 | 0.00001 |
 
 No decision failed. What the numbers say:
 
@@ -149,15 +153,25 @@ No decision failed. What the numbers say:
   ran from 0.52 to 0.78 with a median of 0.63, and reached 0.75 for 1 Claim of 30. At the
   default threshold, then, 29 of 30 decisions are passed to the small LLM: all but one of the
   answers are the small LLM's, and Laya adds its loading time for almost nothing.
-- **Laya is about 400 times faster for each decision** than this local model, so it is worth
-  having if it can be made right: by fine-tuning it on Claims, and fitting its temperature, as
-  its documentation describes. Neither is done here; fine-tuning the decision model is out of
-  scope for this spec.
+- **Jev classifies Claims as it is.** 29 of 30, against 27 for the local small LLM, at a tenth
+  of a second and a thousandth of a cent for each decision, and with nothing to load. On these
+  cases it is the only implementation that is both right and fast.
+- **Laya's speed does not make up for it.** Laya is about twice as fast as Jev for each
+  decision, 0.056 seconds against 0.101, but it pays 4 to 15 seconds of loading on every run,
+  which Jev does not: over these 30 decisions Laya took about 7 seconds with loading and Jev 3.
+  Laya would be worth having only once made right, by fine-tuning it on Claims and fitting its
+  temperature as its documentation describes. Neither is done here; fine-tuning the decision
+  model is out of scope for this spec.
+- **What Laya keeps is that nothing leaves the machine.** A Claim is Untrusted Content from the
+  pull request, and under Jev it is sent to TypeSafe.
 
 What is still to do:
 
-- Jev, when there is a key. Its published price is $0.042 for a million input tokens, about
-  $0.00001 for a decision of this size; pass that as `--jev-dollars-per-decision`.
+- Jev's confidence on these cases, to fit a threshold for it: the tool prints accuracy and not
+  the probabilities. Its price is $0.042 for a million input tokens, about $0.00001 for a
+  decision of this size, which is what was passed as `--jev-dollars-per-decision`.
+- Whether the default should stay Laya. The spec names Laya the default, and these numbers
+  argue for Jev or the small LLM until Laya is fine-tuned. That is the project owner's choice.
 - A hosted small LLM, with its price, in place of the local one, whose 22.9 seconds is the
   speed of this machine and not of the model.
 - More cases, and cases taken from real pull requests, before a threshold is fitted. With
