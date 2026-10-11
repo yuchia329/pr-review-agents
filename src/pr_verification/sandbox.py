@@ -206,18 +206,21 @@ memory limit. That report and the report of its death come by different routes."
 
 # A home directory is saved and put back by commands run in the Sandbox's own image, as any
 # command is, so an archive is written and unpacked only inside the Sandbox. The image has to
-# hold `sh`, `tar`, `chmod`, and `find`.
+# hold `sh`, `tar`, `gzip`, `chmod`, and `find`.
 
-_SAVE_HOME: Command = ("tar", "-c", "-f", "-", "-C", f"{_VOLUME}/{_HOME}", ".")
+# Compressed, because that adds a check at the end of the file: `tar` alone takes a file of
+# nothing, or an archive cut short between two of its members, for a whole one.
+_SAVE_HOME: Command = ("tar", "-c", "-z", "-f", "-", "-C", f"{_VOLUME}/{_HOME}", ".")
 """Writes a commit's home directory to standard output as one file: the archive."""
 
 _RESTORE_HOME: Command = (
+    # Three steps need a shell to join them. It is given no text but this, which is the project's.
     "sh",
     "-c",
     # Emptied first, so that nothing is left over. An install phase can leave directories that
     # even their owner may not change, so the owner is let into all of them before that.
     f"chmod -R u+rwX {_VOLUME}/{_HOME} && find {_VOLUME}/{_HOME} -mindepth 1 -delete"
-    f" && tar -x -p -f - -C {_VOLUME}/{_HOME}",
+    f" && tar -x -z -p -f - -C {_VOLUME}/{_HOME}",
 )
 """Makes a commit's home directory hold what the archive on standard input holds, and no more."""
 

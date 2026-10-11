@@ -191,13 +191,13 @@ class DirectoryStore:
                 **others,
             } if not others and all(map(_is_texts, (*install, test, test_layout, lock_files))):
                 return RepoProfile(
-                    image,
-                    tuple(map(tuple, install)),
-                    tuple(test),
-                    test_framework,
-                    tuple(test_layout),
-                    tuple(lock_files),
-                    lock_digest,
+                    image=image,
+                    install=tuple(map(tuple, install)),
+                    test=tuple(test),
+                    test_framework=test_framework,
+                    test_layout=tuple(test_layout),
+                    lock_files=tuple(lock_files),
+                    lock_digest=lock_digest,
                 )
         # Not what `save` writes, so left by another version of the system.
         return None

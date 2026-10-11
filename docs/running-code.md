@@ -61,30 +61,32 @@ refuse a directory that is the repository or lies inside it.
 `prepare_target` fills both, from the target commit only. A profile is saved once its install
 commands and its test command have been run against that commit. It is used again while the
 lock files hold the same contents, and learned again when they change or an install command
-stops working. `prepare_pull_request` reads both and writes neither.
+stops working. `prepare_pull_request` is handed the profile, reads the archive, and saves neither.
 
-An archive is a tar file of the home directory. It is written and unpacked by `tar` running in
-the Sandbox's own image, as the same user and under the same isolation as any command, with no
-network. On the machine that started the Sandbox it is only ever a file that is passed along.
+An archive is a compressed tar file of the home directory. It is written and unpacked by `tar`
+running in the Sandbox's own image, as the same user as any command and as shut in, with no
+network. The machine that started the Sandbox passes the file along and never reads it.
 
 ### Time saved on a repeat run
 
-Measured on Flask at commit `d086db8`, on macOS with Docker Desktop 28.4, with the image already
-fetched. Each run is `prepare_target` in a new Sandbox. Seconds, the median of three rounds,
-with the lowest and highest in brackets.
+Measured on Flask at commit `d086db8`, on macOS with Docker Engine 28.4 under Docker Desktop,
+with the image already fetched. Each run is `prepare_target` in a new Sandbox. Seconds, the
+median of three rounds, with the lowest and highest in brackets.
 
 | Run | Whole | Putting back | Installing | Saving | Proving the test command |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| First run, nothing kept | 15.8 (13.4-17.5) | | 12.4 (9.2-12.4) | 1.3 (1.1-2.5) | 2.0 (1.9-2.0) |
-| Repeat run | 6.2 (5.7-7.2) | 2.0 (1.8-2.3) | 4.1 (3.8-4.2) | | |
-| Repeat run, cache emptied | 11.7 (10.4-14.4) | | 10.5 (9.0-13.1) | 1.0 (1.0-1.2) | |
+| First run, nothing kept | 14.1 (14.0-15.4) | | 8.5 (8.4-9.6) | 3.3 (3.3-3.3) | 1.7 (1.7-1.9) |
+| Repeat run | 5.9 (5.9-8.4) | 1.6 (1.5-2.6) | 3.9 (3.8-3.9) | | |
+| Repeat run, profile kept and archive removed | 12.5 (12.3-15.9) | | 8.8 (8.2-12.2) | 3.6 (3.4-3.6) | |
 
-- A repeat run takes 9.6 seconds less than a first run, which is 61% of it.
-- The dependency cache saves 5.5 seconds: the repeat run against the one with the cache
-  emptied. Putting the 131 MB archive back costs 2.0 seconds and takes 6.4 off installing.
-- The Repo Profile saves the 2.0 seconds of the run that proves the test command, and
-  discovery, which took under 0.05 seconds. The rest of the 4.1 seconds between the first run
-  and the one with the cache emptied is installs from the network taking different times.
+- A repeat run takes 8.2 seconds less than a first run, which is 58% of it.
+- The installed dependencies save 6.6 seconds: the repeat run against the one with the archive
+  removed. Putting the 78 MB archive back costs 1.6 seconds, takes 4.9 off installing, and
+  leaves no archive to save, which is another 3.6.
+- The Repo Profile saves 1.6 seconds: the first run against the one with the archive removed.
+  That is the run that proves the test command, and discovery, which took under 0.05 seconds.
+- Saving an archive costs 3.3 seconds, most of it compressing. It is paid once for each lock
+  file, on the run that first sees it.
 
 What the profile saves grows with the repository's test suite, and Flask's is short. One
 repository on one machine is a small sample: the spread between rounds is as wide as some of
@@ -92,22 +94,30 @@ the differences.
 
 ### Known limits
 
-- The image has to hold `sh`, `tar`, `chmod`, and `find`. The `python:<version>-slim` images
-  do. With an image that does not, saving and putting back raise `SandboxFailed`.
-- Saving and putting back have no time limit, and the size of an archive is not limited.
-- Nothing is ever removed from the cache. Each change of the lock file leaves the archive for
-  the old one behind, and a repository that is gone leaves its profile and its archives.
+- The image has to hold `sh`, `tar`, `gzip`, `chmod`, and `find`, and its `tar` has to be able
+  to unpack into a directory the archive marks read-only, as GNU tar can and BusyBox tar
+  cannot. The `python:<version>-slim` images qualify. With an image that does not, saving or
+  putting back raises `SandboxFailed`.
+- Saving and putting back have no limit on time, memory, or processors, and the size of an
+  archive is not limited.
+- Nothing kept is removed for being old. Each change of the lock files leaves the archive for
+  the old ones behind, and a repository that is gone leaves its profile and its archives.
 - A repository is told from another by the resolved path of its directory. One that is checked
-  out somewhere else has no profile and no archive there, and learns again.
+  out somewhere else has no profile and no archive there, and learns again. Letter case counts
+  even where the file system ignores it, so there a directory inside the repository that is
+  named in another case is not refused.
 - An image is told from another by its name. An archive saved in `python:3.14-slim` is put back
   after that name has moved on to a newer build. The install commands are still run afterwards.
-- The lock file is taken to be the files the Ecosystem names. A file that one of them includes
-  is not followed, so a change there alone leaves the profile and the archive in use.
+- The lock files are the files the Ecosystem names. A file that one of them includes is not
+  followed, and one that is a symbolic link counts as the text of the link, so a change only
+  where it leads leaves the profile and the archive in use.
 - A home directory holding something its own user may not read cannot be saved.
 - When an archive cannot be put back, the home directory is left empty or part filled. From
   `prepare_target` the error goes on and the archive is deleted, so the next run starts clean.
 - A profile is not written in one step. Two runs saving at once can leave a file that reads as
   no profile, and the next run learns it again. An archive does take its place in one step.
+- A profile's file that is there but cannot be opened, such as one the user may not read, is an
+  error and not a missing profile.
 
 ## The Python Ecosystem
 
@@ -147,8 +157,9 @@ The image is `python:<version>-slim`, for the newest of Python 3.14 to 3.10 that
 
 ### Known limits
 
-- A lock file (`uv.lock`, `poetry.lock`, `Pipfile.lock`) is not read: versions are resolved
-  afresh by pip.
+- A file of pinned versions (`uv.lock`, `poetry.lock`, `Pipfile.lock`) is not read: versions are
+  resolved afresh by pip. It is not one of the lock files above either, so a change to it alone
+  leaves the Repo Profile and the installed dependencies in use.
 - Extras declared only in `setup.py` or `setup.cfg` are not installed, because finding them would
   mean running the file.
 - When `requires-python` allows none of the versions as they are written, such as `3.12`, the
