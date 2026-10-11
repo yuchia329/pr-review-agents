@@ -22,8 +22,8 @@ NO_REPRODUCTION_RAN = (
 """The reason for Inconclusive when the Evidence holds no Reproduction that ran on both commits."""
 
 DECIDES_NOTHING = (
-    "The Reproduction ran on the code before the pull request and the code after it, and what "
-    "it did neither supports nor contradicts the Claim."
+    "A Reproduction ran on the code before the pull request and the code after it, and the "
+    "Evidence from running it neither supports nor contradicts the Claim."
 )
 """The reason for Inconclusive when a Reproduction ran on both commits and the Verdict is
 neither Confirmed nor Refuted."""
@@ -48,13 +48,13 @@ def compute_verdict(evidence: Sequence[Evidence]) -> Computed:
     is asked, and the order of the Evidence carries no meaning.
 
     Only a Reproduction that ran on both commits can decide the Claim. That is a
-    `ReproductionEvidence` whose `before_results` and `after_results` are both recorded, and
-    each of which holds no test in `could_not_run` and at least one test in `passed` or
-    `failed`. Any other Evidence decides nothing, whatever it holds: Evidence obtained by
-    reading, a `RunEvidence` that is not a `ReproductionEvidence`, and a Reproduction that did
-    not run on both commits, as with a set-up error or an import error. Output, exit statuses,
-    observations, and the text of the Reproduction are never read here: only which tests
-    passed and which failed.
+    `ReproductionEvidence` whose `before_results` and `after_results` are both `Results`,
+    each holding no test in `could_not_run` and at least one test in `passed` or `failed`.
+    One with None or `Unreadable` for either did not run on both commits. Any other Evidence
+    decides nothing, whatever it holds: Evidence obtained by reading, a `RunEvidence` that is
+    not a `ReproductionEvidence`, and a Reproduction that did not run on both commits, as
+    with a set-up error or an import error. Output, exit statuses, observations, and the
+    text of the Reproduction are never read here: only which tests passed and which failed.
 
     A Reproduction asserts the behaviour the Claim says the code has after the pull request.
     One that ran on both commits:
@@ -78,12 +78,15 @@ def compute_verdict(evidence: Sequence[Evidence]) -> Computed:
       and none supports it;
     - Inconclusive, with the reason `NO_REPRODUCTION_RAN`, when no Reproduction ran on both
       commits, which includes there being no Evidence at all;
-    - Inconclusive, with the reason `DECIDES_NOTHING`, in every other case.
+    - Inconclusive, with the reason `DECIDES_NOTHING`, in every other case, which includes
+      one Reproduction supporting the Claim while another contradicts it.
 
     Refuted blocks the Gate, so its condition is the control on the False Block rate: it is
     met only by a regression, where what the Claim says held before the pull request and does
     not hold after it.
 
     Until the Claim classifier is built, every Claim is verified as a Behavioural Claim.
+    Until the Reproduction judge is built, no step checks that a Reproduction tests what its
+    Claim says (ADR 0002): every Reproduction that ran on both commits is taken as Evidence.
     """
     raise NotImplementedError

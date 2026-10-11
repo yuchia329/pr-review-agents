@@ -28,8 +28,8 @@ NO_REPRODUCTION_ECOSYSTEM = (
 """Why every Claim is Inconclusive when the Ecosystem found is not a `ReproductionEcosystem`."""
 
 COULD_NOT_PREPARE = (
-    "The dependencies of the code {commit} the pull request could not be installed, so no "
-    "Reproduction was run: {failure}"
+    "The code {commit} the pull request could not be prepared for running, so no Reproduction "
+    "was run: {failure}"
 )
 """Why every Claim is Inconclusive when preparing a commit did not work. `commit` is `before`
 or `after`. `failure` is `the command <command> ended with <ending>` for a `CommandFailed`,
@@ -56,7 +56,8 @@ class Gathered:
 
     inconclusive: str | None = None
     """Why the work ended without Evidence that could decide the Claim, when the orchestration
-    knows. It can only ever explain an Inconclusive Verdict: it is never read to compute one."""
+    knows. It can only ever explain an Inconclusive Verdict: it is never read to compute one.
+    It may hold what a failure said, and so Untrusted Content."""
 
 
 class Orchestration(Protocol):
@@ -115,9 +116,10 @@ class FixedPipeline:
         3. Prepares the code after it, with `prepare_pull_request(repository, after, ...)` in
            the Sandbox and with the Repo Profile that step 2 gave.
         4. For each Claim in turn, calls `write_reproduction` with the Claim, `model`, that
-           Sandbox, the Ecosystem, `repository`, `before`, `after`, and `limits`, and with its
-           own caps. The Claim is given the record's `evidence` as its one piece of Evidence
-           when there is one, and otherwise no Evidence and the record's `inconclusive`.
+           Sandbox, the Ecosystem, `repository`, `before`, `after`, and `limits`, and with
+           the caps `write_reproduction` has unless given others. The Claim is given the
+           `ReproductionRun`'s `evidence` as its one piece of Evidence when there is one, and
+           otherwise no Evidence and the `ReproductionRun`'s `inconclusive`.
 
         When step 2 or step 3 answers `CommandFailed` or raises `SandboxFailed`, no
         Reproduction is written, no request is made to the model, and every Claim is given no
