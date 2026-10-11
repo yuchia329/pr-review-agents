@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from pr_verification.model import ScriptedModel
+from pr_verification.model import ModelFailed, ModelRequest, ScriptedModel
 
 
 @dataclass(frozen=True)
@@ -78,6 +78,13 @@ def fixture_repository(tmp_path: Path) -> FixtureRepository:
 def model_listing(*claims: str) -> ScriptedModel:
     """A stand-in for the model whose one response to the Claim extractor lists these Claims."""
     return ScriptedModel([json.dumps({"claims": claims})])
+
+
+class UnreachableModel:
+    """A stand-in for a model that cannot be reached."""
+
+    def complete(self, request: ModelRequest) -> str:
+        raise ModelFailed("the model could not be reached")
 
 
 def asks(tool: str, **arguments: object) -> str:

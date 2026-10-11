@@ -10,7 +10,7 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 import pytest
-from conftest import FixtureRepository, asks, commit_snapshots, finishes
+from conftest import FixtureRepository, UnreachableModel, asks, commit_snapshots, finishes
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -187,7 +187,7 @@ class LineEcosystem:
         return Placement("reproduction.tap", ("write", reproduction), ("run-reproduction",))
 
 
-class FakeSandbox:
+class StandInSandbox:
     """Keeps what is written for each commit, and runs it as `BEHAVIOUR` says it behaves."""
 
     def __init__(self, repository: FixtureRepository, unwritable: str | None = None) -> None:
@@ -216,7 +216,7 @@ def write_with(
     return write_reproduction(
         CLAIM,
         model=model,
-        sandbox=sandbox or FakeSandbox(repository),
+        sandbox=sandbox or StandInSandbox(repository),
         ecosystem=ecosystem or LineEcosystem(),
         repository=repository.path,
         before=repository.before,
@@ -273,7 +273,7 @@ def test_reproduction_that_behaves_differently_is_evidence_and_ends_the_work(
 def test_reproduction_is_placed_then_run_on_before_then_after_through_the_sandbox_alone(
     pricing: FixtureRepository, text: str
 ) -> None:
-    sandbox = FakeSandbox(pricing)
+    sandbox = StandInSandbox(pricing)
 
     write(pricing, writes(text), sandbox=sandbox, attempt_cap=1)
 
@@ -328,7 +328,7 @@ def test_writer_revises_a_reproduction_that_could_not_run_or_shows_nothing_and_i
 def test_answer_that_holds_no_reproduction_runs_nothing_and_is_revised(
     pricing: FixtureRepository, answer: str
 ) -> None:
-    sandbox = FakeSandbox(pricing)
+    sandbox = StandInSandbox(pricing)
 
     run, model = write(pricing, answer, writes("fixed"), sandbox=sandbox)
 
@@ -342,11 +342,19 @@ def test_answer_that_holds_no_reproduction_runs_nothing_and_is_revised(
     ]
 
 
+def test_answer_that_holds_more_than_its_reproduction_still_gives_one(
+    pricing: FixtureRepository,
+) -> None:
+    run, _ = write(pricing, finishes(reproduction="fixed", note="It fails before the fix."))
+
+    assert run.evidence is not None and run.evidence.reproduction == "fixed"
+
+
 def test_reproduction_of_the_longest_length_is_placed_exactly_as_the_role_gave_it(
     pricing: FixtureRepository,
 ) -> None:
     text = " " + "x" * (LONGEST_REPRODUCTION - 2) + "\n"
-    sandbox = FakeSandbox(pricing)
+    sandbox = StandInSandbox(pricing)
 
     run, _ = write(pricing, writes(text), sandbox=sandbox, attempt_cap=1)
 
@@ -359,25 +367,34 @@ def test_reproduction_that_cannot_be_placed_on_both_commits_is_not_run(
     pricing: FixtureRepository, unwritable: str
 ) -> None:
     commits = {"before": pricing.before, "after": pricing.after}
-    sandbox = FakeSandbox(pricing, unwritable=commits[unwritable])
+    sandbox = StandInSandbox(pricing, unwritable=commits[unwritable])
 
-    run, _ = write(pricing, writes("fixed"), sandbox=sandbox, attempt_cap=1)
+    run, model = write(pricing, writes("fixed"), writes("same"), sandbox=sandbox, attempt_cap=2)
 
     assert [(command, commit) for command, commit, *_ in sandbox.runs] == [
         (("write", "fixed"), pricing.before),
         (("write", "fixed"), pricing.after),
+        (("write", "same"), pricing.before),
+        (("write", "same"), pricing.after),
     ]
-    (attempt,) = run.attempts
-    assert attempt.result is COULD_NOT_RUN
-    placed = {"before": attempt.before, "after": attempt.after}
-    assert placed.pop(unwritable) == NOT_WRITTEN
-    assert list(placed.values()) == [WRITTEN]
+    placing = {"before": WRITTEN, "after": WRITTEN, unwritable: NOT_WRITTEN}
+    for attempt in run.attempts:
+        assert attempt.result is COULD_NOT_RUN
+        assert {"before": attempt.before, "after": attempt.after} == placing
+    assert task(model.requests[1])["attempts"] == [
+        {
+            "reproduction": "fixed",
+            "result": "could_not_run",
+            "before": placing["before"].output,
+            "after": placing["after"].output,
+        }
+    ]
 
 
 def test_writers_role_reads_the_code_after_the_pull_request_and_has_no_tool_that_runs_anything(
     pricing: FixtureRepository,
 ) -> None:
-    sandbox = FakeSandbox(pricing)
+    sandbox = StandInSandbox(pricing)
     reads, runs = asks("read_file", path="pricing.py"), asks("run_command", command="pytest")
 
     run, _ = write(pricing, reads, runs, writes("same"), sandbox=sandbox, attempt_cap=1)
@@ -440,7 +457,6 @@ def test_claim_is_inconclusive_with_the_reason_when_the_cap_on_attempts_is_reach
     assert [attempt.result for attempt in run.attempts] == [COULD_NOT_RUN, last, last]
     assert run.evidence is None
     assert run.inconclusive == ATTEMPT_CAP_REACHED.format(attempts=3, ending=ENDINGS[last])
-    assert "in 3 attempts" in run.inconclusive
     assert len(model.requests) == 3
 
 
@@ -453,14 +469,14 @@ def test_writer_makes_the_default_number_of_attempts_when_no_cap_is_given(
     assert run.inconclusive is not None
 
 
-@pytest.mark.parametrize("attempt_cap", [0, -1])
-def test_cap_on_attempts_under_one_is_rejected_before_anything_is_asked_or_run(
-    pricing: FixtureRepository, attempt_cap: int
+@pytest.mark.parametrize("caps", [{"attempt_cap": 0}, {"attempt_cap": -1}, {"step_cap": 0}])
+def test_cap_under_one_is_rejected_before_anything_is_asked_or_run(
+    pricing: FixtureRepository, caps: dict[str, int]
 ) -> None:
-    sandbox, model = FakeSandbox(pricing), ScriptedModel([writes("fixed")])
+    sandbox, model = StandInSandbox(pricing), ScriptedModel([writes("fixed")])
 
     with pytest.raises(ValueError):
-        write_with(model, pricing, sandbox, attempt_cap=attempt_cap)
+        write_with(model, pricing, sandbox, None, **caps)
 
     assert (model.requests, sandbox.runs) == ([], [])
 
@@ -475,12 +491,8 @@ def test_sandbox_that_fails_is_not_caught(pricing: FixtureRepository) -> None:
 
 
 def test_model_that_fails_is_not_caught(pricing: FixtureRepository) -> None:
-    class Unreachable:
-        def complete(self, request: ModelRequest) -> str:
-            raise ModelFailed("the model could not be reached")
-
     with pytest.raises(ModelFailed):
-        write_with(Unreachable(), pricing)
+        write_with(UnreachableModel(), pricing)
 
 
 ANSWERS = st.one_of(
@@ -593,10 +605,10 @@ def test_python_reproduction_is_run_alone_and_its_tests_are_named_by_node_id(
     sandbox, ecosystem = installed
     placement = ecosystem.place(ADDS_TAX + "\n\ndef test_fails():\n    assert False\n")
 
-    for command in (placement.write, placement.run):
-        done = sandbox.run(command, commit=pricing.after, phase=Phase.TEST, limits=LIMITS)
+    sandbox.run(placement.write, commit=pricing.after, phase=Phase.TEST, limits=LIMITS)
+    ran = sandbox.run(placement.run, commit=pricing.after, phase=Phase.TEST, limits=LIMITS)
 
-    assert ecosystem.read_results(done) == Results(
+    assert ecosystem.read_results(ran) == Results(
         passed=(f"{REPRODUCTION_PATH}::test_total_adds_tax",),
         failed=(f"{REPRODUCTION_PATH}::test_fails",),
         could_not_run=(),
@@ -634,6 +646,9 @@ def test_reproduction_and_its_output_on_both_commits_appear_in_the_report(
     )
     (printed,) = json.loads(report.to_json())["claims"][0]["evidence"]
     assert printed["source"] == "ran_code"
+    assert printed["command"] == list(evidence.command)
+    assert (printed["before"]["exit_status"], printed["after"]["exit_status"]) == (1, 0)
+    assert printed["before"]["limit_hit"] is None
     assert (printed["path"], printed["reproduction"]) == (REPRODUCTION_PATH, ADDS_TAX)
     assert printed["before"]["output"] == evidence.before.output
     assert printed["after"]["output"] == evidence.after.output
@@ -685,13 +700,23 @@ def test_what_the_model_writes_is_run_only_inside_the_sandbox(
     sandbox, ecosystem = installed
     monkeypatch.setenv("PR_VERIFICATION_API_KEY", "sk-not-for-the-sandbox")
     mark = tmp_path / "ran-outside-the-sandbox"
-    reaches_out = (
-        f"import os\n\ntry:\n    open({str(mark)!r}, 'w').close()\nexcept OSError:\n    pass\n"
-        "print('key:', os.environ.get('PR_VERIFICATION_API_KEY'))\n\n\n" + ADDS_TAX
-    )
+    # What a test prints is shown when it fails, as this one does on the code before.
+    reaches_out = f"""\
+def test_total_adds_tax():
+    import os
+    from pricing import total
+
+    try:
+        open({str(mark)!r}, "w").close()
+    except OSError:
+        pass
+    print("key:", os.environ.get("PR_VERIFICATION_API_KEY"))
+    assert total(100) == 120.0
+"""
 
     run, _ = write(pricing, writes(reaches_out), sandbox=sandbox, ecosystem=ecosystem)
 
     assert run.evidence is not None
     assert not mark.exists()
+    assert "key: None" in run.evidence.before.output
     assert "sk-not-for-the-sandbox" not in run.evidence.before.output + run.evidence.after.output
