@@ -46,6 +46,7 @@ def run(
     orchestration: Orchestration | None = None,
     budget: Budget | None = None,
     clock: Clock = time.monotonic,
+    review: bool = False,
 ) -> Report:
     """Verify one pull request end to end and return its report.
 
@@ -60,6 +61,7 @@ def run(
        through `gather_within` as The Budget says below. With no Claims it is not asked.
     5. Computes each Claim's Verdict with `compute_verdict`, from the Evidence gathered for
        that Claim and nothing else.
+    6. With `review` true, reviews the pull request, as described below.
 
     Classifying
         Each Claim the extractor lists is labelled by `classify_claim(decider, text)`, once,
@@ -90,8 +92,6 @@ def run(
     Neither the model nor the orchestration can give a Verdict. Whatever a model says, and
     whatever `inconclusive` holds, a Claim for which no Reproduction ran on both commits is
     Inconclusive. The report's Gate is computed from the Verdicts alone, by `compute_gate`.
-
-    `findings` is empty.
 
     The Budget
         `budget` is the Budget for the call, and `Budget()`, with its provisional defaults,
@@ -134,6 +134,30 @@ def run(
         or `SHARE_SPENT`, filled in. A Claim whose share was spent does not stop the others
         from receiving their Verdicts.
 
+    Reviewing
+        With `review` true, `review_pull_request` (from `pr_verification.review`) is called
+        once, after step 5. It is given the Claims in the order extracted; the pull request's
+        title, description, and linked issue; all the Evidence gathered, Claim by Claim in
+        the report's order and each Claim's in the order gathered; the repository; the two
+        full commit IDs; `model`; and `decider`. The report's `findings` are the `findings`
+        it gives, in that order. A Review asks the decision layer: `ValueError` is raised
+        before anything else is done when `review` is true and `decider` is None.
+
+        With `review` false, as it is unless given, nothing is reviewed: `findings` is empty,
+        and nothing more is asked of the model or of the decider.
+
+        Findings are advisory. The Review is given no Verdict and comes after every Verdict
+        is computed, and nothing it gives is read to compute a Verdict or the Gate. So a
+        report has the same Claims, with the same Verdicts, reasons, and Evidence, and the
+        same Gate, whatever its Findings are and whether or not there was a Review. That
+        holds for a detection by the injection detector as for any Finding: it is an extra
+        signal and changes nothing else (ADR 0002). A Review that could not be finished
+        costs a Finding that says so, and never the report.
+
+        No Claim is made from the diff. The Review reads the diff and the Claim extractor
+        never does: `claims` holds the Claims extracted in step 2 and no other, whatever the
+        Review finds. A change that no Claim covers is a Finding.
+
     With `orchestration` None, the fixed pipeline is used and nothing is kept between runs: it
     is `fixed_pipeline` on a temporary directory, which is removed before the report is
     returned or an exception goes on. Its `progress_guard` is `decider`, so the decider that
@@ -145,7 +169,7 @@ def run(
     other than one `Gathered` for each Claim, and whatever else the orchestration raises.
     Raises `ValueError` as `Ledger` does for `budget`, before step 1.
     """
-    if budget is not None or clock is not time.monotonic:
+    if budget is not None or clock is not time.monotonic or review:
         raise NotImplementedError
     started = time.monotonic()
     before = _resolve_commit(pull_request.repository, "before", pull_request.before)

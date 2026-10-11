@@ -126,6 +126,64 @@ class Finding:
     concern: str
 
 
+class FindingKind(StrEnum):
+    """What a Finding reports."""
+
+    QUALITY = "quality"
+    """A concern about the quality of a change, raised by the Reviewer."""
+
+    UNDECLARED_CHANGE = "undeclared_change"
+    """An Undeclared Change: a change that no Claim covers."""
+
+    SUSPECTED_INJECTION = "suspected_injection"
+    """Untrusted Content that reads as instructions aimed at an automated tool."""
+
+    UNFINISHED_REVIEW = "unfinished_review"
+    """The Review could not be finished, so it may have missed something."""
+
+
+class PullRequestPart(StrEnum):
+    """The part of a pull request that a Finding concerns."""
+
+    TITLE = "title"
+    """The pull request's title."""
+
+    DESCRIPTION = "description"
+    """The pull request's description."""
+
+    LINKED_ISSUE = "linked_issue"
+    """The text of the issue the pull request links to."""
+
+    FILE = "file"
+    """One file the pull request changes: the Finding's `path`."""
+
+    SANDBOX_OUTPUT = "sandbox_output"
+    """What was printed when code was run in the Sandbox for the pull request."""
+
+    PULL_REQUEST = "pull_request"
+    """The pull request as a whole."""
+
+
+@dataclass(frozen=True)
+class ReviewFinding(Finding):
+    """A Finding as a Review makes one: it says what it reports, and points to the part of the
+    pull request it concerns.
+
+    In the printed report it appears among `findings` with `concern`, `kind`, `part`, and
+    `path`, where `path` is null unless `part` is `file`.
+    """
+
+    kind: FindingKind = field(kw_only=True)
+    """What the Finding reports."""
+
+    part: PullRequestPart = field(kw_only=True)
+    """The part of the pull request the Finding concerns."""
+
+    path: str | None = field(default=None, kw_only=True)
+    """The file, by its path from the root of the repository, when `part` is `FILE`. None for
+    every other part."""
+
+
 class GateDecision(StrEnum):
     PASS = "pass"
     BLOCK = "block"

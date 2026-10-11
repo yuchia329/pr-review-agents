@@ -72,12 +72,16 @@ def main(
 
     Either way the decider answers the progress guard of the roles the fixed pipeline runs.
 
+    With `--review` the pull request is also reviewed: `run` is given `review=True`, so the
+    report's `findings` are the Review's. Without it nothing is reviewed and `findings` is
+    empty. Whichever it is, the exit code is the Gate's and no Finding changes it.
+
     Returns `exit_code` of the report's Gate. Returns `EXIT_NO_REPORT`, having printed no
     report, when there is none to give or anything at all is raised: a failure never exits
     with the code of a block.
     """
     arguments = _parser().parse_args(argv)
-    if budget is not None:
+    if budget is not None or arguments.review:
         raise NotImplementedError
     try:
         if orchestration is None and arguments.state_dir is not None:
@@ -144,5 +148,10 @@ def _parser() -> argparse.ArgumentParser:
         "--state-dir",
         type=Path,
         help="directory the Repo Profile and installed dependencies are kept in between runs",
+    )
+    parser.add_argument(
+        "--review",
+        action="store_true",
+        help="also review the pull request and report Findings, which never change the Gate",
     )
     return parser
