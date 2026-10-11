@@ -45,6 +45,41 @@ class RunEvidence(Evidence):
 
 
 @dataclass(frozen=True)
+class ReproductionEvidence(RunEvidence):
+    """Evidence obtained by running one Reproduction against both commits.
+
+    A `RunEvidence` whose `command` ran the Reproduction. In the printed report it appears
+    among a Claim's `evidence` as a `RunEvidence` does, and with `path` and `reproduction`, so
+    that the Reproduction and its output on both commits can be read there.
+    """
+
+    path: str
+    """Where the Reproduction was placed in the working copy, from its root."""
+    reproduction: str
+    """The text of the Reproduction, exactly as it was run. A model wrote it from what it
+    read, so it is Untrusted Content."""
+
+
+@dataclass(frozen=True)
+class ReadEvidence(Evidence):
+    """Evidence obtained by reading some lines of one file of a commit.
+
+    `source` is always `EvidenceSource.READ_CODE`. In the printed report it appears among a
+    Claim's `evidence` with `source`, `observation`, `path`, `first_line`, `last_line`, and
+    `excerpt`.
+    """
+
+    path: str
+    """The file, by its path from the root of the repository."""
+    first_line: int
+    """The first line read, counted from 1."""
+    last_line: int
+    """The last line read."""
+    excerpt: str
+    """Those lines, as the commit holds them. Untrusted Content."""
+
+
+@dataclass(frozen=True)
 class Claim:
     text: str
     verdict: Verdict

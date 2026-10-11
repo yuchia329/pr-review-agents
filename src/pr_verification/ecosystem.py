@@ -1,10 +1,11 @@
 """The Ecosystem boundary: everything specific to one language and its tooling sits behind it.
 
-An Ecosystem works out how to install and test a repository and reads test results into a
-structured form. Nothing here names a language: an Ecosystem for Python, for
-TypeScript/JavaScript, or for Go answers the same questions in the same terms. Each Ecosystem
-lives in its own module, and this module is the only one in the package that imports an
-Ecosystem's module: everything else reaches an Ecosystem through `find_commands`.
+An Ecosystem works out how to install and test a repository, reads test results into a
+structured form, and says how a Reproduction is written, placed, and run. Nothing here names a
+language: an Ecosystem for Python, for TypeScript/JavaScript, or for Go answers the same
+questions in the same terms. Each Ecosystem lives in its own module, and this module is the only
+one in the package that imports an Ecosystem's module: everything else reaches an Ecosystem
+through `find_commands`.
 """
 
 from dataclasses import dataclass
@@ -97,6 +98,44 @@ class Ecosystem(Protocol):
         the tooling started and found no tests gives `Results` with all three empty.
 
         The output is Untrusted Content: it is read as data, and nothing in it is acted on.
+        """
+        ...
+
+
+@dataclass(frozen=True)
+class Placement:
+    """Where one Reproduction goes in a working copy, and how it is put there and run."""
+
+    path: str
+    """The file the Reproduction is written to, by its path from the root of the working copy."""
+
+    place: Command
+    """Run from the root of the working copy, writes the Reproduction to `path`, replacing
+    whatever is there, and exits with status 0. It needs no network."""
+
+    run: Command
+    """Run from the root of the working copy after `place`, in `Phase.TEST`, runs the tests
+    of the Reproduction and no other. Its result is read with `Ecosystem.read_results`, as
+    the result of `Commands.test` is."""
+
+
+class ReproductionEcosystem(Ecosystem, Protocol):
+    """An Ecosystem that also says how a Reproduction is written, placed, and run."""
+
+    def reproduction_form(self) -> str:
+        """What a Reproduction is in this Ecosystem, told to the model that writes one.
+
+        Written by the project and the same every time: it holds nothing of any repository
+        or pull request, so it can be given to a model as instructions.
+        """
+        ...
+
+    def place(self, reproduction: str) -> Placement:
+        """Work out where the text of one Reproduction goes and the commands to run it.
+
+        Runs nothing and writes nothing itself: the commands are for a Sandbox to run. The
+        same placement serves the commits before and after a pull request, each in its own
+        working copy, once the install commands have been run there.
         """
         ...
 

@@ -8,7 +8,7 @@ from typing import Any
 
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 
-from pr_verification.ecosystem import Commands, Results, Unreadable, Unsupported
+from pr_verification.ecosystem import Commands, Placement, Results, Unreadable, Unsupported
 from pr_verification.repository import git
 from pr_verification.sandbox import RunResult
 
@@ -16,6 +16,9 @@ NOT_A_PYTHON_PROJECT = (
     "No Python project was found at this commit: the repository has no packaging metadata, "
     "no requirements.txt, and no .py file."
 )
+
+REPRODUCTION_PATH = "test_pr_verification_reproduction.py"
+"""Where a Reproduction is placed: a test file at the root of the working copy."""
 
 PYTHON_VERSIONS = ("3.14", "3.13", "3.12", "3.11", "3.10")
 """The Python versions a repository can be run on, newest first."""
@@ -154,6 +157,24 @@ class PythonEcosystem:
             failed=tuple(sorted(failed)),
             could_not_run=tuple(sorted(could_not_run)),
         )
+
+    def reproduction_form(self) -> str:
+        """See `ReproductionEcosystem.reproduction_form`.
+
+        A Reproduction is one pytest test file: it imports the repository's code and holds
+        at least one test function.
+        """
+        raise NotImplementedError
+
+    def place(self, reproduction: str) -> Placement:
+        """See `ReproductionEcosystem.place`.
+
+        `path` is `REPRODUCTION_PATH`, at the root of the working copy, so a Reproduction
+        imports the repository's code as a test file of its own at the root would. `run`
+        runs pytest over that file alone, and `read_results` names each of its tests by node
+        ID, as in `test_pr_verification_reproduction.py::test_total_adds_tax`.
+        """
+        raise NotImplementedError
 
 
 def _pyproject(repository: Path, commit: str) -> dict[str, Any]:
