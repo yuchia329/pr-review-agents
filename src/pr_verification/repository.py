@@ -1,8 +1,16 @@
-"""Reading the repository a pull request belongs to, with git."""
+"""Reading the repository a pull request belongs to, and making one for a case, with git."""
 
 import os
 import subprocess
+import tempfile
 from pathlib import Path
+
+# Who a commit made here is by, whatever the machine it is made on is set up to say.
+_COMMITTER = (
+    "-c", "user.name=pr-verification",
+    "-c", "user.email=pr-verification@example.invalid",
+    "-c", "commit.gpgsign=false",
+)  # fmt: skip
 
 
 def git_environment(repository: Path) -> dict[str, str]:
@@ -13,8 +21,8 @@ def git_environment(repository: Path) -> dict[str, str]:
     return environment
 
 
-def git(repository: Path, *arguments: str) -> bytes:
-    """What one git command printed when run in `repository`.
+def git(repository: Path, *arguments: str, stdin: bytes | None = None) -> bytes:
+    """What one git command printed when run in `repository`, given `stdin` to read if any.
 
     Raises `subprocess.CalledProcessError` when git refuses, and `OSError` when it cannot be run.
     """
@@ -22,6 +30,7 @@ def git(repository: Path, *arguments: str) -> bytes:
         ["git", *arguments],
         cwd=repository,
         env=git_environment(repository),
+        input=stdin,
         check=True,
         capture_output=True,
     )
@@ -32,3 +41,31 @@ def resolve_commit(repository: Path, commit: str) -> str:
     """The full ID of the commit that `commit` names in `repository`. Raises as `git` does."""
     name = f"{commit}^{{commit}}"
     return git(repository, "rev-parse", "--verify", "--end-of-options", name).decode().strip()
+
+
+def new_repository(directory: Path) -> Path:
+    """Make an empty repository in a new directory of its own under `directory`.
+
+    It has no working copy. What it holds is put there and read through git, as the Sandbox
+    reads it, so no file of a commit is written to this machine's disk, where a file system
+    that folds letter case or a filter the machine has set up could change it.
+
+    The directory's name says nothing of what the repository is for: the system is shown the
+    path of a case's repository, and must not be able to read the case's answer from it.
+    """
+    repository = Path(tempfile.mkdtemp(prefix="repository-", dir=directory))
+    git(repository, "init", "--quiet", "--bare")
+    return repository
+
+
+def commit_staged(repository: Path, message: str, *parents: str) -> str:
+    """Commit what is staged in `repository`, with these parents, and return its full ID.
+
+    The new commit is what `HEAD` names afterwards. No branch is made or moved.
+    """
+    tree = git(repository, "write-tree").decode().strip()
+    onto = [argument for parent in parents for argument in ("-p", parent)]
+    made = git(repository, *_COMMITTER, "commit-tree", tree, *onto, "-m", message)
+    commit = made.decode().strip()
+    git(repository, "update-ref", "--no-deref", "HEAD", commit)
+    return commit
