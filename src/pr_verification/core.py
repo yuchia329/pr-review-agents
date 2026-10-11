@@ -40,7 +40,9 @@ def run(pull_request: PullRequest, model: Model, decider: Decider | None = None)
     `Claim`, with no `kind`. The command line always gives one.
 
     A `DecisionFailed` from the decider is not caught. It is a `ModelFailed`, so there is no
-    report, as when the Claim extractor's model fails.
+    report, as when the Claim extractor's model fails. `decider` is expected to be one that
+    passes on an input beyond a size limit, as a configured decider is: an `InputTooLong`
+    is not caught either, and is a fault in the caller.
     """
     started = time.monotonic()
     before = _resolve_commit(pull_request.repository, "before", pull_request.before)

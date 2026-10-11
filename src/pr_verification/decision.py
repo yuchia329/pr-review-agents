@@ -53,7 +53,7 @@ def options_of(question: Question) -> tuple[str, ...]:
     `options` as given for a `Choice`.
 
     Raises `ValueError` for a `Choice` with fewer than two options, with two options the
-    same, or with a blank option.
+    same, or with a blank option: one that is empty or holds only whitespace.
     """
     raise NotImplementedError
 
@@ -168,7 +168,8 @@ class ScriptedDecider:
     """
 
     asked: list[tuple[str, Question]]
-    """The state and the question of every call to `decide`, in order, whatever came of it."""
+    """The state and the question of every call to `decide`, in order, whatever came of it,
+    except a call refused for its question as `options_of` refuses it."""
 
     def __init__(
         self,
@@ -177,7 +178,8 @@ class ScriptedDecider:
     ) -> None:
         """Each of `answers` is what one call to `decide` gives, in order:
 
-        - a mapping gives a `Decision` with those probabilities, exactly as prepared;
+        - a mapping gives a `Decision` with those probabilities, each exactly as prepared,
+          in the question's order;
         - a string names an option, which is given probability 1.0 and every other 0.0;
         - an exception is raised.
 
@@ -209,8 +211,8 @@ class SmallLLMDecider:
     def decide(self, state: str, question: Question) -> Decision:
         """Ask the model once and read the probabilities from its response.
 
-        Makes exactly one request. Its `instructions` are written by the project and hold
-        nothing of `state` or of the question. Its `data` is a JSON object with exactly
+        Makes exactly one request. Its `instructions` are written by the project and are
+        the same whatever the state and the question. Its `data` is a JSON object with exactly
         three members: `state`, as given; `question`, the question's text; and `options`,
         the list `options_of(question)`. So Untrusted Content reaches the model only as
         data.
@@ -224,9 +226,9 @@ class SmallLLMDecider:
         `dollars_per_request`.
 
         Raises `DecisionFailed` when the response cannot be read so: text that is not JSON,
-        an option missing, an option that was not asked about, or a number that is negative,
-        not finite, or not a number. Nothing is asked again. `ModelFailed` from the model is
-        not caught.
+        JSON that is not such an object, an option missing, an option that was not asked
+        about, or a number that is negative, not finite, or not a number, as true and false
+        are not. Nothing is asked again. `ModelFailed` from the model is not caught.
         """
         raise NotImplementedError
 
@@ -338,7 +340,8 @@ def decision_configuration(environment: Mapping[str, str]) -> DecisionConfigurat
 
     Raises `InvalidDecisionConfiguration` for any other implementation, `stand_in`
     included; for a threshold that is not a number from 0 to 1; and when the implementation
-    is `jev` and there is no key.
+    is `jev` and there is no key. The message names the variable at fault, which for a
+    missing key is `PR_VERIFICATION_JEV_API_KEY`.
     """
     raise NotImplementedError
 
@@ -355,6 +358,10 @@ def configured_decider(
 
     `first` stands in for Laya or Jev, so that a test loads no model and reaches no
     network. When it is None, a `LayaDecider()` or a `JevDecider(configuration.jev_key)` is
-    made here, which loads nothing and reaches nothing until a decision is asked for.
+    made here, which loads nothing and reaches nothing until a decision is asked for. Under
+    `SMALL_LLM`, `first` is not asked.
+
+    No price is configured, so the decisions of a configured decider all record 0.0
+    `dollars`. A comparison of cost is made with deciders that were given their prices.
     """
     raise NotImplementedError

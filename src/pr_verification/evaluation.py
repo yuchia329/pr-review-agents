@@ -290,7 +290,8 @@ def evaluate(
     `entry_point` is `pr_verification.core.run` unless another is given: the same function
     the command-line tool calls. Every case is run once in the order given, then every case
     again, until each has run `repetitions` times. A run is `entry_point(case.pull_request,
-    model)`: nothing else of the case is passed on.
+    model)`: nothing else of the case is passed on. No decider is passed either, so to
+    evaluate with Claims classified, give an `entry_point` that has one bound to it.
 
     Each run becomes one `CaseRun`, in the `PartEvaluation` of its case's part, with
     `verdicts` taken from the report's Claims and `spend` from its `budget_spend`.
