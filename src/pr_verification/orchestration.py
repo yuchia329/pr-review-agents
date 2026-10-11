@@ -85,6 +85,17 @@ class Orchestration(Protocol):
 
 
 @dataclass(frozen=True)
+class _Ready:
+    """What a Reproduction is run with, once both commits are prepared."""
+
+    sandbox: SandboxWithHomes
+    """The Sandbox in which the dependencies of both commits are installed."""
+
+    ecosystem: ReproductionEcosystem
+    """The repository's Ecosystem."""
+
+
+@dataclass(frozen=True)
 class FixedPipeline:
     """The `Orchestration` that does the same work for every Claim, in the order given."""
 
@@ -171,7 +182,7 @@ class FixedPipeline:
 
     def _prepare(
         self, repository: Path, before: str, after: str, opened: ExitStack
-    ) -> "_Ready | str":
+    ) -> _Ready | str:
         """Steps 1 to 3 of `gather`: what a Reproduction is run with, or why none can be run.
         Every Sandbox opened on the way is left for `opened` to close."""
         found = self.discover(repository, before)
@@ -211,17 +222,6 @@ class FixedPipeline:
         if failed is not None:
             return COULD_NOT_PREPARE.format(commit="after", failure=_failure(failed))
         return _Ready(target.sandbox, found.ecosystem)
-
-
-@dataclass(frozen=True)
-class _Ready:
-    """What a Reproduction is run with, once both commits are prepared."""
-
-    sandbox: SandboxWithHomes
-    """The Sandbox in which the dependencies of both commits are installed."""
-
-    ecosystem: ReproductionEcosystem
-    """The repository's Ecosystem."""
 
 
 def _failure(failed: CommandFailed) -> str:

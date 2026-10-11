@@ -3,6 +3,7 @@
 import subprocess
 import tempfile
 import time
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -100,7 +101,9 @@ def run(
     return Report(
         before=before,
         after=after,
-        claims=tuple(_verified(text, each) for text, each in zip(claims, gathered, strict=True)),
+        claims=tuple(
+            _verified(text, answer) for text, answer in zip(claims, gathered, strict=True)
+        ),
         findings=(),
         budget_spend=BudgetSpend(seconds=time.monotonic() - started, dollars=0.0, steps=0),
     )
@@ -118,15 +121,14 @@ def _gather(
     given. Raises `ValueError` when it does not answer for each Claim."""
     if not claims:
         return ()
-    if orchestration is not None:
+    with ExitStack() as kept:
+        if orchestration is None:
+            # Nothing is kept between runs: what the pipeline remembers goes with the directory.
+            state = kept.enter_context(tempfile.TemporaryDirectory())
+            orchestration = fixed_pipeline(Path(state))
         gathered = orchestration.gather(
             claims, repository=repository, before=before, after=after, model=model
         )
-    else:
-        with tempfile.TemporaryDirectory() as state:
-            gathered = fixed_pipeline(Path(state)).gather(
-                claims, repository=repository, before=before, after=after, model=model
-            )
     if len(gathered) != len(claims):
         raise ValueError(
             f"the orchestration answered for {len(gathered)} Claims of the {len(claims)} asked"

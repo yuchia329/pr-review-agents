@@ -91,11 +91,11 @@ def compute_verdict(evidence: Sequence[Evidence]) -> Computed:
     Until the Reproduction judge is built, no step checks that a Reproduction tests what its
     Claim says (ADR 0002): every Reproduction that ran on both commits is taken as Evidence.
     """
-    ran = [read for read in map(_ran_on_both_commits, evidence) if read is not None]
-    if not ran:
+    read = [results for results in map(_ran_on_both_commits, evidence) if results is not None]
+    if not read:
         return Computed(Verdict.INCONCLUSIVE, NO_REPRODUCTION_RAN)
-    supported = any(_holds_on_one_only(after, before) for before, after in ran)
-    contradicted = any(_holds_on_one_only(before, after) for before, after in ran)
+    supported = any(_holds_on_one_only(held=after, other=before) for before, after in read)
+    contradicted = any(_holds_on_one_only(held=before, other=after) for before, after in read)
     if supported and not contradicted:
         return Computed(Verdict.CONFIRMED, CONFIRMED)
     if contradicted and not supported:
