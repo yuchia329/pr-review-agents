@@ -138,7 +138,10 @@ class Gate:
 
 
 def compute_gate(verdicts: Iterable[Verdict]) -> Gate:
-    """Block only when at least one Claim is Refuted. No model has a say here."""
+    """Block when, and only when, at least one Verdict is Refuted. No model has a say here.
+
+    With no Verdicts the Gate passes, and its note says there was nothing to verify.
+    """
     counts = Counter(verdicts)
     if not counts:
         return Gate(GateDecision.PASS, "No Claims found: nothing to verify.")
