@@ -10,7 +10,7 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 import pytest
-from conftest import FixtureRepository, UnreachableModel, asks, commit_snapshots, finishes
+from conftest import FixtureRepository, asks, commit_snapshots, finishes
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -32,6 +32,7 @@ from pr_verification.report import BudgetSpend, Claim, EvidenceSource, Report, V
 from pr_verification.reproduction import (
     ATTEMPT_CAP,
     ATTEMPT_CAP_REACHED,
+    COULD_NOT_FINISH,
     ENDINGS,
     WRITER_STEP_CAP,
     AttemptResult,
@@ -481,18 +482,78 @@ def test_cap_under_one_is_rejected_before_anything_is_asked_or_run(
     assert (model.requests, sandbox.runs) == ([], [])
 
 
-def test_sandbox_that_fails_is_not_caught(pricing: FixtureRepository) -> None:
-    class NoRuntime:
-        def run(self, command: Command, *, commit: str, phase: Phase, limits: Limits) -> RunResult:
+class ThenUnreachable:
+    """A stand-in for a model that gives its responses and then cannot be reached."""
+
+    def __init__(self, responses: list[str]) -> None:
+        self.requests = 0
+        self._responses = responses
+
+    def complete(self, request: ModelRequest) -> str:
+        self.requests += 1
+        if self.requests > len(self._responses):
+            raise ModelFailed("the model could not be reached")
+        return self._responses[self.requests - 1]
+
+
+class ThenNoRuntime:
+    """A stand-in Sandbox that does some runs as another would and then cannot do any."""
+
+    def __init__(self, sandbox: Sandbox, runs: int) -> None:
+        self.asked = 0
+        self._sandbox, self._runs = sandbox, runs
+
+    def run(self, command: Command, *, commit: str, phase: Phase, limits: Limits) -> RunResult:
+        self.asked += 1
+        if self.asked > self._runs:
             raise SandboxFailed("no container runtime")
-
-    with pytest.raises(SandboxFailed):
-        write(pricing, writes("fixed"), sandbox=NoRuntime())
+        return self._sandbox.run(command, commit=commit, phase=phase, limits=limits)
 
 
-def test_model_that_fails_is_not_caught(pricing: FixtureRepository) -> None:
-    with pytest.raises(ModelFailed):
-        write_with(UnreachableModel(), pricing)
+READS = asks("read_file", path="pricing.py")
+
+
+@pytest.mark.parametrize(
+    ("responses", "kept"),
+    [
+        ([], []),
+        ([READS], []),
+        ([writes("same")], [SHOWS_NOTHING]),
+        ([writes("same"), writes("no tests"), READS], [SHOWS_NOTHING, COULD_NOT_RUN]),
+    ],
+    ids=["at once", "during the first attempt", "after one attempt", "during the third"],
+)
+def test_model_that_fails_ends_the_work_and_the_attempts_before_it_are_kept(
+    pricing: FixtureRepository, responses: list[str], kept: list[AttemptResult]
+) -> None:
+    sandbox, model = StandInSandbox(pricing), ThenUnreachable(responses)
+
+    run = write_with(model, pricing, sandbox, attempt_cap=5)
+
+    assert [attempt.result for attempt in run.attempts] == kept
+    assert run.evidence is None
+    assert run.inconclusive == COULD_NOT_FINISH.format(failure="the model could not be reached")
+    assert model.requests == len(responses) + 1
+    assert len(sandbox.runs) == 4 * len(kept)
+
+
+@pytest.mark.parametrize(
+    ("runs", "kept"),
+    [(0, []), (1, []), (2, []), (3, []), (4, [SHOWS_NOTHING]), (6, [SHOWS_NOTHING])],
+    ids=["placing", "placing on after", "running", "running on after", "second", "running second"],
+)
+def test_sandbox_that_fails_ends_the_work_and_the_attempts_before_it_are_kept(
+    pricing: FixtureRepository, runs: int, kept: list[AttemptResult]
+) -> None:
+    sandbox = ThenNoRuntime(StandInSandbox(pricing), runs)
+
+    run, model = write(pricing, *[writes("same")] * 5, sandbox=sandbox, attempt_cap=5)
+
+    assert [attempt.result for attempt in run.attempts] == kept
+    assert run.evidence is None
+    assert run.inconclusive == COULD_NOT_FINISH.format(failure="no container runtime")
+    assert sandbox.asked == runs + 1
+    assert len(model.requests) == len(kept) + 1
 
 
 ANSWERS = st.one_of(
