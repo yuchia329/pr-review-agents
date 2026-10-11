@@ -3,7 +3,8 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from pr_verification.report import Evidence, Verdict
+from pr_verification.ecosystem import Results
+from pr_verification.report import Evidence, ReproductionEvidence, Verdict
 
 CONFIRMED = (
     "The Reproduction fails on the code before the pull request and passes on the code after it."
@@ -90,4 +91,32 @@ def compute_verdict(evidence: Sequence[Evidence]) -> Computed:
     Until the Reproduction judge is built, no step checks that a Reproduction tests what its
     Claim says (ADR 0002): every Reproduction that ran on both commits is taken as Evidence.
     """
-    raise NotImplementedError
+    ran = [read for read in map(_ran_on_both_commits, evidence) if read is not None]
+    if not ran:
+        return Computed(Verdict.INCONCLUSIVE, NO_REPRODUCTION_RAN)
+    supported = any(_holds_on_one_only(after, before) for before, after in ran)
+    contradicted = any(_holds_on_one_only(before, after) for before, after in ran)
+    if supported and not contradicted:
+        return Computed(Verdict.CONFIRMED, CONFIRMED)
+    if contradicted and not supported:
+        return Computed(Verdict.REFUTED, REFUTED)
+    return Computed(Verdict.INCONCLUSIVE, DECIDES_NOTHING)
+
+
+def _ran_on_both_commits(evidence: Evidence) -> tuple[Results, Results] | None:
+    """Which tests passed and failed before and after, when `evidence` is a Reproduction that
+    ran on both commits. None for any other Evidence."""
+    if not isinstance(evidence, ReproductionEvidence):
+        return None
+    before, after = evidence.before_results, evidence.after_results
+    if not (isinstance(before, Results) and isinstance(after, Results)):
+        return None
+    if any(read.could_not_run or not (read.passed or read.failed) for read in (before, after)):
+        return None
+    return before, after
+
+
+def _holds_on_one_only(held: Results, other: Results) -> bool:
+    """Whether what the Reproduction asserts held on one commit and not on the other: no test
+    failed on the first, and a test that passed there failed on the second."""
+    return not held.failed and bool(set(held.passed) & set(other.failed))

@@ -16,7 +16,7 @@ from pr_verification.core import InvalidPullRequest, PullRequest, run
 from pr_verification.decision import Decider
 from pr_verification.model import Model, ModelFailed
 from pr_verification.openai_compatible import model_from_environment
-from pr_verification.orchestration import Orchestration
+from pr_verification.orchestration import Orchestration, fixed_pipeline
 from pr_verification.report import Gate, GateDecision
 
 EXIT_PASS = 0
@@ -59,9 +59,9 @@ def main(
     with the code of a block.
     """
     arguments = _parser().parse_args(argv)
-    if arguments.state_dir is not None:
-        raise NotImplementedError
     try:
+        if orchestration is None and arguments.state_dir is not None:
+            orchestration = fixed_pipeline(arguments.state_dir)
         if model is None:
             model = model_from_environment(os.environ)
         if model is None:

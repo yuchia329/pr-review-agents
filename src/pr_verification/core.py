@@ -1,6 +1,7 @@
 """The core's entry point: a pull request goes in, a structured report comes out."""
 
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,11 +9,10 @@ from pathlib import Path
 from pr_verification.claims import extract_claims
 from pr_verification.decision import Decider
 from pr_verification.model import Model
-from pr_verification.orchestration import Orchestration
+from pr_verification.orchestration import Gathered, Orchestration, fixed_pipeline
 from pr_verification.report import BudgetSpend, Claim, Report, Verdict
 from pr_verification.repository import resolve_commit
-
-NOT_VERIFIED_YET = "This Claim has not been verified yet: no Evidence was gathered for it."
+from pr_verification.verdict import compute_verdict
 
 
 @dataclass(frozen=True)
@@ -90,21 +90,58 @@ def run(
     3, where there is no report to give. Raises `ValueError` when the orchestration gives
     other than one `Gathered` for each Claim, and whatever else the orchestration raises.
     """
-    if orchestration is not None:
-        raise NotImplementedError
     started = time.monotonic()
     before = _resolve_commit(pull_request.repository, "before", pull_request.before)
     after = _resolve_commit(pull_request.repository, "after", pull_request.after)
     claims = extract_claims(
         model, pull_request.title, pull_request.description, pull_request.linked_issue
     )
+    gathered = _gather(orchestration, claims, pull_request.repository, before, after, model)
     return Report(
         before=before,
         after=after,
-        claims=tuple(Claim(text, Verdict.INCONCLUSIVE, NOT_VERIFIED_YET) for text in claims),
+        claims=tuple(_verified(text, each) for text, each in zip(claims, gathered, strict=True)),
         findings=(),
         budget_spend=BudgetSpend(seconds=time.monotonic() - started, dollars=0.0, steps=0),
     )
+
+
+def _gather(
+    orchestration: Orchestration | None,
+    claims: tuple[str, ...],
+    repository: Path,
+    before: str,
+    after: str,
+    model: Model,
+) -> tuple[Gathered, ...]:
+    """What the orchestration gathered for each Claim, with the fixed pipeline when none is
+    given. Raises `ValueError` when it does not answer for each Claim."""
+    if not claims:
+        return ()
+    if orchestration is not None:
+        gathered = orchestration.gather(
+            claims, repository=repository, before=before, after=after, model=model
+        )
+    else:
+        with tempfile.TemporaryDirectory() as state:
+            gathered = fixed_pipeline(Path(state)).gather(
+                claims, repository=repository, before=before, after=after, model=model
+            )
+    if len(gathered) != len(claims):
+        raise ValueError(
+            f"the orchestration answered for {len(gathered)} Claims of the {len(claims)} asked"
+        )
+    return gathered
+
+
+def _verified(text: str, gathered: Gathered) -> Claim:
+    """One Claim of the report: its Verdict, computed from the Evidence gathered for it."""
+    computed = compute_verdict(gathered.evidence)
+    reason = computed.reason
+    # What the orchestration says can explain an Inconclusive Verdict, and can never give one.
+    if computed.verdict is Verdict.INCONCLUSIVE and gathered.inconclusive is not None:
+        reason = gathered.inconclusive
+    return Claim(text, computed.verdict, reason, gathered.evidence)
 
 
 def _resolve_commit(repository: Path, role: str, commit: str) -> str:

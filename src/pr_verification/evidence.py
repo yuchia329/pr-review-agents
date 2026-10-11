@@ -30,14 +30,15 @@ def run_on_both_commits(
     ]
     return RunEvidence(
         source=EvidenceSource.RAN_CODE,
-        observation=f"before: {_ending(results[0])}; after: {_ending(results[1])}",
+        observation=f"before: {ending(results[0])}; after: {ending(results[1])}",
         command=command,
         before=results[0],
         after=results[1],
     )
 
 
-def _ending(result: RunResult) -> str:
+def ending(result: RunResult) -> str:
+    """How a run ended, as `run_on_both_commits` writes it. It holds none of the output."""
     if result.limit_hit is not None:
         return f"stopped at the {result.limit_hit} limit"
     return f"exit status {result.exit_status}"

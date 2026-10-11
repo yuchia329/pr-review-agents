@@ -220,11 +220,13 @@ def write_reproduction(
                 continue
             placement = ecosystem.place(text)
             ran = on_both_commits(placement.write)
+            read_before: Results | Unreadable | None = None
+            read_after: Results | Unreadable | None = None
             if ran.before.exit_status == 0 and ran.after.exit_status == 0:
                 ran = on_both_commits(placement.run)
-                result = compare_runs(
-                    ecosystem.read_results(ran.before), ecosystem.read_results(ran.after)
-                )
+                read_before = ecosystem.read_results(ran.before)
+                read_after = ecosystem.read_results(ran.after)
+                result = compare_runs(read_before, read_after)
             else:
                 result = AttemptResult.COULD_NOT_RUN
             attempts.append(Attempt(run, text, ran.before, ran.after, result))
@@ -237,6 +239,8 @@ def write_reproduction(
                     after=ran.after,
                     path=placement.path,
                     reproduction=text,
+                    before_results=read_before,
+                    after_results=read_after,
                 )
                 return ReproductionRun(tuple(attempts), evidence, inconclusive=None)
     except (ModelFailed, SandboxFailed) as failure:

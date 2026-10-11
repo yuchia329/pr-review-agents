@@ -8,16 +8,26 @@ roles, which know nothing of what runs them.
 """
 
 from collections.abc import Callable
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from pr_verification.ecosystem import find_commands
+from pr_verification.ecosystem import ReproductionEcosystem, Unsupported, find_commands
+from pr_verification.evidence import ending
 from pr_verification.model import Model
-from pr_verification.repo_profile import DependencyCache, Discover, ProfileStore
+from pr_verification.repo_profile import (
+    CommandFailed,
+    DependencyCache,
+    DirectoryStore,
+    Discover,
+    ProfileStore,
+    prepare_pull_request,
+    prepare_target,
+)
 from pr_verification.report import Evidence
-from pr_verification.sandbox import ContainerSandbox, Limits, SandboxWithHomes
+from pr_verification.reproduction import write_reproduction
+from pr_verification.sandbox import ContainerSandbox, Limits, SandboxFailed, SandboxWithHomes
 
 LIMITS = Limits(seconds=600.0, memory_bytes=2 * 1024**3, processors=2.0)
 """The most one run in the Sandbox may use unless other limits are given."""
@@ -137,7 +147,86 @@ class FixedPipeline:
         system and is raised, as `write_reproduction` raises it: it is not turned into an
         Inconclusive Verdict.
         """
-        raise NotImplementedError
+        if not claims:
+            return ()
+        with ExitStack() as opened:
+            ready = self._prepare(repository, before, after, opened)
+            if isinstance(ready, str):
+                return tuple(Gathered((), ready) for _ in claims)
+            gathered = []
+            for claim in claims:
+                written = write_reproduction(
+                    claim,
+                    model=model,
+                    sandbox=ready.sandbox,
+                    ecosystem=ready.ecosystem,
+                    repository=repository,
+                    before=before,
+                    after=after,
+                    limits=self.limits,
+                )
+                evidence = () if written.evidence is None else (written.evidence,)
+                gathered.append(Gathered(evidence, written.inconclusive))
+            return tuple(gathered)
+
+    def _prepare(
+        self, repository: Path, before: str, after: str, opened: ExitStack
+    ) -> "_Ready | str":
+        """Steps 1 to 3 of `gather`: what a Reproduction is run with, or why none can be run.
+        Every Sandbox opened on the way is left for `opened` to close."""
+        found = self.discover(repository, before)
+        if isinstance(found, Unsupported):
+            return found.reason
+        if not isinstance(found.ecosystem, ReproductionEcosystem):
+            return NO_REPRODUCTION_ECOSYSTEM
+        try:
+            target = prepare_target(
+                repository,
+                before,
+                store=self.store,
+                cache=self.cache,
+                sandbox_for=lambda image: opened.enter_context(
+                    self.open_sandbox(repository, image)
+                ),
+                limits=self.limits,
+                discover=self.discover,
+            )
+        except SandboxFailed as failure:
+            return COULD_NOT_PREPARE.format(commit="before", failure=failure)
+        if isinstance(target, Unsupported):
+            return target.reason
+        if isinstance(target, CommandFailed):
+            return COULD_NOT_PREPARE.format(commit="before", failure=_failure(target))
+        try:
+            failed = prepare_pull_request(
+                repository,
+                after,
+                profile=target.profile,
+                sandbox=target.sandbox,
+                cache=self.cache,
+                limits=self.limits,
+            )
+        except SandboxFailed as failure:
+            return COULD_NOT_PREPARE.format(commit="after", failure=failure)
+        if failed is not None:
+            return COULD_NOT_PREPARE.format(commit="after", failure=_failure(failed))
+        return _Ready(target.sandbox, found.ecosystem)
+
+
+@dataclass(frozen=True)
+class _Ready:
+    """What a Reproduction is run with, once both commits are prepared."""
+
+    sandbox: SandboxWithHomes
+    """The Sandbox in which the dependencies of both commits are installed."""
+
+    ecosystem: ReproductionEcosystem
+    """The repository's Ecosystem."""
+
+
+def _failure(failed: CommandFailed) -> str:
+    """The `failure` of `COULD_NOT_PREPARE` for a command that did not work."""
+    return f"the command {' '.join(failed.command)} ended with {ending(failed.run)}"
 
 
 def fixed_pipeline(state: Path) -> FixedPipeline:
@@ -147,4 +236,6 @@ def fixed_pipeline(state: Path) -> FixedPipeline:
     `state / "profiles"` and installed dependencies by a `DependencyCache` on
     `state / "dependencies"`. Everything else is as `FixedPipeline` has it unless given.
     """
-    raise NotImplementedError
+    return FixedPipeline(
+        store=DirectoryStore(state / "profiles"), cache=DependencyCache(state / "dependencies")
+    )
