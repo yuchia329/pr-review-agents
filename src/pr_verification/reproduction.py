@@ -3,10 +3,11 @@ commits, and revises it up to a cap on attempts.
 
 A model writes the Reproduction. Code places it, runs it, reads the results, and decides
 whether another attempt is needed (ADR 0002). Whether a Claim is Confirmed or Refuted is not
-decided here: the writer gives Evidence, or the reason there is none.
+decided here: the writer gives Evidence, or the reason there is none. Nor is it decided here
+whether the Reproduction tests what its Claim says: that is the Reproduction judge's.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -113,6 +114,17 @@ class Attempt:
 
 
 @dataclass(frozen=True)
+class Rejected:
+    """A Reproduction the Reproduction judge did not accept, as the writer is shown it."""
+
+    reproduction: str
+    """The text of the Reproduction."""
+
+    reason: str
+    """Why the judge rejected it. It is a model's word, and Untrusted Content."""
+
+
+@dataclass(frozen=True)
 class ReproductionRun:
     """The run record of the Reproduction writer for one Behavioural Claim."""
 
@@ -122,7 +134,8 @@ class ReproductionRun:
 
     evidence: ReproductionEvidence | None
     """The Reproduction of the last attempt and its runs on both commits, when that attempt
-    shows a difference. None when the work ended any other way."""
+    shows a difference. None when the work ended any other way. It is never an
+    `AcceptedReproduction`: nothing is judged here, so on its own it decides no Claim."""
 
     inconclusive: str | None
     """Why the Claim is Inconclusive, when the work ended without `evidence`. None when
@@ -263,6 +276,44 @@ def write_reproduction(
     ending = ENDINGS[attempts[-1].result]
     reason = ATTEMPT_CAP_REACHED.format(attempts=len(attempts), ending=ending)
     return ReproductionRun(tuple(attempts), evidence=None, inconclusive=reason)
+
+
+def rewrite_reproduction(
+    claim: str,
+    rejected: Sequence[Rejected],
+    *,
+    model: Model,
+    sandbox: Sandbox,
+    ecosystem: ReproductionEcosystem,
+    repository: Path,
+    before: str,
+    after: str,
+    limits: Limits,
+    attempt_cap: int = ATTEMPT_CAP,
+    step_cap: int = WRITER_STEP_CAP,
+    progress_guard: Decider | None = None,
+) -> ReproductionRun:
+    """Write another Reproduction for `claim`, after the Reproduction judge rejected those in
+    `rejected`.
+
+    Does what `write_reproduction` does with the same arguments, and returns what it returns,
+    with one difference: the role is shown what the judge rejected. `progress_guard` is given
+    by name here, and is the same thing. Its task is
+    `{"claim": claim, "attempts": [...], "rejected": [...]}`, where `rejected` has one object
+    for each of `rejected`, in order, whose only members are `reproduction` and `reason`,
+    and so is an empty list when `rejected` is empty. It is the same on every attempt of the
+    call. `claim` and `attempts` are as
+    `write_reproduction` has them, so the attempts are those of this call alone: none carries
+    over from the call that wrote a rejected Reproduction.
+
+    So the role's context holds its Claim, each Reproduction the judge rejected for it and
+    the reason, what the earlier attempts of this call did, and what it reads. A reason is a
+    model's word and reaches the role only there, as data. The role is asked for a
+    Reproduction that mends what the last reason says.
+
+    Nothing is judged here either: `evidence` is never an `AcceptedReproduction`.
+    """
+    raise NotImplementedError
 
 
 def _instructions(form: str) -> str:

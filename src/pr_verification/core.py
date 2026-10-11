@@ -60,7 +60,7 @@ def run(
        extracted, the repository, the two full commit IDs, and `model`: through `gather`, or
        through `gather_within` as The Budget says below. With no Claims it is not asked.
     5. Computes each Claim's Verdict with `compute_verdict`, from the Evidence gathered for
-       that Claim and nothing else.
+       that Claim and its kind, and nothing else.
     6. With `review` true, reviews the pull request, as described below.
 
     Classifying
@@ -78,8 +78,22 @@ def run(
         that passes on an input beyond a size limit, as a configured decider is: an
         `InputTooLong` is not caught either, and is a fault in the caller.
 
-        Whatever its kind, every Claim is verified as a Behavioural Claim until the
-        verification of Structural Claims is built: the kind changes nothing in steps 4 and 5.
+    Routing
+        A Claim's kind settles how Evidence is gathered for it and which Evidence can decide
+        it. A Behavioural Claim goes on to a Reproduction. A Structural Claim is verified by
+        reading, and is not sent to a Sandbox. A Claim with no kind is verified as a
+        Behavioural Claim.
+
+        An orchestration that is a `BudgetedOrchestration`, as the fixed pipeline is, is told
+        the kinds: `gather_within` is given, as `kinds`, the kind of each Claim in the order
+        extracted, with None for a Claim that has none. It routes as its `gather_within`
+        says. Any other orchestration is asked through `gather`, which is told no kinds.
+
+        In step 5 the Verdict of a Structural Claim is
+        `compute_verdict(evidence, ClaimKind.STRUCTURAL)`, and that of every other Claim is
+        `compute_verdict(evidence, ClaimKind.BEHAVIOURAL)`. So whatever an orchestration
+        gathers, a Structural Claim is decided only by what a search of the code found, and
+        a Behavioural Claim only by a Reproduction that the Reproduction judge accepted.
 
     The report holds one Claim for each Claim extracted, in that order, so every Claim
     receives a Verdict. Each has its text, the Verdict computed, and all the Evidence gathered
@@ -87,11 +101,14 @@ def run(
     when the Verdict is Inconclusive and the orchestration gave an `inconclusive` for the
     Claim, the reason is that. So the report of a Claim with a Reproduction shows the
     Reproduction and its output on the code before and after the pull request, as
-    `ReproductionEvidence` is printed.
+    `ReproductionEvidence` is printed, and the report of a Structural Claim shows each text
+    searched for and the lines that hold it, as `SearchEvidence` is printed.
 
-    Neither the model nor the orchestration can give a Verdict. Whatever a model says, and
-    whatever `inconclusive` holds, a Claim for which no Reproduction ran on both commits is
-    Inconclusive. The report's Gate is computed from the Verdicts alone, by `compute_gate`.
+    Neither a model nor the orchestration can give a Verdict. Whatever a model says, and
+    whatever `inconclusive` holds, a Behavioural Claim is Inconclusive unless a Reproduction
+    that the Reproduction judge accepted ran on both commits, and a Structural Claim is
+    Inconclusive unless the code was searched. The report's Gate is computed from the Verdicts
+    alone, by `compute_gate`.
 
     The Budget
         `budget` is the Budget for the call, and `Budget()`, with its provisional defaults,
@@ -110,9 +127,10 @@ def run(
           and each Claim not yet classified is in the report as a plain `Claim`, with no
           `kind`: the one case in which a Claim goes unclassified though a decider was given.
         - An orchestration that is a `BudgetedOrchestration`, as the fixed pipeline is, is
-          asked in step 4 through `gather_within`, called once, with the ledger and then what
-          `gather` is given. Its `gather` is not called. It records what it spends, sets aside
-          the share of each Claim, and stops as `gather_within` says.
+          asked in step 4 through `gather_within`, called once, with the ledger, then what
+          `gather` is given, and `kinds` as Routing says above. Its `gather` is not called. It
+          records what it spends, sets aside the share of each Claim, and stops as
+          `gather_within` says.
         - Any other orchestration is asked through `gather`, with `model` itself. Nothing it
           spends is recorded and no limit stops it, so the Budget holds only for an
           orchestration that keeps to one. The fixed pipeline does; a stand-in in a test

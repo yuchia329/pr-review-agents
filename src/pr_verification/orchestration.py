@@ -5,6 +5,9 @@ nothing: each Verdict is computed from what it gathered by `compute_verdict`, an
 the Verdicts, by the core's entry point (ADR 0003). The fixed pipeline is the first
 implementation and is kept as a baseline. Another can take its place without any change to the
 roles, which know nothing of what runs them.
+
+An orchestration that is told the kind of each Claim routes by it: a Behavioural Claim goes on
+to a Reproduction, and a Structural Claim is verified by reading and is not sent to a Sandbox.
 """
 
 from collections.abc import Callable
@@ -17,6 +20,7 @@ from pr_verification.budget import Ledger
 from pr_verification.decision import Decider
 from pr_verification.ecosystem import ReproductionEcosystem, Unsupported, find_commands
 from pr_verification.evidence import ending
+from pr_verification.judge import ROUND_CAP
 from pr_verification.model import Model
 from pr_verification.repo_profile import (
     CommandFailed,
@@ -28,7 +32,7 @@ from pr_verification.repo_profile import (
     prepare_pull_request,
     prepare_target,
 )
-from pr_verification.report import Evidence
+from pr_verification.report import ClaimKind, Evidence
 from pr_verification.reproduction import write_reproduction
 from pr_verification.sandbox import ContainerSandbox, Limits, SandboxFailed, SandboxWithHomes
 
@@ -79,7 +83,8 @@ class Orchestration(Protocol):
 
         `before` and `after` are the full IDs of the commits before and after the pull request,
         in `repository`. Returns one `Gathered` for each Claim, in the order of `claims`, so
-        every Claim is answered for. No Verdict is given here.
+        every Claim is answered for. No Verdict is given here. It is told no kinds, so each of
+        `claims` is verified as a Behavioural Claim.
 
         An implementation says what it raises. `ModelFailed` is never raised for the work on a
         Claim: a Claim the model failed on is answered for with no Evidence.
@@ -104,13 +109,19 @@ class BudgetedOrchestration(Orchestration, Protocol):
         before: str,
         after: str,
         model: Model,
+        kinds: tuple[ClaimKind | None, ...] | None = None,
     ) -> tuple[Gathered, ...]:
         """Gather Evidence for each of `claims`, as `gather` does, spending only what `ledger`
-        allows.
+        allows, and in the way the kind of each calls for.
 
         Everything else is as `gather` has it: one `Gathered` for each Claim, in the order of
         `claims`, and no Verdict. In `ledger`, a Claim is named by its place in `claims`,
         counted from 0. It is called with at least one Claim.
+
+        `kinds`, when given, holds the kind of each Claim, in the order of `claims`, with None
+        for a Claim that was not classified. A Claim it names Structural is verified by
+        reading, and nothing is run in a Sandbox for it. Every other Claim goes on to a
+        Reproduction, as every Claim does when `kinds` is None. An implementation says how.
 
         - Every request to a model is made through `ledger.model`, and everything done in a
           Sandbox through `ledger.sandbox`: for the Claim the work is for, and for no Claim
@@ -166,10 +177,15 @@ class FixedPipeline:
     """Answers the progress guard of every role the pipeline runs. With None, no role has
     one."""
 
+    round_cap: int = ROUND_CAP
+    """The most rounds between the Reproduction writer and the Reproduction judge for one
+    Claim."""
+
     def gather(
         self, claims: tuple[str, ...], *, repository: Path, before: str, after: str, model: Model
     ) -> tuple[Gathered, ...]:
-        """Write and run a Reproduction for each Claim, one Claim after another.
+        """Write and run a Reproduction for each Claim and have it judged, one Claim after
+        another.
 
         With no Claims, nothing is discovered, no Sandbox is opened, and the answer is empty.
         Otherwise the steps are these, in this order.
@@ -184,12 +200,11 @@ class FixedPipeline:
            `sandbox_for` opens each Sandbox with `open_sandbox(repository, image)`.
         3. Prepares the code after it, with `prepare_pull_request(repository, after, ...)` in
            the Sandbox and with the Repo Profile that step 2 gave.
-        4. For each Claim in turn, calls `write_reproduction` with the Claim, the pipeline's
-           `progress_guard`, `model`, that Sandbox, the Ecosystem, `repository`, `before`,
-           `after`, and `limits`, and with the caps `write_reproduction` has unless given
-           others. The Claim is given the `ReproductionRun`'s `evidence` as its one piece of
-           Evidence when there is one, and otherwise no Evidence and the `ReproductionRun`'s
-           `inconclusive`.
+        4. For each Claim in turn, calls `write_judged_reproduction` with the Claim, `model`,
+           that Sandbox, the Ecosystem, `repository`, `before`, `after`, and `limits`, and
+           with the pipeline's `round_cap` and `progress_guard`. The Claim is given the
+           `JudgedRun`'s `evidence` as its one piece of Evidence when there is one, and
+           otherwise no Evidence and the `JudgedRun`'s `inconclusive`.
 
         When step 2 or step 3 answers `CommandFailed` or raises `SandboxFailed`, no
         Reproduction is written, no request is made to the model, and every Claim is given no
@@ -197,19 +212,21 @@ class FixedPipeline:
         one from step 1.
 
         A failure while working on one Claim does not stop work on the others. When the
-        model or the Sandbox fails during a Claim's work, `write_reproduction` answers with
-        the reason and no Evidence, and the next Claim is worked on as if nothing had
+        model or the Sandbox fails during a Claim's work, `write_judged_reproduction` answers
+        with the reason and no Evidence, and the next Claim is worked on as if nothing had
         happened: every Claim is worked on, whatever came of those before it. Each Claim's
-        work is its own call, so nothing of one Claim reaches the role working on another.
+        work is its own call, so nothing of one Claim reaches a role working on another.
 
-        A model's word is never Evidence here. The only Evidence a Claim is given is what
-        `write_reproduction` recorded from runs in the Sandbox.
+        A model's word is never Evidence here. The only Evidence a Claim is given is a
+        Reproduction the judge accepted, as `write_judged_reproduction` recorded it from runs
+        in the Sandbox. A Reproduction the judge did not accept is not among a Claim's
+        Evidence, whatever its runs showed.
 
         Every Sandbox opened is closed before the answer is given or an exception goes on.
 
         Raises `ValueError` as `prepare_target` does. Any other exception is a fault in the
-        system and is raised, as `write_reproduction` raises it: it is not turned into an
-        Inconclusive Verdict.
+        system and is raised, as `write_judged_reproduction` raises it: it is not turned into
+        an Inconclusive Verdict.
         """
         if self.progress_guard is not None:
             raise NotImplementedError
@@ -244,24 +261,49 @@ class FixedPipeline:
         before: str,
         after: str,
         model: Model,
+        kinds: tuple[ClaimKind | None, ...] | None = None,
     ) -> tuple[Gathered, ...]:
-        """Write and run a Reproduction for each Claim, as `gather` does, within the Budget.
+        """Gather Evidence for each Claim in the way its kind calls for, within the Budget.
 
         The steps are those of `gather`, and each Claim is given what `gather` would give it,
         except as said here. With no Claims nothing is done and `ledger` is not used.
+
+        Routing
+            A Claim that `kinds` names Structural is verified by reading. In its turn in
+            step 4, `verify_structural_claim` is called for it in place of
+            `write_judged_reproduction`, with the Claim, `repository`, `before`, `after`, the
+            model, the pipeline's `progress_guard`, and the step cap it has unless given
+            another. The Claim is given the `StructuralRun`'s `evidence` and its
+            `inconclusive`. No Sandbox is used for it, and no Reproduction is written.
+
+            Every other Claim goes on to a Reproduction, as step 4 of `gather` says: a Claim
+            `kinds` names Behavioural, one it has None for, and every Claim when `kinds` is
+            None. The Claims are worked on in the order of `claims`, of whichever kind.
+
+            Steps 1 to 3 are for the Claims that go on to a Reproduction. When every Claim is
+            Structural they are not taken: nothing is discovered and no Sandbox is opened.
+            When one of them ends with `Unsupported`, `CommandFailed`, or `SandboxFailed`,
+            what `gather` gives every Claim for that is given to each Claim that goes on to a
+            Reproduction, and each Structural Claim is still verified.
+
+            Raises `ValueError`, before anything else is done, when `kinds` is given and
+            holds other than one kind for each Claim.
 
         What is recorded
             - Steps 1 to 3 are for no one Claim. Each Sandbox opened is used through
               `ledger.sandbox(sandbox)`, so the time taken to install dependencies is recorded
               against the pull request alone.
             - When step 3 has been taken, the shares are set aside with
-              `ledger.share_out(len(claims))`: preparing comes out of no Claim's share.
+              `ledger.share_out(len(claims))`: preparing comes out of no Claim's share. They
+              are for every Claim, of whichever kind, and are set aside before the first Claim
+              is worked on also when steps 1 to 3 were not taken or did not work and a
+              Structural Claim is still to be verified.
             - In step 4, the Claim at place `index` in `claims` is worked on with
               `ledger.model(model, claim=index)` in place of `model` and
               `ledger.sandbox(sandbox, claim=index)` in place of the Sandbox, where `sandbox`
               is the Sandbox as it was opened, so that no run is timed twice. So every request
-              its `write_reproduction` makes is one step against that Claim, and every run is
-              timed against it.
+              made for the Claim, by the writer, the judge, or the Structural verifier, is one
+              step against that Claim, and every run is timed against it.
 
         When a Claim's share is spent
             A `BudgetSpent` for a Claim's share ends the work on that Claim: it is given no
@@ -285,9 +327,8 @@ class FixedPipeline:
             `CommandFailed`, or `SandboxFailed`, is answered for as `gather` says, whatever
             had been spent by then.
 
-        Evidence already gathered is never thrown away. A Claim whose `write_reproduction` gave
-        Evidence is given it, though the run that showed the difference was the one that
-        reached a limit.
+        Evidence already gathered is never thrown away. A Claim whose work gave Evidence is
+        given it, though the last piece of that work was the one that reached a limit.
 
         Every Sandbox opened is closed before the answer is given or an exception goes on.
         Raises what `gather` raises. `BudgetSpent` is never raised from here.

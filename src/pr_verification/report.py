@@ -81,6 +81,19 @@ class ReproductionEvidence(RunEvidence):
 
 
 @dataclass(frozen=True)
+class AcceptedReproduction(ReproductionEvidence):
+    """Evidence obtained by running a Reproduction that the Reproduction judge accepted as a
+    test of what its Claim says.
+
+    A `ReproductionEvidence` with nothing added to it: what it says is in its type. A
+    Reproduction the judge rejected, or was never asked about, is a `ReproductionEvidence`
+    that is not one of these, and decides no Claim (see `compute_verdict`). No part of the
+    system but `write_judged_reproduction` makes one. In the printed report it appears as a
+    `ReproductionEvidence` does.
+    """
+
+
+@dataclass(frozen=True)
 class ReadEvidence(Evidence):
     """Evidence obtained by reading some lines of one file of a commit.
 
@@ -97,6 +110,45 @@ class ReadEvidence(Evidence):
     """The last line read."""
     excerpt: str
     """Those lines, as the commit holds them. Untrusted Content."""
+
+
+class TextChange(StrEnum):
+    """What a Structural Claim says a pull request does to one text of the code."""
+
+    ADDED = "added"
+    """The pull request adds the text: the code holds it after the pull request and did not
+    before."""
+
+    REMOVED = "removed"
+    """The pull request removes the text: the code held it before the pull request and does
+    not after."""
+
+
+@dataclass(frozen=True)
+class SearchEvidence(Evidence):
+    """Evidence obtained by searching the code of both commits for one text.
+
+    `source` is always `EvidenceSource.READ_CODE`. In the printed report it appears among a
+    Claim's `evidence` with `source`, `observation`, `text`, `change`, `path`, `before_lines`,
+    and `after_lines`, so that every line a Verdict rests on can be read there.
+    """
+
+    text: str
+    """The text searched for, exactly as written. The Structural verifier chose it from what
+    it read, so it is Untrusted Content."""
+    change: TextChange
+    """What the Structural verifier took the Claim to say the pull request does to the text.
+    It is a model's word about the Claim. What the code holds is not: that is in
+    `before_lines` and `after_lines`, which code found."""
+    path: str | None
+    """The one file searched, by its path from the root of the repository, or None when
+    every file was searched."""
+    before_lines: tuple[str, ...]
+    """Every line that holds the text in the code before the pull request, `Report.before`,
+    each as `<path>:<line number>:<line>`, by path and then by line number. Untrusted
+    Content."""
+    after_lines: tuple[str, ...]
+    """The same, in the code after the pull request, `Report.after`."""
 
 
 @dataclass(frozen=True)
