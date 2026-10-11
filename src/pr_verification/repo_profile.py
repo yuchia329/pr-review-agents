@@ -24,7 +24,8 @@ Discover = Callable[[Path, str], Commands | Unsupported]
 
 SandboxFor = Callable[[str], SandboxWithHomes]
 """Opens a Sandbox for the repository's commits that runs in the image named. Each call gives a
-new Sandbox, in which no run has been made. Closing them is the caller's to do."""
+new Sandbox, in which no run has been made. Closing every Sandbox it opened is the caller's to
+do, whichever of them an answer names."""
 
 
 @dataclass(frozen=True)
@@ -133,26 +134,28 @@ class DependencyCache:
     """Installed dependencies kept between runs in a directory, keyed by the lock file.
 
     What is kept is the home directory that a commit's install commands left, as
-    `SandboxWithHomes.save_home` writes it: one archive for each repository and each digest of
-    its lock file. The cache only says where an archive belongs. `prepare_target` is the one
-    place that writes one, and only from the target branch.
+    `SandboxWithHomes.save_home` writes it: one archive for each repository, each image, and
+    each digest of the lock file. The cache only says where an archive belongs.
+    `prepare_target` is the one place that writes one, and only from the target branch.
     """
 
     def __init__(self, directory: Path) -> None:
         """A cache that keeps its archives under `directory`, which need not exist yet."""
         raise NotImplementedError
 
-    def archive(self, repository: Path, lock_digest: str) -> Path:
-        """Where the archive for `repository` and one digest of its lock file belongs.
+    def archive(self, repository: Path, image: str, lock_digest: str) -> Path:
+        """Where the archive for `repository`, run in `image`, with one digest of its lock file
+        belongs.
 
         The path of a file under `directory`, in a directory that exists once this returns.
         The file itself exists only when installed dependencies have been saved there.
 
-        The same repository and the same digest always give the same path, from this cache or
+        The same repository, image, and digest always give the same path, from this cache or
         from another on the same directory. A different repository, told apart as
-        `DirectoryStore` tells them, or a different digest gives the path of a different file,
-        so the dependencies installed for one lock file are never used for another.
-        `lock_digest` may be any text.
+        `DirectoryStore` tells them, a different image, or a different digest gives the path
+        of a different file, so the dependencies installed for one lock file are never used
+        for another, nor those installed in one image in another. `image` and `lock_digest`
+        may each be any text.
 
         Raises `ValueError` when `directory` is the directory of `repository` or lies inside
         it, both resolved: a pull request could put a file there.
@@ -205,7 +208,7 @@ def prepare_target(
 
     Below, the digest is `digest_lock_files(repository, target, lock_files)`, with the
     `lock_files` of the profile or the `Commands` at hand, and the archive is
-    `cache.archive(repository, digest)`.
+    `cache.archive(repository, image, digest)`, with their `image`.
 
     With a stored profile that still holds
         `store.load(repository)` is asked first. A profile whose `lock_digest` is the digest
@@ -217,11 +220,16 @@ def prepare_target(
         did not exist, and the answer is `Prepared` with that profile, that Sandbox, and
         `learned` False. Nothing is saved to the store.
 
+        When `restore_home` raises `SandboxFailed`, the archive is deleted before the error
+        goes on, so that the next run installs from nothing and does not meet the same
+        archive again.
+
     Discarding
         A stored profile is discarded with `store.discard(repository)`, and the profile is
         learned again, when:
 
-        - its `lock_digest` is not the digest, in which case none of its commands is run; or
+        - its `lock_digest` is not the digest, in which case no Sandbox is opened for it and
+          none of its commands is run; or
         - one of its install commands does not exit with status 0, which includes being
           stopped at a limit, in which case those after it are not run.
 
@@ -270,11 +278,12 @@ def prepare_pull_request(
     pull request content, nothing here is kept: no profile is saved or discarded, and
     `save_home` is never called.
 
-    The archive is `cache.archive(repository, digest_lock_files(repository, commit,
-    profile.lock_files))`. When it exists, it is put back with `restore_home(commit, archive)`
-    first, so installed dependencies are used again only for a commit whose lock file has the
-    very contents they were installed from. Then each of `profile.install` is run against
-    `commit` in `Phase.INSTALL` with `limits`, in order.
+    The archive is `cache.archive(repository, profile.image, digest_lock_files(repository,
+    commit, profile.lock_files))`. When it exists, it is put back with
+    `restore_home(commit, archive)` first, so installed dependencies are used again only in
+    the image they were installed in, and only for a commit that gets the digest of the commit
+    they were installed for. Then each of `profile.install` is run against `commit` in
+    `Phase.INSTALL` with `limits`, in order.
 
     Returns None when each exited with status 0. Otherwise returns `CommandFailed` with the
     first that did not, which includes being stopped at a limit, and those after it are not

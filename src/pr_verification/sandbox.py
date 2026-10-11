@@ -2,6 +2,8 @@
 
 The Sandbox is used in one way: ask it to run a command against a commit and get back the output
 and the exit status. The process that holds the model's API key stays outside it (ADR 0001).
+`SandboxWithHomes` adds the one other thing that crosses the boundary: a commit's home
+directory, carried out and back as a file that the outside never opens.
 """
 
 import io
@@ -87,8 +89,8 @@ class SandboxFailed(Exception):
 class Sandbox(Protocol):
     """The isolated environment in which pull request code and Reproductions are run.
 
-    `run` is the only way to use it. A local container is the first implementation, and the
-    boundary is this narrow so that a remote Sandbox could take its place.
+    `run` is the only way to run anything in it. A local container is the first implementation,
+    and the boundary is this narrow so that a remote Sandbox could take its place.
     """
 
     def run(self, command: Command, *, commit: str, phase: Phase, limits: Limits) -> RunResult:
@@ -110,8 +112,9 @@ class Sandbox(Protocol):
             No environment variable of the process that started the Sandbox is passed in: a
             variable set outside is absent inside, or holds the value the image gives it. No
             file of the machine that started the Sandbox is visible inside except the files of
-            `commit`: not the starting user's home directory, not credentials, not the
-            container runtime's socket.
+            `commit`, and a home directory that `SandboxWithHomes.restore_home` put back: not
+            the starting user's home directory, not credentials, not the container runtime's
+            socket.
             The command runs as a user that is not root (its user ID is not 0), holds no
             capabilities, and cannot gain privileges: a set-user-ID program does not raise them.
             In `Phase.INSTALL` the network is reachable. In `Phase.TEST` it is not.

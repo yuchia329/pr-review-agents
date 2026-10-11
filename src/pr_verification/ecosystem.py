@@ -45,13 +45,15 @@ class Commands:
 
     lock_files: tuple[str, ...] = ()
     """The dependency lock file of the repository, as the files that make it up: the paths from
-    the root of the repository of every file the Ecosystem reads to decide `image`, `install`,
-    and what the install commands install, sorted, each once. A path is named whether or not
-    the commit holds a file there, so that a file added later counts as a change. Two commits
-    that agree on every path, each holding the same contents there or each holding no file,
-    get the same `image` and the same `install`. A repository that pins nothing still has
-    them: they are then the files that declare its dependencies. Empty when the Ecosystem
-    names none."""
+    the root of the repository of every file the Ecosystem reads to decide `image` and
+    `install`, sorted, each once. A path is named whether or not the commit holds a file
+    there, so that a file added later counts as a change. Two commits that agree on every
+    path, each holding the same contents there or each holding no file, get the same `image`
+    and the same `install`. These files are what the system takes the lock file to be: what
+    the install commands go on to read for themselves, such as a file that one of these
+    includes, is not among them. A repository that pins nothing still has them: they are
+    then the files that declare its dependencies. Empty when the Ecosystem names none, and
+    the lock file is then never seen to change."""
 
 
 @dataclass(frozen=True)
