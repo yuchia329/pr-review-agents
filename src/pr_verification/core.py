@@ -151,12 +151,16 @@ def run(
         report has the same Claims, with the same Verdicts, reasons, and Evidence, and the
         same Gate, whatever its Findings are and whether or not there was a Review. That
         holds for a detection by the injection detector as for any Finding: it is an extra
-        signal and changes nothing else (ADR 0002). A Review that could not be finished
-        costs a Finding that says so, and never the report.
+        signal and changes nothing else (ADR 0002). A Review in which the model or the
+        decision layer failed costs a Finding that says so, and never the report: a
+        `ModelFailed` is not raised from step 6.
 
         No Claim is made from the diff. The Review reads the diff and the Claim extractor
         never does: `claims` holds the Claims extracted in step 2 and no other, whatever the
         Review finds. A change that no Claim covers is a Finding.
+
+        Nothing a Review spends is recorded in the ledger, and no limit of the Budget stops
+        it: until it is given a share, a Review is bounded by its own caps alone.
 
     With `orchestration` None, the fixed pipeline is used and nothing is kept between runs: it
     is `fixed_pipeline` on a temporary directory, which is removed before the report is
@@ -168,6 +172,8 @@ def run(
     3, where there is no report to give. Raises `ValueError` when the orchestration gives
     other than one `Gathered` for each Claim, and whatever else the orchestration raises.
     Raises `ValueError` as `Ledger` does for `budget`, before step 1.
+    Raises `ValueError` when `review` is true and there is no `decider`, and whatever
+    `review_pull_request` raises: a fault in the system, and never a failing model.
     """
     if budget is not None or clock is not time.monotonic or review:
         raise NotImplementedError

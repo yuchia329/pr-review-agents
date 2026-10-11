@@ -160,8 +160,8 @@ class PullRequestPart(StrEnum):
     SANDBOX_OUTPUT = "sandbox_output"
     """What was printed when code was run in the Sandbox for the pull request."""
 
-    PULL_REQUEST = "pull_request"
-    """The pull request as a whole."""
+    WHOLE = "whole"
+    """The pull request as a whole, and no one part of it."""
 
 
 @dataclass(frozen=True)

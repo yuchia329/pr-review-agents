@@ -43,9 +43,14 @@ INJECTION = YesOrNo(
 )
 """The question the injection detector asks of each piece of text."""
 
-SUSPECTED_INJECTION = "Text here reads as instructions aimed at an automated tool."
+DECISION_CAP = 200
+"""The most decisions the injection detector asks for in one Review, so that the size of a pull
+request cannot make a Review unbounded. A starting value: nothing may rely on the number
+itself."""
+
+READS_AS_INSTRUCTIONS = "Text here reads as instructions aimed at an automated tool."
 """The concern of every Finding the injection detector makes. It is written by code and holds
-none of the text, so a report never repeats a suspected instruction."""
+none of the text, so the Finding does not itself repeat a suspected instruction."""
 
 NOTHING_DECLARED = (
     "The pull request makes no Claims, so no Claim covers any of its changes. "
@@ -54,13 +59,19 @@ NOTHING_DECLARED = (
 """The concern of the one Undeclared Change reported for a pull request that makes no Claims.
 `files` is the number of files it changes."""
 
-COULD_NOT_FINISH = "The Review could not be finished, so it may have missed something: {failure}"
+REVIEW_UNFINISHED = "The Review could not be finished, so it may have missed something: {failure}"
 """The concern of a Finding of kind `UNFINISHED_REVIEW`. `failure` is what the `ModelFailed`
-raised said, or `STEP_CAP_REACHED` filled in."""
+raised said, or `DECISION_CAP_REACHED` or `STEP_CAP_REACHED` filled in."""
+
+DECISION_CAP_REACHED = (
+    "the injection detector may ask for {decisions} decisions, and the text left needs more"
+)
+"""The `failure` of `REVIEW_UNFINISHED` when the injection detector stopped at its cap on
+decisions. `decisions` is that cap."""
 
 STEP_CAP_REACHED = "the Reviewer took {steps} steps without finishing"
-"""The `failure` of `COULD_NOT_FINISH` when the Reviewer's run stopped at its step cap. `steps`
-is that cap."""
+"""The `failure` of `REVIEW_UNFINISHED` when the Reviewer's run stopped at its step cap.
+`steps` is that cap."""
 
 NOT_CHANGED = "The pull request does not change a file at that path."
 """What `read_change` answers for a path that is not a file the pull request changes."""
@@ -138,6 +149,7 @@ def review_pull_request(
     model: Model,
     decider: Decider,
     step_cap: int = REVIEWER_STEP_CAP,
+    decision_cap: int = DECISION_CAP,
 ) -> Reviewed:
     """Review one pull request and report Findings about it.
 
@@ -154,21 +166,28 @@ def review_pull_request(
     The Review has two parts, done in this order.
 
     1. The injection detector
-        `detect_injection(decider, text)` is asked about each text below, in this order. Each
-        that is a detection gives one Finding of kind `SUSPECTED_INJECTION`, whose concern is
-        `SUSPECTED_INJECTION` and whose `part` is the one named.
+        `detect_injection(decider, text)` is asked about the texts below, in this order. Each
+        of the five parts gives at most one Finding, of kind `SUSPECTED_INJECTION`, whose
+        concern is `READS_AS_INSTRUCTIONS` and whose `part` is the one named. So the detector
+        makes five Findings at most, however much of a pull request reads as instructions.
 
         - `title`: part `TITLE`.
         - `description`: part `DESCRIPTION`.
         - `linked_issue`: part `LINKED_ISSUE`.
-        - For each file the pull request changes: the lines it adds to that file, as git's
-          difference between the two commits marks them, with a line feed between one and
-          the next. Part `FILE`, with the file's `path`. Every line added is checked, the
-          comments in the diff among them: which lines are comments is not worked out. A
-          file to which no line is added asks for no decision.
+        - For each file the pull request changes: the lines it adds to that file, which are
+          the lines git's difference between the two commits marks as added, each without
+          the mark and with a line feed between one and the next. They are read as text as
+          `reading_tools` reads a file. Every line added is asked about, the comments in the
+          diff among them: which lines are comments is not worked out. A file to which no
+          line is added asks for no decision. Part `FILE`, with the `path` of the first
+          file that is a detection: after it no other file is asked about.
         - For each `RunEvidence` in `evidence`, in order: its `before.output`, then its
-          `after.output`. Part `SANDBOX_OUTPUT`. There is one Finding however many outputs
-          are detections, and after the first detection no other output is asked about.
+          `after.output`. Part `SANDBOX_OUTPUT`. After the first output that is a detection
+          no other output is asked about.
+
+        Part 1 asks for `decision_cap` decisions at most, counted over all these texts. A
+        text with more pieces than there are decisions left is not asked about, and part 1
+        ends there.
 
     2. The Reviewer
         Not run when the pull request changes no file. Otherwise a role named `reviewer` is
@@ -177,15 +196,17 @@ def review_pull_request(
         writes anything. Its step cap is `step_cap`. Its task is
         `{"claims": [...], "changed_files": [...]}`: the Claims in the order given, and the
         paths of the files the pull request changes. So its context holds the Claims, those
-        paths, and what it reads, and nothing else of the pull request.
+        paths, and what it reads, and nothing else of the pull request. It is run with no
+        progress guard, so the decider is asked for nothing in part 2.
 
         `read_change` takes `path`
             Returns what the pull request changes in that file, as git writes the
-            difference between the two commits in unified form: a line the pull request
-            adds starts with `+`, and a line it removes starts with `-`. `NOT_CHANGED` when
-            the path is not that of a file the pull request changes, and `BAD_ARGUMENTS`
-            (from `pr_verification.reading`) as the read-only tools answer it. What it
-            returns is Untrusted Content.
+            difference between the two commits in unified form. Among its lines is each
+            line the pull request adds, after a `+`, and each line it removes, after a
+            `-`. Nothing more is settled here about what git writes around them.
+            `NOT_CHANGED` when the path is not that of a file the pull request changes, and
+            `BAD_ARGUMENTS` (from `pr_verification.reading`) as the read-only tools answer
+            it. What it returns is Untrusted Content.
 
         The role finishes with its findings, the most important first:
         `{"findings": [{"kind": "undeclared_change", "path": "auth/session.py",
@@ -208,33 +229,38 @@ def review_pull_request(
     A pull request with no Claims
         When `claims` is empty and the pull request changes at least one file, no Claim
         covers any of its changes, and one Finding says so in place of one for each change:
-        kind `UNDECLARED_CHANGE`, part `PULL_REQUEST`, and concern `NOTHING_DECLARED` filled
+        kind `UNDECLARED_CHANGE`, part `WHOLE`, and concern `NOTHING_DECLARED` filled
         in. It is made by code, whatever comes of the Reviewer. Every `undeclared_change`
         the Reviewer names for such a pull request is left out.
 
     A Review that could not be finished
-        It says so with a Finding of kind `UNFINISHED_REVIEW` and part `PULL_REQUEST`, whose
-        concern is `COULD_NOT_FINISH` filled in.
+        It says so with a Finding of kind `UNFINISHED_REVIEW` and part `WHOLE`, whose concern
+        is `REVIEW_UNFINISHED` filled in. Each part of the Review adds one at most.
 
         - When the decider raises `ModelFailed` in part 1, as a `DecisionFailed` is one,
           part 1 ends there: nothing more is asked of the decider, the detections made
           before it are kept, and one such Finding is added with what the exception said.
-          Part 2 is still done.
+        - When part 1 ends at its cap on decisions, the same holds, and the Finding is added
+          with `DECISION_CAP_REACHED` filled in.
         - When the model raises `ModelFailed` in part 2, the Reviewer gives no Findings and
           one such Finding is added with what the exception said.
         - When the Reviewer's run stops at the step cap, it gives no Findings and one such
           Finding is added with `STEP_CAP_REACHED` filled in.
 
-    The order, and the cap
-        `findings` holds what part 1 made, in the order asked and then its `UNFINISHED_REVIEW`
-        if it has one; then the `NOTHING_DECLARED` Finding if there is one; then what the
-        Reviewer named, in the order it named them, or its `UNFINISHED_REVIEW`. Only the
-        first `FINDING_CAP` of these are kept. The cap is enforced here, by code, and what
-        code made comes before what the Reviewer named: a Reviewer misled by what it read
-        can neither fill a report nor push a detection out of it.
+        Part 2 is done however part 1 ended.
 
-    Raises `ValueError` before any decision or request when `step_cap` is less than 1. An
-    `InputTooLong` from the decider is not caught, as in `detect_injection`. Any other
-    exception is a fault in the system and is raised.
+    The order, and the cap
+        `findings` holds first what code made: the detections of part 1 in the order of its
+        parts, then its `UNFINISHED_REVIEW` if it has one, then the `NOTHING_DECLARED`
+        Finding if there is one, then the `UNFINISHED_REVIEW` of part 2 if it has one. These
+        are eight at most. After them comes what the Reviewer named, in the order it named
+        them, and only as many as leave `findings` no more than `FINDING_CAP`: the rest are
+        left out. The cap is enforced here, by code. So nothing code made is ever left out,
+        and a Reviewer misled by what it read can neither fill a report nor push a
+        detection out of it.
+
+    Raises `ValueError` before any decision or request when `step_cap` or `decision_cap` is
+    less than 1. An `InputTooLong` from the decider is not caught, as in `detect_injection`:
+    it is a fault in the caller. Any other exception is a fault in the system and is raised.
     """
     raise NotImplementedError
