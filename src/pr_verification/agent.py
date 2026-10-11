@@ -3,9 +3,11 @@
 The loop is the project's own code on top of the model interface. No agent framework is used,
 because the caps and the handling of Untrusted Content need control of the loop itself.
 
-The loop also watches a role for going round in circles. A role that repeats itself, or whose
-steps bring it no closer to its goal, is told so and goes on. The step cap holds whatever is
-detected.
+The loop also watches a role for going round in circles: repeating itself, or taking steps
+that bring it no closer to its goal. Each time that is found is a trigger, and triggers are
+answered on a ladder. On its first rung the role is told what was found and goes on. The next
+rung, stopping a role that triggers again, is not built yet. The step cap holds whatever is
+found.
 """
 
 import json
@@ -25,10 +27,10 @@ UNREADABLE_RESPONSE = (
 )
 """What a role is told when its response is neither a request for a tool nor a finish."""
 
-REPEAT_LIMIT = 3
+REPEAT_LENGTH = 3
 """How many steps in a row must be the same step to be an exact repeat."""
 
-ALTERNATION_LIMIT = 4
+ALTERNATION_LENGTH = 4
 """How many steps in a row must go back and forth between two steps to be an alternation:
 two rounds."""
 
@@ -38,7 +40,7 @@ starting value: it is to be chosen again from measurement, so nothing may rely o
 itself."""
 
 PROGRESS = YesOrNo("Given its task and its latest steps, is the agent getting closer to its goal?")
-"""The question the progress guard asks. `NO` is the answer that finds a loop."""
+"""The question of the progress guard. `NO` is the answer that finds a loop."""
 
 _HOW_TO_ANSWER = """\
 You work in steps. At each step, reply with one JSON object and nothing else, in one of two forms:
@@ -211,22 +213,26 @@ def detect_repeat(steps: Sequence[Step]) -> LoopKind | None:
     `steps` are in the order taken. Two steps are the same step when they have the same
     action and the same result:
 
-    - The action is what the `response` asked for. Two responses that are both JSON are the
-      same action when they hold the same value: the order of an object's members and the
-      whitespace between them carry no meaning. A response that is not JSON is the same
-      action only as a response with exactly the same text.
+    - The action is what the `response` asked for. Two responses with exactly the same text
+      are the same action. So are two that are both JSON objects and differ only in the
+      order of the members of an object or in the whitespace between one part and the next.
+      Any other two are different actions, except that whether two numbers written
+      differently, as `1` and `1.0` are, make the same action is not stated here.
     - The result is `result`. Two are the same only when their text is exactly the same.
-
-    So a step that is taken again and gets a different result is not the same step. A retry
-    that comes out differently, as after a network failure, is never a repeat.
 
     Only the end of `steps` is looked at:
 
-    - `EXACT_REPEAT` when the last `REPEAT_LIMIT` steps are all the same step.
-    - `ALTERNATION` when the last `ALTERNATION_LIMIT` steps go back and forth between two
-      steps that are not the same, as in X, Y, X, Y: each is the same step as the one two
-      before it, and not the same step as the one before it.
-    - None otherwise, and so whenever there are fewer steps than a limit asks for.
+    - `EXACT_REPEAT` when the last `REPEAT_LENGTH` steps are all the same step.
+    - `ALTERNATION` when the last `ALTERNATION_LENGTH` steps go back and forth between two
+      steps with different actions, as in X, Y, X, Y: counting only those last steps, each
+      is the same step as the one two before it, and has a different action from the one
+      before it.
+    - None otherwise, and so whenever there are fewer steps than that.
+
+    So a retry that comes out differently, as after a network failure, is not flagged. While
+    the last step has the same action as the one before it and a different result, nothing
+    is found: it is the same step as no step with another result, and an alternation needs
+    two actions.
 
     Never `NO_PROGRESS`, which only the progress guard finds. Nothing of a step is read but
     its `response` and its `result`, and no model is asked.
@@ -252,7 +258,9 @@ def run_role(
     - `instructions` hold `role.instructions` whole, and the name and the description of
       each of `role.tools` whole, beside the loop's own fixed wording on how to answer. They
       are written from nothing else: they are the same on every step of a run, and hold
-      nothing of `task`, of any response, or of anything a tool returned.
+      nothing of `task`, of any response, or of anything a tool returned. The fixed wording
+      names `told`, described below, as the one part of `data` that the loop itself writes
+      and the role is to act on.
     - `data` is a JSON object with exactly two members: `task`, as given, and `steps`, a list
       with one object for each step taken so far, in order, whose only members are that
       step's `response` and `result`, and `told` where loop detection told the role
@@ -299,17 +307,20 @@ def run_role(
         rung of the ladder: the role is told what was detected and the run goes on. The
         trigger is recorded in `RoleRun.triggers`. In every later request of the run, the
         object in `steps` for the step it was found after has the member `told`, which is
-        `TOLD` for the kind found. Nothing else changes: `instructions` are as they were,
-        telling is not a step, and each `Step` records what it would have.
+        `TOLD` for the kind found. Nothing else changes: `instructions` are the same as on
+        every other step, telling is not a step, and each `Step` records what it would have.
 
-        Every trigger of a run is answered this way, the first and any after it. Stopping a
-        role that triggers again is the next rung of the ladder, and it is not built here.
+        Every trigger of a run is answered this way, the first and any after it. Nothing is
+        forgotten when the role is told: the steps before still count, so a role that takes
+        the same step once more triggers again at the very next step. Stopping a role that
+        triggers again is the next rung of the ladder, and it is not built here.
 
         The step cap holds throughout. Whatever is detected, and whatever the role is told,
-        a run makes no more than `role.step_cap` requests to the model and stops with
-        `Stopped.STEP_CAP` at the cap. The progress guard is asked no more than once for
-        every `PROGRESS_INTERVAL` steps taken. With `progress_guard` None it is never asked,
-        and only `detect_repeat` can find anything.
+        a run takes no more than `role.step_cap` steps, makes one request to `model` for
+        each, and stops with `Stopped.STEP_CAP` at the cap. The progress guard is asked no
+        more than once for every `PROGRESS_INTERVAL` steps taken. What its decider asks of
+        a model of its own to answer is not a step and is not counted here. With
+        `progress_guard` None it is never asked, and only `detect_repeat` can find anything.
 
         What the progress guard is given may be Untrusted Content, which a decider reads
         only as data. Its answer steers the role's effort and is no Verdict (ADR 0002).
@@ -317,8 +328,8 @@ def run_role(
     Raises `ValueError` before any request when `role.step_cap` is less than 1 or two of
     `role.tools` share a name. `ModelFailed` and whatever a tool raises are not caught. Nor
     is anything `progress_guard` raises: a `DecisionFailed` is a `ModelFailed`, and ends the
-    run as a failing model does. `progress_guard` is expected to be one that passes on an
-    input beyond a size limit, as a configured decider is.
+    run as a failing model does. `progress_guard` is expected to take an input of any size,
+    as a configured decider does: an `InputTooLong` is not caught either.
     """
     if progress_guard is not None:
         raise NotImplementedError
