@@ -46,4 +46,4 @@ uv run pytest
 
 ## Size
 
-Keep each ticket's change small enough to read in one sitting. Past roughly 500 lines, stop and propose a split.
+Keep each ticket's change small enough to read in one sitting.
