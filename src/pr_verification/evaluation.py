@@ -5,14 +5,20 @@ and False Assurance, for the development part and the held-out part separately, 
 runs so that variation between runs is not mistaken for improvement.
 """
 
+import json
+from collections import Counter
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
+from statistics import fmean
+from typing import Any
 
-from pr_verification.core import PullRequest, run
-from pr_verification.model import Model
+from pr_verification.claims import ClaimExtractionFailed
+from pr_verification.core import InvalidPullRequest, PullRequest, run
+from pr_verification.model import Model, ModelFailed
 from pr_verification.report import BudgetSpend, Report, Verdict
+from pr_verification.repository import commit_staged, git, new_repository
 
 EntryPoint = Callable[[PullRequest, Model], Report]
 """The shape of the core's entry point, `pr_verification.core.run`."""
@@ -135,22 +141,22 @@ class Scores:
     @property
     def claims(self) -> int:
         """`true_claims + false_claims`."""
-        raise NotImplementedError
+        return self.true_claims + self.false_claims
 
     @property
     def decided_rate(self) -> float | None:
         """The Decided Rate: `decided / claims`."""
-        raise NotImplementedError
+        return _share(self.decided, self.claims)
 
     @property
     def false_block_rate(self) -> float | None:
         """`false_blocks / true_claims`: the share of true Claims that were Refuted."""
-        raise NotImplementedError
+        return _share(self.false_blocks, self.true_claims)
 
     @property
     def false_assurance_rate(self) -> float | None:
         """`false_assurances / false_claims`: the share of false Claims that were Confirmed."""
-        raise NotImplementedError
+        return _share(self.false_assurances, self.false_claims)
 
 
 def score(runs: Iterable[CaseRun]) -> Scores:
@@ -158,7 +164,36 @@ def score(runs: Iterable[CaseRun]) -> Scores:
 
     Raises `ValueError` when a run's `expected` is Inconclusive.
     """
-    raise NotImplementedError
+    scored = tuple(runs)
+    for case_run in scored:
+        _must_expect_an_answer(case_run.name, case_run.expected)
+    given = [(case_run.expected, verdict) for case_run in scored for verdict in case_run.verdicts]
+    spends = [case_run.spend for case_run in scored if case_run.spend is not None]
+    return Scores(
+        runs=len(scored),
+        runs_without_verdicts=sum(not case_run.verdicts for case_run in scored),
+        true_claims=sum(expected is Verdict.CONFIRMED for expected, _ in given),
+        false_claims=sum(expected is Verdict.REFUTED for expected, _ in given),
+        decided=sum(verdict is expected for expected, verdict in given),
+        false_blocks=given.count((Verdict.CONFIRMED, Verdict.REFUTED)),
+        false_assurances=given.count((Verdict.REFUTED, Verdict.CONFIRMED)),
+        inconclusive=sum(verdict is Verdict.INCONCLUSIVE for _, verdict in given),
+        seconds_per_pull_request=_mean([spend.seconds for spend in spends]),
+        dollars_per_pull_request=_mean([spend.dollars for spend in spends]),
+    )
+
+
+def _share(count: int, out_of: int) -> float | None:
+    return count / out_of if out_of else None
+
+
+def _mean(known: list[float]) -> float | None:
+    return fmean(known) if known else None
+
+
+def _must_expect_an_answer(name: str, expected: Verdict) -> None:
+    if expected is Verdict.INCONCLUSIVE:
+        raise ValueError(f"{name} expects Inconclusive, which is not an answer to score against")
 
 
 @dataclass(frozen=True)
@@ -171,21 +206,27 @@ class PartEvaluation:
     @property
     def scores(self) -> Scores:
         """`score` over all the runs together."""
-        raise NotImplementedError
+        return score(self.runs)
 
     @property
     def by_repetition(self) -> tuple[Scores, ...]:
         """`score` over the runs of each repetition alone, repetition 1 first: one for each
         repetition the runs hold, and none when there are no runs. The spread between them is
         the variation between runs."""
-        raise NotImplementedError
+        return tuple(
+            score(case_run for case_run in self.runs if case_run.repetition == repetition)
+            for repetition in sorted({case_run.repetition for case_run in self.runs})
+        )
 
     @property
     def varying(self) -> tuple[str, ...]:
         """The names of the cases whose runs did not all give the same Verdicts the same
         number of times, in the order the cases were first run. The order of the Verdicts
         within a run does not matter."""
-        raise NotImplementedError
+        given: dict[str, set[tuple[Verdict, ...]]] = {}
+        for case_run in self.runs:
+            given.setdefault(case_run.name, set()).add(tuple(sorted(case_run.verdicts)))
+        return tuple(name for name, different in given.items() if len(different) > 1)
 
 
 @dataclass(frozen=True)
@@ -209,7 +250,30 @@ class Evaluation:
         `decided_rate`, `false_block_rate`, and `false_assurance_rate`. A rate or a mean that
         is None is null.
         """
-        raise NotImplementedError
+        printed = {
+            "repetitions": self.repetitions,
+            "development": _printed_part(self.development),
+            "held_out": _printed_part(self.held_out),
+        }
+        return json.dumps(printed, indent=2)
+
+
+def _printed_part(part: PartEvaluation) -> dict[str, Any]:
+    return {
+        "scores": _printed_scores(part.scores),
+        "by_repetition": [_printed_scores(scores) for scores in part.by_repetition],
+        "varying": list(part.varying),
+    }
+
+
+def _printed_scores(scores: Scores) -> dict[str, Any]:
+    return {
+        **asdict(scores),
+        "claims": scores.claims,
+        "decided_rate": scores.decided_rate,
+        "false_block_rate": scores.false_block_rate,
+        "false_assurance_rate": scores.false_assurance_rate,
+    }
 
 
 def evaluate(
@@ -236,7 +300,141 @@ def evaluate(
     Raises `ValueError` before running anything when `repetitions` is less than 1, when two
     cases share a name, or when a case expects Inconclusive.
     """
-    raise NotImplementedError
+    to_run = tuple(cases)
+    if repetitions < 1:
+        raise ValueError(f"each case must be run at least once, not {repetitions} times")
+    shared = [name for name, count in Counter(case.name for case in to_run).items() if count > 1]
+    if shared:
+        raise ValueError(f"more than one case is named {', '.join(shared)}")
+    for case in to_run:
+        _must_expect_an_answer(case.name, case.expected)
+    runs: dict[Part, list[CaseRun]] = {part: [] for part in Part}
+    for repetition in range(1, repetitions + 1):
+        for case in to_run:
+            runs[case.part].append(_run_once(case, repetition, model, entry_point))
+    return Evaluation(
+        repetitions=repetitions,
+        development=PartEvaluation(tuple(runs[Part.DEVELOPMENT])),
+        held_out=PartEvaluation(tuple(runs[Part.HELD_OUT])),
+    )
+
+
+def _run_once(case: Case, repetition: int, model: Model, entry_point: EntryPoint) -> CaseRun:
+    try:
+        report = entry_point(case.pull_request, model)
+    except (InvalidPullRequest, ModelFailed, ClaimExtractionFailed) as error:
+        return CaseRun(case.name, repetition, case.expected, (), None, str(error))
+    verdicts = tuple(claim.verdict for claim in report.claims)
+    return CaseRun(case.name, repetition, case.expected, verdicts, report.budget_spend, None)
+
+
+@dataclass(frozen=True)
+class _HandMade:
+    """One hand-made case: a module as it was, as the pull request leaves it, and what it says.
+
+    The text says only what the code now does, so that every Claim found in it has the one
+    answer: a true account of what the code did before would be a true Claim in a false case.
+    """
+
+    name: str
+    part: Part
+    expected: Verdict
+    title: str
+    description: str
+    module: str
+    before: str
+    after: str
+
+    def built_in(self, directory: Path) -> Case:
+        """The case, with its repository made in a directory of its own under `directory`."""
+        repository = new_repository(directory)
+
+        def commit(text: str, message: str, *parents: str) -> str:
+            blob = git(repository, "hash-object", "-w", "--stdin", stdin=text.encode())
+            entry = f"100644,{blob.decode().strip()},{self.module}"
+            git(repository, "update-index", "--add", "--cacheinfo", entry)
+            return commit_staged(repository, message, *parents)
+
+        before = commit(self.before, "Start the project")
+        after = commit(self.after, self.title, before)
+        pull_request = PullRequest(repository, before, after, self.title, self.description)
+        return Case(self.name, self.part, pull_request, self.expected)
+
+
+_HAND_MADE = (
+    _HandMade(
+        name="hand-made/median-of-an-even-count",
+        part=Part.DEVELOPMENT,
+        expected=Verdict.CONFIRMED,
+        title="Fix the median of an even number of values",
+        description="median([1, 2, 3, 4]) now returns 2.5, the mean of the two middle values.",
+        module="statistics_tools.py",
+        before="""\
+def median(values):
+    ordered = sorted(values)
+    return ordered[len(ordered) // 2]
+""",
+        after="""\
+def median(values):
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2
+""",
+    ),
+    # The pull request only names a value: the code does what it did before.
+    _HandMade(
+        name="hand-made/initials-of-a-hyphenated-name",
+        part=Part.DEVELOPMENT,
+        expected=Verdict.REFUTED,
+        title="Give an initial for each part of a hyphenated name",
+        description='initials("Mary-Jane Watson") now returns "MJW".',
+        module="names.py",
+        before="""\
+def initials(name):
+    return "".join(word[0].upper() for word in name.split())
+""",
+        after="""\
+def initials(name):
+    words = name.split()
+    return "".join(word[0].upper() for word in words)
+""",
+    ),
+    _HandMade(
+        name="hand-made/century-that-is-not-a-leap-year",
+        part=Part.HELD_OUT,
+        expected=Verdict.CONFIRMED,
+        title="Stop counting 1900 as a leap year",
+        description="is_leap_year(1900) now returns False.",
+        module="calendar_tools.py",
+        before="""\
+def is_leap_year(year):
+    return year % 4 == 0
+""",
+        after="""\
+def is_leap_year(year):
+    return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+""",
+    ),
+    # The pull request does change what the code does, and not to what it says.
+    _HandMade(
+        name="hand-made/clamp-above-the-upper-bound",
+        part=Part.HELD_OUT,
+        expected=Verdict.REFUTED,
+        title="Make clamp() return the upper bound for a value above it",
+        description="clamp(12, 0, 10) now returns 10.",
+        module="ranges.py",
+        before="""\
+def clamp(value, low, high):
+    return max(low, value)
+""",
+        after="""\
+def clamp(value, low, high):
+    return max(low, min(value, low))
+""",
+    ),
+)
 
 
 def hand_made_cases(directory: Path) -> tuple[Case, ...]:
@@ -255,4 +453,4 @@ def hand_made_cases(directory: Path) -> tuple[Case, ...]:
     Called again with another directory, it gives the same names, parts, pull request text,
     and expected Verdicts, in the same order.
     """
-    raise NotImplementedError
+    return tuple(hand_made.built_in(directory) for hand_made in _HAND_MADE)
