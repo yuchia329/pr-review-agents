@@ -4,19 +4,22 @@ The tests from `install_and_test` down install from the package index in a real 
 """
 
 import functools
+import tempfile
 from pathlib import Path
 
 import pytest
 from conftest import FixtureRepository, commit_snapshots
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from pr_verification.ecosystem import Commands, Results, Unreadable, Unsupported, find_commands
 from pr_verification.python_ecosystem import (
+    LOCK_FILES,
     NOT_A_PYTHON_PROJECT,
     PYTHON_VERSIONS,
     PythonEcosystem,
 )
+from pr_verification.repo_profile import digest_lock_files
 from pr_verification.sandbox import ContainerSandbox, LimitHit, Limits, Phase, RunResult
 
 MODULE = "def cost(kilograms):\n    return 3 * kilograms\n"
@@ -169,6 +172,96 @@ def test_run_stopped_at_a_limit_is_unreadable_whatever_it_wrote(
 )
 def test_run_in_which_the_test_tooling_could_not_start_is_unreadable(run: RunResult) -> None:
     assert isinstance(PythonEcosystem().read_results(run), Unreadable)
+
+
+# The facts a Repo Profile keeps
+
+
+def test_test_framework_is_pytest_and_a_repository_with_no_tests_yet_has_no_test_layout(
+    tmp_path: Path,
+) -> None:
+    found = commands_for(tmp_path, {"shipping.py": MODULE})
+
+    assert isinstance(found, Commands)
+    assert (found.test_framework, found.test_layout) == ("pytest", ())
+
+
+@pytest.mark.parametrize(
+    ("test_files", "layout"),
+    [
+        (("test_shipping.py",), (".",)),
+        (
+            ("tests/unit/rates_test.py", "tests/test_tax.py", "tests/test_rates.py"),
+            ("tests", "tests/unit"),
+        ),
+        (
+            ("src/shipping/tests/test_rates.py", "checks/tax_test.py"),
+            ("checks", "src/shipping/tests"),
+        ),
+    ],
+    ids=["at the root", "nested", "beside the code"],
+)
+def test_test_layout_names_each_directory_that_holds_a_test_file_once_and_sorted(
+    tmp_path: Path, test_files: tuple[str, ...], layout: tuple[str, ...]
+) -> None:
+    # Neither of the last two is what pytest takes for a test file.
+    not_tests = {"shipping.py": MODULE, "helpers/latest.py": MODULE, "docs/test_plan.md": "Soon.\n"}
+
+    found = commands_for(tmp_path, {**not_tests, **dict.fromkeys(test_files, MODULE)})
+
+    assert isinstance(found, Commands)
+    assert found.test_layout == layout
+
+
+@pytest.mark.parametrize(
+    "files",
+    [{"shipping.py": MODULE}, {"pyproject.toml": pyproject(), "requirements-dev.txt": "six\n"}],
+    ids=["holds none of them", "holds some of them"],
+)
+def test_lock_files_are_the_same_paths_whichever_of_them_the_commit_holds(
+    tmp_path: Path, files: dict[str, str]
+) -> None:
+    found = commands_for(tmp_path, files)
+
+    assert isinstance(found, Commands)
+    assert found.lock_files == LOCK_FILES
+
+
+some_lock_files = st.fixed_dictionaries(
+    {},
+    optional={
+        "pyproject.toml": st.sampled_from([pyproject(), pyproject(">=3.11,<3.13")]),
+        "setup.py": st.just("from setuptools import setup\n\nsetup(name='shipping')\n"),
+        "requirements.txt": st.just("six\n"),
+        "test-requirements.txt": st.just("pytest-timeout\n"),
+    },
+)
+some_other_files = st.fixed_dictionaries(
+    {},
+    optional={"README.md": st.just("Shipping rates.\n"), "tests/test_shipping.py": st.just(MODULE)},
+)
+
+
+@settings(max_examples=25, deadline=None)
+@given(lock_files=some_lock_files, others=st.tuples(some_other_files, some_other_files))
+def test_two_commits_that_agree_on_every_lock_file_get_the_same_image_and_install(
+    lock_files: dict[str, str], others: tuple[dict[str, str], dict[str, str]]
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        repository = Path(directory) / "repository"
+        one, other = commit_snapshots(
+            repository,
+            {**lock_files, **others[0], "shipping.py": MODULE},
+            {**lock_files, **others[1], "shipping.py": MODULE + "\n"},
+        )
+        first = PythonEcosystem().commands(repository, one)
+        second = PythonEcosystem().commands(repository, other)
+        assert isinstance(first, Commands) and isinstance(second, Commands)
+
+        assert digest_lock_files(repository, one, first.lock_files) == digest_lock_files(
+            repository, other, second.lock_files
+        )
+    assert (first.image, first.install) == (second.image, second.install)
 
 
 # Installing and testing fixture repositories in a real Sandbox
