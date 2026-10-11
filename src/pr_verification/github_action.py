@@ -1,0 +1,316 @@
+"""The GitHub Action's wrapper: gathers a pull request from GitHub, calls the core, posts the
+comment, and reports the Gate as a check run.
+
+The wrapper is thin, and it is all the system knows of GitHub. The core knows nothing about
+GitHub: no other module of the package imports this one, reads a variable that GitHub sets, or
+makes a request to GitHub.
+
+Only code posts (ADR 0002). The comment is `render_comment`'s and the check run is
+`gate_check_run`'s. No model is handed the token, and nothing a model wrote is posted but as
+the report holds it.
+
+The Gate is reported as a check run of its own, named `CHECK_RUN_NAME`, and not by the exit
+code. The job that runs the wrapper ends the same way whether the Gate passes or blocks, so
+nothing in the pipeline that waits on that job waits on the Gate.
+
+What is kept between runs
+    The Repo Profile and the installed dependencies are kept under the directory that
+    `STATE_VARIABLE` names, outside the checkout. The Action restores that directory from
+    GitHub's cache before every run, and saves it to the cache only after a run for a push
+    to the target branch. A run for a pull request reads what the target branch saved. What
+    it learns itself stays in its own copy of the directory and is never saved to the cache,
+    so no pull request can write where a later run reads (ADR 0004). Restoring and saving are
+    workflow configuration, and so is which branches' pushes start a run.
+"""
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Protocol
+
+import httpx
+
+from pr_verification.budget import Budget
+from pr_verification.decision import Decider
+from pr_verification.model import Model
+from pr_verification.orchestration import Orchestration
+from pr_verification.report import Gate
+
+EXIT_DONE = 0
+"""The run did its work, whichever way the Gate went."""
+
+EXIT_FAILED = 2
+"""The run could not do its work. The same number as the command line's `EXIT_NO_REPORT`, and
+never the number a block has there."""
+
+CHECK_RUN_NAME = "PR Verification Gate"
+"""The name of the check run the Gate is reported as."""
+
+STATE_VARIABLE = "PR_VERIFICATION_STATE_DIR"
+"""The environment variable that names the directory the Repo Profile and the installed
+dependencies are kept in between runs."""
+
+REVIEW_VARIABLE = "PR_VERIFICATION_REVIEW"
+"""The environment variable that says whether a pull request is also reviewed. It is when
+this is set to `true`, and is not for any other value or none."""
+
+FORK_SKIPPED = (
+    "PR Verification skipped this pull request: it comes from a fork, and pull requests from "
+    "forks are not verified yet."
+)
+"""What a run for a pull request from a fork says."""
+
+
+class Conclusion(StrEnum):
+    """How a check run ended, in GitHub's words."""
+
+    SUCCESS = "success"
+    """The Gate passes."""
+
+    FAILURE = "failure"
+    """The Gate blocks."""
+
+    NEUTRAL = "neutral"
+    """There is no Gate to report. GitHub does not hold a pull request back for it."""
+
+
+@dataclass(frozen=True)
+class CheckRun:
+    """What is reported on a commit as the check run named `CHECK_RUN_NAME`."""
+
+    conclusion: Conclusion
+    """How the check run ended."""
+
+    title: str
+    """One line, shown beside the check run."""
+
+    summary: str
+    """What the check run's own page says. GitHub shows it as Markdown, so it is only ever
+    text that the project wrote or code computed, and never Untrusted Content."""
+
+
+NO_REPORT_CHECK_RUN = CheckRun(
+    Conclusion.NEUTRAL,
+    "PR Verification did not finish",
+    "No report was produced, so no Claim was verified. This is a failure of the system and "
+    "not a block: see the log of the job.",
+)
+"""The check run for a run that ended with no report. It holds nothing of what went wrong,
+which may be Untrusted Content: that is in the job's log."""
+
+
+def gate_check_run(gate: Gate) -> CheckRun:
+    """The check run that reports `gate`.
+
+    The conclusion is `SUCCESS` when the Gate passes and `FAILURE` when it blocks. The title
+    is `Gate: pass` or `Gate: block`, and the summary is the Gate's note. A pure function of
+    `gate`, so no model has a say in the check run.
+    """
+    raise NotImplementedError
+
+
+class GitHubFailed(Exception):
+    """GitHub could not be reached, or did not do what was asked. Its message is one line and
+    safe to print: it never holds the token."""
+
+
+class GitHub(Protocol):
+    """What the wrapper asks of GitHub, about the pull requests of one repository."""
+
+    def linked_issue(self, pull_request: int) -> str:
+        """The text of the issues that the pull request numbered `pull_request` closes.
+
+        For each issue GitHub lists as closed by the pull request, in GitHub's order: its
+        title, an empty line, and its body. An empty line stands between one issue and the
+        next. The empty string when it closes none. It is Untrusted Content.
+
+        Raises `GitHubFailed`.
+        """
+        ...
+
+    def post_comment(self, pull_request: int, body: str) -> None:
+        """Make `body` the one comment this system has on the pull request.
+
+        `body` starts with `MARKER` (`pr_verification.comment`). A comment this system posted
+        on the pull request before is replaced by `body`. When there is none, one is added.
+
+        Raises `GitHubFailed`.
+        """
+        ...
+
+    def set_check_run(self, commit: str, check_run: CheckRun) -> None:
+        """Report `check_run` on `commit` under the name `CHECK_RUN_NAME`, as one that has
+        ended.
+
+        Raises `GitHubFailed`.
+        """
+        ...
+
+
+class GitHubAPI:
+    """`GitHub` over GitHub's own API, for one repository.
+
+    Every request carries the header `Authorization: Bearer <token>`. A request that cannot
+    be sent, an answer with a status of 400 or more, and an answer that cannot be read as
+    what was asked for each raise `GitHubFailed`, with the token removed from what GitHub
+    said.
+    """
+
+    def __init__(
+        self,
+        repository: str,
+        token: str,
+        *,
+        api_url: str = "https://api.github.com",
+        graphql_url: str = "https://api.github.com/graphql",
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
+        """A client for `repository`, named as GitHub names it: `<owner>/<name>`.
+
+        `api_url` and `graphql_url` are where GitHub's REST API and its GraphQL API are.
+        `transport` is for a caller that brings its own in place of the network.
+        """
+        raise NotImplementedError
+
+    def linked_issue(self, pull_request: int) -> str:
+        """See `GitHub.linked_issue`.
+
+        One POST request to `graphql_url`, asking for the `title` and `body` of the first 10
+        of the pull request's `closingIssuesReferences`. They are read from the answer's
+        `data.repository.pullRequest.closingIssuesReferences.nodes`. A body that is null is
+        the empty string.
+        """
+        raise NotImplementedError
+
+    def post_comment(self, pull_request: int, body: str) -> None:
+        """See `GitHub.post_comment`.
+
+        Looks among the pull request's first 100 comments, oldest first, with
+        `GET <api_url>/repos/<repository>/issues/<pull_request>/comments?per_page=100`. A
+        comment this system posted before is the first of them whose `body` starts with
+        `MARKER` and whose `user.type` is `Bot`: a comment a person wrote is never replaced,
+        whatever it starts with.
+
+        That comment is replaced with
+        `PATCH <api_url>/repos/<repository>/issues/comments/<its id>`. When there is none,
+        one is added with `POST <api_url>/repos/<repository>/issues/<pull_request>/comments`.
+        Either request sends the JSON object `{"body": body}`.
+        """
+        raise NotImplementedError
+
+    def set_check_run(self, commit: str, check_run: CheckRun) -> None:
+        """See `GitHub.set_check_run`.
+
+        One `POST <api_url>/repos/<repository>/check-runs`, sending a JSON object with `name`
+        `CHECK_RUN_NAME`, `head_sha` `commit`, `status` `completed`, `conclusion` the value
+        of the check run's `Conclusion`, and `output` an object with its `title` and
+        `summary`.
+        """
+        raise NotImplementedError
+
+
+def main(
+    environment: Mapping[str, str] | None = None,
+    *,
+    github: GitHub | None = None,
+    model: Model | None = None,
+    decider: Decider | None = None,
+    orchestration: Orchestration | None = None,
+    budget: Budget | None = None,
+) -> int:
+    """Do the work of one run of the Action, and return its exit code.
+
+    `environment` is the process's own when None. It gives the variables that GitHub sets,
+    `GITHUB_EVENT_NAME`, `GITHUB_EVENT_PATH`, `GITHUB_WORKSPACE`, `GITHUB_REPOSITORY`, and
+    `GITHUB_SHA`; `GITHUB_TOKEN`, which the workflow passes; and the system's own
+    configuration. The repository is the checkout at `GITHUB_WORKSPACE`. `github`, `model`,
+    `decider`, `orchestration`, and `budget` are for a caller that brings its own. Without
+    them:
+
+    - `github` is `GitHubAPI(GITHUB_REPOSITORY, GITHUB_TOKEN)`, with `GITHUB_API_URL` and
+      `GITHUB_GRAPHQL_URL` as its two addresses when they are set;
+    - `model`, `decider`, and `budget` are the ones the environment configures, as the
+      command line finds them;
+    - `orchestration` is `fixed_pipeline` on the directory `STATE_VARIABLE` names, with the
+      decider as its progress guard, as the command line makes it for `--state-dir`. When
+      the variable is unset or empty there is none, and nothing is kept between runs.
+
+    A directory named by `STATE_VARIABLE` that is the checkout or lies inside it, both
+    resolved, is a failure, found before anything else is done: a pull request's files are
+    checked out there, so a pull request could write to it.
+
+    A pull request: `GITHUB_EVENT_NAME` is `pull_request`
+        The event is the JSON object in the file `GITHUB_EVENT_PATH` names, and the pull
+        request is its `pull_request`.
+
+        A pull request comes from a fork when its `head.repo.full_name` is not its
+        `base.repo.full_name`, which includes its having no `head.repo`. It is skipped until
+        the handling of forks is built: the one line `::notice::` followed by `FORK_SKIPPED`
+        is printed on standard output, which GitHub shows on the run's page, and the answer
+        is `EXIT_DONE`. Nothing else is done. No model is configured or asked, nothing of
+        the pull request is read or run, and `github` is not called, so the skip needs
+        neither a model nor a token. No check run is set: the token GitHub gives a run for a
+        fork cannot set one.
+
+        Any other pull request is verified, in this order:
+
+        1. Gathers the pull request. `after` is its `head.sha`. `before` is the merge base
+           of its `base.sha` and its `head.sha` in the repository: the commit of the target
+           branch that the pull request starts from. The title is its `title`, the
+           description is its `body`, the empty string when that is null, and the linked
+           issue is `github.linked_issue` of its `number`.
+        2. Calls the core's entry point, `run`, with that pull request, the model, the
+           decider, the orchestration, and the Budget, and with `review` true when
+           `REVIEW_VARIABLE` says so, as the command line does for `--review`.
+        3. Prints the report, as `Report.to_json` writes it.
+        4. Sets the check run: `github.set_check_run(after, gate_check_run(report.gate))`.
+        5. Posts the comment: `github.post_comment(number, render_comment(report))`.
+
+        Steps 4 and 5 are each done whatever came of the other. The answer is `EXIT_DONE`
+        whichever way the Gate goes.
+
+    A push: `GITHUB_EVENT_NAME` is `push`
+        `GITHUB_SHA` is the commit pushed, on the target branch. It is prepared, so that the
+        Repo Profile is learned and the dependencies are installed from the target branch
+        and from nothing of a pull request. The pipeline is `orchestration` when that is a
+        `FixedPipeline`, and otherwise `fixed_pipeline` on the directory `STATE_VARIABLE`
+        names, with no progress guard. With one,
+        `pipeline.prepare_target_commit(repository, GITHUB_SHA)` is called once. With none,
+        nothing is done.
+
+        No model is configured or asked, no Budget is kept to, and `github` is not called, so
+        a push needs neither a model nor a token. The answer is `EXIT_DONE` whatever the
+        pipeline answers: `Unsupported` and `CommandFailed` are answers, which leave nothing
+        new kept.
+
+    Any other event
+        Nothing is done, and it is a failure.
+
+    Failures
+        A failure is a run that could not do its work: an event that cannot be read, a model,
+        a decider, or a Budget that cannot be had as configured, no report from `run`, a
+        `GitHubFailed`, or anything at all that is raised. It is one printed line that starts
+        `pr-verification: `, or the traceback of an exception that nothing here expects, and
+        the answer is `EXIT_FAILED`.
+
+        When a pull request that is not from a fork ends with no report, no comment is
+        posted, and `github.set_check_run(after, NO_REPORT_CHECK_RUN)` is called once the
+        `head.sha` has been read, so that a failure of the system is never shown as a block
+        and the check run is not left waiting. A `GitHubFailed` from that call is one more
+        printed line.
+
+    Printing
+        GitHub's runner reads the log of a job and acts on commands it finds in a line. So
+        whatever is printed that can hold Untrusted Content, which is the report, the line
+        of a failure, and a traceback, is printed on standard output after the one line
+        `::stop-commands::<token>` and before the one line `::<token>::`, where the token is
+        32 hexadecimal digits chosen at random for the run. Between those two lines the
+        runner acts on nothing. Those two lines are printed once each, and only by a run
+        that prints something between them.
+
+    Tracing
+        All of this is done inside `traced(environment)`: with tracing configured, the
+        run's trace is sent before `main` returns, and the answer is the same as with
+        tracing off.
+    """
+    raise NotImplementedError

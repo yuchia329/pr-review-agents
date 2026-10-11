@@ -24,6 +24,7 @@ from pr_verification.repo_profile import (
     DirectoryStore,
     Discover,
     ProfileStore,
+    RepoProfile,
     prepare_pull_request,
     prepare_target,
 )
@@ -290,6 +291,26 @@ class FixedPipeline:
 
         Every Sandbox opened is closed before the answer is given or an exception goes on.
         Raises what `gather` raises. `BudgetSpent` is never raised from here.
+        """
+        raise NotImplementedError
+
+    def prepare_target_commit(
+        self, repository: Path, target: str
+    ) -> RepoProfile | Unsupported | CommandFailed:
+        """Prepare `target`, a commit of the target branch, with no pull request to verify.
+
+        What a later run needs is then already kept: the Repo Profile is learned, and the
+        installed dependencies are saved, from the target branch and from nothing of a pull
+        request.
+
+        Calls `prepare_target(repository, target, ...)` once, with the pipeline's `store`,
+        `cache`, `limits`, and `discover`, as step 2 of `gather` does. Its `sandbox_for`
+        opens each Sandbox with `open_sandbox(repository, image)`. The answer is the
+        `profile` of a `Prepared`, and an `Unsupported` or a `CommandFailed` as it is. Every
+        Sandbox opened is closed before the answer is given or an exception goes on. No
+        model is asked.
+
+        Raises as `prepare_target` does.
         """
         raise NotImplementedError
 

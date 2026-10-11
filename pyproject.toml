@@ -17,6 +17,7 @@ laya = [
 
 [project.scripts]
 pr-verification = "pr_verification.cli:main"
+pr-verification-action = "pr_verification.github_action:main"
 
 [dependency-groups]
 dev = [
