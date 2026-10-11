@@ -92,6 +92,10 @@ _Avoid_: False positive, false alarm
 A false **Claim** given a Confirmed **Verdict**.
 _Avoid_: False negative, miss
 
+**Decision Accuracy**:
+The share of bounded decisions, such as which kind a **Claim** is, whose most probable option is the expected one. It measures an implementation of the decision layer and says nothing about **Verdicts**.
+_Avoid_: Hit rate, precision
+
 **Decided Rate**:
 The share of **Claims** that receive a correct Confirmed or Refuted **Verdict** rather than Inconclusive or a wrong one. The system maximises it subject to the limit on **False Blocks**.
 _Avoid_: Accuracy, coverage

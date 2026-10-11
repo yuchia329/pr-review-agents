@@ -508,7 +508,7 @@ class DecisionScores:
 
     @property
     def accuracy(self) -> float | None:
-        """`correct / decisions`."""
+        """The Decision Accuracy: `correct / decisions`."""
         raise NotImplementedError
 
     @property

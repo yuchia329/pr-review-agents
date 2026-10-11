@@ -83,6 +83,10 @@ class PassedOn(StrEnum):
     INPUT_TOO_LONG = "input_too_long"
     """The input was beyond the input size limit of the implementation first asked."""
 
+    UNAVAILABLE = "unavailable"
+    """The implementation first asked could not be used at all, as when Laya cannot be
+    loaded."""
+
 
 @dataclass(frozen=True)
 class Decision:
@@ -103,8 +107,11 @@ class Decision:
     """The implementation whose probabilities these are."""
 
     passed_on: PassedOn | None = None
-    """Why the decision was passed to the small LLM, or None when it was not passed on. With
-    `made_by`, this is the path the decision took."""
+    """Why the decision was passed to the small LLM, or None when it was not passed on."""
+
+    first_asked: Implementation | None = None
+    """The implementation that was asked before the decision was passed on, or None when it
+    was not passed on. With `made_by` and `passed_on`, this is the path the decision took."""
 
     dollars: float = 0.0
     """What making the decision cost, as the implementations asked know it: 0.0 for one made
@@ -128,6 +135,11 @@ class DecisionFailed(ModelFailed):
     It is a `ModelFailed`, so wherever a failing model is handled, a failing decision is
     handled the same way.
     """
+
+
+class DecisionUnavailable(DecisionFailed):
+    """An implementation could not be used at all, whatever it was asked: the fault is in
+    the machine it runs on and not in one decision."""
 
 
 class InputTooLong(Exception):
@@ -183,8 +195,8 @@ class ScriptedDecider:
         - a string names an option, which is given probability 1.0 and every other 0.0;
         - an exception is raised.
 
-        Every `Decision` it gives has `made_by` as given here, no `passed_on`, and 0.0
-        `dollars`.
+        Every `Decision` it gives has `made_by` as given here, no `passed_on`, no
+        `first_asked`, and 0.0 `dollars`.
         """
         raise NotImplementedError
 
@@ -222,8 +234,8 @@ class SmallLLMDecider:
         `probabilities` name exactly the options of the question, in any order, and every
         number is 0 or more and at least one is more than 0. The numbers are then divided by
         their sum, so the `Decision` keeps the shares the model gave and its probabilities
-        sum to 1. Its `made_by` is `SMALL_LLM`, it has no `passed_on`, and its `dollars` are
-        `dollars_per_request`.
+        sum to 1. Its `made_by` is `SMALL_LLM`, it has no `passed_on` and no `first_asked`,
+        and its `dollars` are `dollars_per_request`.
 
         Raises `DecisionFailed` when the response cannot be read so: text that is not JSON,
         JSON that is not such an object, an option missing, an option that was not asked
@@ -251,11 +263,12 @@ class LayaDecider:
     def decide(self, state: str, question: Question) -> Decision:
         """Answer with Laya's probabilities, in one pass and without generating text.
 
-        The `Decision` has `made_by` `LAYA`, no `passed_on`, and 0.0 `dollars`.
+        The `Decision` has `made_by` `LAYA`, no `passed_on`, no `first_asked`, and 0.0
+        `dollars`.
 
         Raises `InputTooLong` when the state and the question together are beyond
-        `input_limit`: the input is never cut short to fit. Raises `DecisionFailed` when
-        Laya cannot be loaded.
+        `input_limit`: the input is never cut short to fit. Raises `DecisionUnavailable`
+        when Laya cannot be loaded.
         """
         raise NotImplementedError
 
@@ -271,8 +284,8 @@ class JevDecider:
     def decide(self, state: str, question: Question) -> Decision:
         """Answer with Jev's probabilities.
 
-        The `Decision` has `made_by` `JEV`, no `passed_on`, and `dollars_per_decision` as
-        its `dollars`.
+        The `Decision` has `made_by` `JEV`, no `passed_on`, no `first_asked`, and
+        `dollars_per_decision` as its `dollars`.
 
         Raises `DecisionFailed` when Jev cannot be reached or gives no usable answer, and
         `InputTooLong` when the input is beyond what Jev takes. The input is never cut short
@@ -283,10 +296,13 @@ class JevDecider:
 
 class FallbackDecider:
     """Asks one implementation first and passes the decision to the small LLM when the
-    first is not confident of it or cannot take its input."""
+    first is not confident of it, cannot take its input, or cannot be used at all."""
 
-    def __init__(self, first: Decider, small_llm: Decider, threshold: float) -> None:
-        """Raises `ValueError` when `threshold` is not from 0 to 1."""
+    def __init__(
+        self, first: Decider, small_llm: Decider, threshold: float, *, first_asked: Implementation
+    ) -> None:
+        """`first_asked` is the implementation `first` is, as a passed-on `Decision` records
+        it. Raises `ValueError` when `threshold` is not from 0 to 1."""
         raise NotImplementedError
 
     def decide(self, state: str, question: Question) -> Decision:
@@ -301,9 +317,14 @@ class FallbackDecider:
           with `passed_on` set to `LOW_CONFIDENCE` and with the `dollars` of both.
         - When `first` raises `InputTooLong`, `small_llm` is asked once the same way. What
           is returned is its `Decision` with `passed_on` set to `INPUT_TOO_LONG`.
+        - When `first` raises `DecisionUnavailable`, `small_llm` is asked once the same way.
+          What is returned is its `Decision` with `passed_on` set to `UNAVAILABLE`. `first`
+          is asked again at the next decision.
 
-        Nothing else is caught: `DecisionFailed` from `first`, and anything `small_llm`
-        raises, is raised from here.
+        Every `Decision` that was passed on has `first_asked` as this decider was given it.
+
+        Nothing else is caught: any other `DecisionFailed` from `first`, and anything
+        `small_llm` raises, is raised from here.
         """
         raise NotImplementedError
 
@@ -354,7 +375,8 @@ def configured_decider(
     - `SMALL_LLM`: a `SmallLLMDecider` on `model`. Nothing is passed on, the threshold is
       not used, and neither Laya nor Jev is loaded or reached.
     - `LAYA` or `JEV`: a `FallbackDecider` with the configuration's threshold, which asks
-      that implementation first and passes on to a `SmallLLMDecider` on `model`.
+      that implementation first, records it as `first_asked`, and passes on to a
+      `SmallLLMDecider` on `model`.
 
     `first` stands in for Laya or Jev, so that a test loads no model and reaches no
     network. When it is None, a `LayaDecider()` or a `JevDecider(configuration.jev_key)` is
