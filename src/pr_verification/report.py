@@ -150,11 +150,59 @@ def compute_gate(verdicts: Iterable[Verdict]) -> Gate:
     return Gate(decision, f"Claims: {tally}.")
 
 
+class BudgetLimit(StrEnum):
+    """One of the three limits of a Budget, and of a Claim's share of it."""
+
+    TIME = "time"
+    """The limit on seconds."""
+
+    MONEY = "money"
+    """The limit on dollars."""
+
+    STEPS = "steps"
+    """The limit on steps."""
+
+
 @dataclass(frozen=True)
 class BudgetSpend:
+    """An amount of effort, in the three units a Budget is measured in."""
+
     seconds: float
     dollars: float
     steps: int
+
+
+@dataclass(frozen=True)
+class ClaimSpend(BudgetSpend):
+    """What was spent on one Claim, out of its share of the Budget.
+
+    In the printed report it appears with `seconds`, `dollars`, `steps`, and `stopped_by`, which
+    is `time`, `money`, `steps`, or null.
+    """
+
+    stopped_by: BudgetLimit | None = None
+    """The limit of the Claim's share that was reached, after which no further work was done
+    for the Claim, or None when its share was not spent. It says nothing of the Verdict: a
+    Claim whose Evidence came from the very work that reached the limit is still decided."""
+
+
+@dataclass(frozen=True)
+class PullRequestSpend(BudgetSpend):
+    """What was spent on one pull request in all, and on each of its Claims.
+
+    `seconds`, `dollars`, and `steps` are for the whole pull request: the work on every Claim,
+    and the work that was for no one Claim, such as listing the Claims. In the printed report
+    it is the report's `budget_spend`, with `seconds`, `dollars`, `steps`, `stopped_by`, which
+    is `time`, `money`, `steps`, or null, and `claims`, a list holding what a `ClaimSpend`
+    prints for each Claim.
+    """
+
+    stopped_by: BudgetLimit | None = None
+    """The limit of the Budget that stopped the run: the first one reached, after which no
+    further work was started. None when the run ended with no limit reached."""
+
+    claims: tuple[ClaimSpend, ...] = ()
+    """The spend on each Claim: one for each of the report's Claims, in their order."""
 
 
 @dataclass(frozen=True)
@@ -164,6 +212,7 @@ class Report:
     claims: tuple[Claim, ...]
     findings: tuple[Finding, ...]
     budget_spend: BudgetSpend
+    """What the pull request cost. The core's entry point gives a `PullRequestSpend`."""
 
     @property
     def gate(self) -> Gate:

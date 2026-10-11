@@ -11,8 +11,9 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager, ExitStack
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
+from pr_verification.budget import Ledger
 from pr_verification.ecosystem import ReproductionEcosystem, Unsupported, find_commands
 from pr_verification.evidence import ending
 from pr_verification.model import Model
@@ -80,6 +81,51 @@ class Orchestration(Protocol):
 
         An implementation says what it raises. `ModelFailed` is never raised for the work on a
         Claim: a Claim the model failed on is answered for with no Evidence.
+        """
+        ...
+
+
+@runtime_checkable
+class BudgetedOrchestration(Orchestration, Protocol):
+    """An orchestration that keeps to a Budget, by doing its work through a ledger.
+
+    The core's entry point asks such an orchestration through `gather_within`, and does not call
+    its `gather`.
+    """
+
+    def gather_within(
+        self,
+        ledger: Ledger,
+        claims: tuple[str, ...],
+        *,
+        repository: Path,
+        before: str,
+        after: str,
+        model: Model,
+    ) -> tuple[Gathered, ...]:
+        """Gather Evidence for each of `claims`, as `gather` does, spending only what `ledger`
+        allows.
+
+        Everything else is as `gather` has it: one `Gathered` for each Claim, in the order of
+        `claims`, and no Verdict. In `ledger`, a Claim is named by its place in `claims`,
+        counted from 0. It is called with at least one Claim.
+
+        - Every request to a model is made through `ledger.model`, and everything done in a
+          Sandbox through `ledger.sandbox`: for the Claim the work is for, and for no Claim
+          when it is for no one Claim. Nothing is asked of a model or a Sandbox any other way,
+          so nothing is spent that the ledger does not record, and no model can go on past a
+          limit.
+        - The share of each Claim is set aside with `ledger.share_out(len(claims))`, before
+          any work for one Claim. When no such work is ever started, it need not be.
+        - When a Claim's share is spent, the work on that Claim stops, and the work on the
+          others goes on. A Claim stopped so with no Evidence that could decide it is given
+          `SHARE_SPENT` filled in as its `inconclusive`.
+        - When the Budget is spent, no further work is started for any Claim. Each Claim then
+          left with no Evidence that could decide it is given `BUDGET_SPENT` filled in as its
+          `inconclusive`.
+
+        `BudgetSpent` is never raised from here: a limit that is reached ends work, and every
+        Claim is still answered for.
         """
         ...
 
@@ -179,6 +225,65 @@ class FixedPipeline:
                 evidence = () if written.evidence is None else (written.evidence,)
                 gathered.append(Gathered(evidence, written.inconclusive))
             return tuple(gathered)
+
+    def gather_within(
+        self,
+        ledger: Ledger,
+        claims: tuple[str, ...],
+        *,
+        repository: Path,
+        before: str,
+        after: str,
+        model: Model,
+    ) -> tuple[Gathered, ...]:
+        """Write and run a Reproduction for each Claim, as `gather` does, within the Budget.
+
+        The steps are those of `gather`, and each Claim is given what `gather` would give it,
+        except as said here. With no Claims nothing is done and `ledger` is not used.
+
+        What is recorded
+            - Steps 1 to 3 are for no one Claim. Each Sandbox opened is used through
+              `ledger.sandbox(sandbox)`, so the time taken to install dependencies is recorded
+              against the pull request alone.
+            - When step 3 has been taken, the shares are set aside with
+              `ledger.share_out(len(claims))`: preparing comes out of no Claim's share.
+            - In step 4, the Claim at place `index` in `claims` is worked on with
+              `ledger.model(model, claim=index)` in place of `model` and
+              `ledger.sandbox(sandbox, claim=index)` in place of the Sandbox, where `sandbox`
+              is the Sandbox as it was opened, so that no run is timed twice. So every request
+              its `write_reproduction` makes is one step against that Claim, and every run is
+              timed against it.
+
+        When a Claim's share is spent
+            A `BudgetSpent` for a Claim's share ends the work on that Claim: it is given no
+            Evidence, and the message of the `BudgetSpent`, which is `SHARE_SPENT` filled in.
+            The next Claim is worked on as if nothing had happened, with its own share whole.
+
+        When the Budget is spent
+            No further work is started: no further request is made to the model, nothing more
+            is run, and no further Sandbox is opened. Every Claim not yet answered for, the
+            one being worked on included, is given no Evidence and `BUDGET_SPENT` filled in
+            with the limit `ledger.stopped_by()` gives. Claims answered for before then keep
+            what they were given. The Budget is found spent:
+
+            - on the call, when `ledger.stopped_by()` gives a limit, in which case nothing is
+              discovered and no Sandbox is opened;
+            - by a `BudgetSpent` raised during steps 1 to 3, or by `ledger.share_out`;
+            - before the work on a Claim starts, when `ledger.stopped_by()` gives a limit, or
+              by a `BudgetSpent` for the Budget raised during that work.
+
+            A step of 1 to 3 that ends as `gather` says one can, with `Unsupported`,
+            `CommandFailed`, or `SandboxFailed`, is answered for as `gather` says, whatever
+            had been spent by then.
+
+        Evidence already gathered is never thrown away. A Claim whose `write_reproduction` gave
+        Evidence is given it, though the run that showed the difference was the one that
+        reached a limit.
+
+        Every Sandbox opened is closed before the answer is given or an exception goes on.
+        Raises what `gather` raises. `BudgetSpent` is never raised from here.
+        """
+        raise NotImplementedError
 
     def _prepare(
         self, repository: Path, before: str, after: str, opened: ExitStack

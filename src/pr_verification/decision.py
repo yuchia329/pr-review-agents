@@ -320,7 +320,7 @@ class SmallLLMDecider:
 
     def __init__(self, model: Model, dollars_per_request: float = 0.0) -> None:
         """`model` is the small LLM. `dollars_per_request` is what one request to it costs:
-        the model interface does not report cost, so it is given here."""
+        the decider asks through `complete`, which reports no cost, so it is given here."""
         self._model = model
         self._dollars_per_request = dollars_per_request
 

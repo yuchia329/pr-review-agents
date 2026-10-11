@@ -5,7 +5,7 @@ from collections.abc import Mapping
 
 import httpx
 
-from pr_verification.model import ModelFailed, ModelRequest
+from pr_verification.model import ModelFailed, ModelRequest, PricedResponse, TokenPrice
 
 DEFAULT_ENDPOINT = "https://api.minimax.io/v1"
 DEFAULT_MODEL = "MiniMax-M3"
@@ -24,7 +24,12 @@ class OpenAICompatibleModel:
         model: str,
         key: str,
         transport: httpx.BaseTransport | None = None,
+        price: TokenPrice | None = None,
     ) -> None:
+        """`price` is what the provider charges for this model, or None for a model that has no
+        price, as a local one has none. It changes nothing about `complete`."""
+        if price is not None:
+            raise NotImplementedError
         self._url = endpoint.rstrip("/") + "/chat/completions"
         self._model = model
         self._name = f"{model} at {endpoint}"
@@ -60,6 +65,22 @@ class OpenAICompatibleModel:
             raise self._failed(f"gave a response that holds no text: {response.text}")
         return answer
 
+    def complete_priced(self, request: ModelRequest) -> PricedResponse:
+        """Make the one request `complete` makes, and say what it cost at the model's price.
+
+        The response is the one `complete` gives, and whatever `complete` raises is raised.
+
+        The protocol reports the tokens of a request in the `usage` of its answer. `dollars`
+        is `usage.prompt_tokens` at `price.input` plus `usage.completion_tokens` at
+        `price.output`, each price being for a million tokens: 1,000 tokens sent and 500
+        returned, at 2.0 and 6.0, cost 0.005.
+
+        `dollars` is 0.0 when the model was given no price, and when the answer has no `usage`
+        holding both counts as whole numbers that are 0 or more: what is not known is not
+        charged for.
+        """
+        raise NotImplementedError
+
     def _failed(self, what: str) -> ModelFailed:
         """One line, without the key: a provider may repeat the key back in its error."""
         message = " ".join(f"{self._name} {what}".split())
@@ -73,7 +94,18 @@ class OpenAICompatibleModel:
 def model_from_environment(
     environment: Mapping[str, str], transport: httpx.BaseTransport | None = None
 ) -> OpenAICompatibleModel | None:
-    """None when neither a key nor an endpoint is set. A pipeline sets a missing secret to ""."""
+    """None when neither a key nor an endpoint is set. A pipeline sets a missing secret to "".
+
+    The model's price is read from `PR_VERIFICATION_INPUT_PRICE` and
+    `PR_VERIFICATION_OUTPUT_PRICE`, each in dollars for a million tokens, and is given to the
+    model as its `TokenPrice`. One that is unset or set to the empty string is 0.0. When both
+    are, the model is given no price, as suits a local model. The two say nothing of whether a
+    model is configured: with neither a key nor an endpoint the answer is still None.
+
+    Raises `ModelFailed`, with a message that names the variable, when one of the two is set to
+    anything but a number that is 0 or more: a model that cannot be made as configured, as
+    with a key that cannot be sent.
+    """
     endpoint = environment.get("PR_VERIFICATION_ENDPOINT", "")
     key = environment.get("PR_VERIFICATION_API_KEY", "")
     if not endpoint and not key:

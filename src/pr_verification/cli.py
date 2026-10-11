@@ -11,6 +11,7 @@ import traceback
 from collections.abc import Sequence
 from pathlib import Path
 
+from pr_verification.budget import Budget
 from pr_verification.claims import ClaimExtractionFailed
 from pr_verification.core import InvalidPullRequest, PullRequest, run
 from pr_verification.decision import (
@@ -39,11 +40,20 @@ def main(
     decider: Decider | None = None,
     *,
     orchestration: Orchestration | None = None,
+    budget: Budget | None = None,
 ) -> int:
     """Verify the pull request the arguments name, print its report, and return the exit code.
 
     The report is `run`'s, printed to standard output as `Report.to_json` writes it. `model`,
-    `decider`, and `orchestration` are for a caller that brings its own.
+    `decider`, `orchestration`, and `budget` are for a caller that brings its own.
+
+    `budget` is passed to the core's entry point. When it is None, the one the environment
+    configures is used: `budget_from_environment(os.environ)`, which is the provisional
+    defaults unless the environment says otherwise. So the limits are set where the pipeline
+    is configured, and the printed report shows what was spent against them.
+
+    An `InvalidBudget` is handled as a model that is not configured is: one line on standard
+    error starting `pr-verification: `, no report, and exit code 2.
 
     `decider` is passed to the core's entry point with the pull request and the model. When
     it is None, the one the environment configures is used:
@@ -64,6 +74,8 @@ def main(
     with the code of a block.
     """
     arguments = _parser().parse_args(argv)
+    if budget is not None:
+        raise NotImplementedError
     try:
         if orchestration is None and arguments.state_dir is not None:
             orchestration = fixed_pipeline(arguments.state_dir)
