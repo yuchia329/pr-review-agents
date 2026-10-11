@@ -79,6 +79,10 @@ def main(
     Returns `exit_code` of the report's Gate. Returns `EXIT_NO_REPORT`, having printed no
     report, when there is none to give or anything at all is raised: a failure never exits
     with the code of a block.
+
+    All of this is done inside `traced(os.environ)` (`pr_verification.tracing`): with tracing
+    configured, the run's trace is sent before `main` returns, and what is printed and
+    returned is the same as with tracing off.
     """
     arguments = _parser().parse_args(argv)
     if budget is not None or arguments.review:

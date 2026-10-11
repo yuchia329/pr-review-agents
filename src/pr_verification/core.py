@@ -168,6 +168,9 @@ def run(
     classifies the Claims also answers the progress guard of the roles the pipeline runs, and
     with `decider` None they have none. An orchestration that is given is used as it is.
 
+    While a recording is open, the call is recorded as the spans `pr_verification.tracing`
+    describes, all under one span for the call itself. Recording changes nothing in the report.
+
     Raises `InvalidPullRequest`, `ClaimExtractionFailed`, and `ModelFailed` from steps 1 to
     3, where there is no report to give. Raises `ValueError` when the orchestration gives
     other than one `Gathered` for each Claim, and whatever else the orchestration raises.
