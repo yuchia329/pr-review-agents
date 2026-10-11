@@ -85,7 +85,8 @@ def compute_verdict(evidence: Sequence[Evidence]) -> Computed:
     met only by a regression, where what the Claim says held before the pull request and does
     not hold after it.
 
-    Until the Claim classifier is built, every Claim is verified as a Behavioural Claim.
+    Whatever kind the Claim classifier gives a Claim, it is verified as a Behavioural Claim
+    until the verification of Structural Claims is built.
     Until the Reproduction judge is built, no step checks that a Reproduction tests what its
     Claim says (ADR 0002): every Reproduction that ran on both commits is taken as Evidence.
     """
