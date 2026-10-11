@@ -78,3 +78,13 @@ def fixture_repository(tmp_path: Path) -> FixtureRepository:
 def model_listing(*claims: str) -> ScriptedModel:
     """A stand-in for the model whose one response to the Claim extractor lists these Claims."""
     return ScriptedModel([json.dumps({"claims": claims})])
+
+
+def asks(tool: str, **arguments: object) -> str:
+    """A response in which a role asks for a tool."""
+    return json.dumps({"tool": tool, "arguments": arguments})
+
+
+def finishes(**answer: object) -> str:
+    """A response in which a role finishes with an answer."""
+    return json.dumps({"finish": answer})
