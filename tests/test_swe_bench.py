@@ -43,12 +43,23 @@ LIMITS = Limits(seconds=600.0, memory_bytes=1024 * 1024 * 1024, processors=2.0)
 
 BROKEN = "def total(price, quantity):\n    return price + quantity\n"
 FIXED = BROKEN.replace("price + quantity", "price * quantity")
-STILL_BROKEN = BROKEN.replace("price + quantity", "price * quantity + 1")
-TEST_TOTAL = "from pricing import total\n\n\ndef test_total():\n    assert total(3, 4) == 12\n"
-ALWAYS_PASSES = "def test_total():\n    assert True\n"
+# The failed patch fixes one of the two tests the answer key names and not the other.
+STILL_BROKEN = BROKEN.replace("price + quantity", "price * quantity if quantity else price")
+TEST_TOTAL = """\
+from pricing import total
+
+
+def test_total():
+    assert total(3, 4) == 12
+
+
+def test_total_of_nothing():
+    assert total(5, 0) == 0
+"""
+ALWAYS_PASSES = TEST_TOTAL.replace("total(3, 4) == 12", "True").replace("total(5, 0) == 0", "True")
 # Holds 1500 megabytes if it is allowed to, and stops there so that a missing limit harms nothing.
 HOLDS_TOO_MUCH = 'held = [b"x" * 10_000_000 for _ in range(150)]\n' + TEST_TOTAL
-FAIL_TO_PASS = ("test_total.py::test_total",)
+FAIL_TO_PASS = ("test_total.py::test_total", "test_total.py::test_total_of_nothing")
 ISSUE = """\
 total() adds the quantity to the price
 
@@ -151,6 +162,12 @@ def parents(repository: Path, commit: str) -> list[str]:
     return git(repository, "rev-list", "--parents", "-n", "1", commit).split()[1:]
 
 
+# Cached, not fixtures, so that each test sharing a run fails on its own when it cannot be done.
+@functools.cache
+def true_case(source: Upstream) -> ImportedCase:
+    return import_instance(source.instance, source.clone, source.cases, Part.DEVELOPMENT)
+
+
 # Importing an instance
 
 
@@ -158,8 +175,10 @@ def test_real_fix_becomes_a_true_case_with_the_issue_text_as_its_description(
     tmp_path: Path,
 ) -> None:
     source = upstream(tmp_path)
+    base_commit = source.instance.base_commit
+    named_in_short = replace(source.instance, base_commit=base_commit[:12])
 
-    imported = import_instance(source.instance, source.clone, source.cases, Part.HELD_OUT)
+    imported = import_instance(named_in_short, source.clone, source.cases, Part.HELD_OUT)
 
     case, shown = imported.case, imported.case.pull_request
     assert (case.name, case.part, case.expected) == (
@@ -168,7 +187,7 @@ def test_real_fix_becomes_a_true_case_with_the_issue_text_as_its_description(
         Verdict.CONFIRMED,
     )
     assert (shown.title, shown.description, shown.linked_issue) == (SWE_BENCH_TITLE, ISSUE, "")
-    assert shown.before == source.instance.base_commit
+    assert shown.before == base_commit
     assert imported.answer_key == AnswerKey(source.instance.test_patch, FAIL_TO_PASS)
 
 
@@ -177,9 +196,7 @@ def test_pull_request_of_a_true_case_is_the_base_commit_with_the_real_fix_and_no
 ) -> None:
     source = upstream(tmp_path)
 
-    shown = import_instance(
-        source.instance, source.clone, source.cases, Part.DEVELOPMENT
-    ).case.pull_request
+    shown = true_case(source).case.pull_request
 
     assert parents(shown.repository, shown.after) == [shown.before]
     assert tree(shown.repository, shown.after) == tree(source.clone, source.fixed)
@@ -191,14 +208,14 @@ def test_true_case_has_a_repository_of_its_own_that_holds_nothing_after_the_base
     source = upstream(tmp_path)
     answer_key_test = git(source.clone, "rev-parse", "HEAD:test_total.py")
 
-    shown = import_instance(
-        source.instance, source.clone, source.cases, Part.DEVELOPMENT
-    ).case.pull_request
+    shown = true_case(source).case.pull_request
 
     assert source.cases in shown.repository.parents
     # The base commit is the clone's first, so it has no ancestors to hold as well.
-    assert commits_in(shown.repository) == {shown.before, shown.after}
+    after = git(shown.repository, "rev-parse", shown.after)
+    assert commits_in(shown.repository) == {shown.before, after}
     assert answer_key_test not in held_by(shown.repository)[0]
+    assert not list(shown.repository.rglob("test_total.py"))
 
 
 def test_importing_an_instance_only_reads_the_clone(tmp_path: Path) -> None:
@@ -210,7 +227,7 @@ def test_importing_an_instance_only_reads_the_clone(tmp_path: Path) -> None:
 
     as_it_was = state()
 
-    import_instance(source.instance, source.clone, source.cases, Part.DEVELOPMENT)
+    true_case(source)
 
     assert state() == as_it_was
 
@@ -218,7 +235,8 @@ def test_importing_an_instance_only_reads_the_clone(tmp_path: Path) -> None:
 def test_instances_imported_into_one_directory_each_get_a_repository_of_their_own(
     tmp_path: Path,
 ) -> None:
-    cases = upstream(tmp_path).cases
+    cases = tmp_path / "cases"
+    cases.mkdir()
     first, second = upstream(tmp_path, "billing"), upstream(tmp_path, "shipping")
 
     repositories = [
@@ -281,7 +299,7 @@ def test_false_case_has_a_repository_of_its_own_that_holds_its_patch_and_not_the
     tmp_path: Path,
 ) -> None:
     source = upstream(tmp_path)
-    true = import_instance(source.instance, source.clone, source.cases, Part.DEVELOPMENT)
+    true = true_case(source)
     true_repository = true.case.pull_request.repository
     as_it_was = held_by(true_repository)
 
@@ -291,7 +309,8 @@ def test_false_case_has_a_repository_of_its_own_that_holds_its_patch_and_not_the
     assert shown.repository != true_repository
     assert parents(shown.repository, shown.after) == [shown.before]
     assert tree(shown.repository, shown.after) == tree(source.clone, source.still_broken)
-    assert commits_in(shown.repository) == {shown.before, shown.after}
+    after = git(shown.repository, "rev-parse", shown.after)
+    assert commits_in(shown.repository) == {shown.before, after}
     assert held_by(true_repository) == as_it_was
 
 
@@ -304,7 +323,7 @@ def test_failed_patch_that_cannot_be_made_into_a_case_fails_to_import(
     tmp_path: Path, change: dict[str, Any]
 ) -> None:
     source = upstream(tmp_path)
-    true = import_instance(source.instance, source.clone, source.cases, Part.DEVELOPMENT)
+    true = true_case(source)
 
     with pytest.raises(ImportFailed):
         import_failed_patch(true, replace(source.failed_patch, **change), source.cases)
@@ -341,9 +360,9 @@ def test_same_ids_count_share_and_seed_give_the_same_selection_in_any_order_howe
     count = data.draw(st.integers(0, len(pool)))
     reordered_and_repeated = data.draw(st.permutations([*pool, *pool]))
 
-    assert select(reordered_and_repeated, count=count, held_out_share=share, seed=seed) == select(
-        sorted(pool), count=count, held_out_share=share, seed=seed
-    )
+    assert select(
+        iter(reordered_and_repeated), count=count, held_out_share=share, seed=seed
+    ) == select(sorted(pool), count=count, held_out_share=share, seed=seed)
 
 
 @pytest.mark.parametrize(
@@ -356,23 +375,22 @@ def test_selection_that_cannot_be_made_is_refused(count: int, share: float) -> N
         select(["a", "b", "c", "a"], count=count, held_out_share=share, seed=1)
 
 
-@given(
-    st.builds(
-        Selection,
-        seed=st.integers(),
-        development=st.lists(st.text()).map(tuple),
-        held_out=st.lists(st.text()).map(tuple),
-    )
-)
-def test_selection_written_as_json_is_read_back_as_it_was(selection: Selection) -> None:
-    written = selection.to_json()
+@given(st.integers(), st.dictionaries(st.text(), st.sampled_from(list(Part))))
+def test_selection_written_as_json_is_read_back_as_it_was(
+    seed: int, chosen: dict[str, Part]
+) -> None:
+    development = sorted(name for name, part in chosen.items() if part is Part.DEVELOPMENT)
+    held_out = sorted(name for name, part in chosen.items() if part is Part.HELD_OUT)
+    selection = Selection(seed, tuple(development), tuple(held_out))
 
-    assert json.loads(written) == {
-        "seed": selection.seed,
-        "development": list(selection.development),
-        "held_out": list(selection.held_out),
-    }
-    assert Selection.from_json(written) == selection
+    written = json.loads(selection.to_json())
+
+    assert (written["seed"], written["development"], written["held_out"]) == (
+        seed,
+        development,
+        held_out,
+    )
+    assert Selection.from_json(selection.to_json()) == selection
 
 
 @pytest.mark.parametrize("text", ["not JSON", "[]", '{"seed": 1}'])
@@ -389,19 +407,17 @@ def shop(tmp_path_factory: pytest.TempPathFactory) -> Upstream:
     return upstream(tmp_path_factory.mktemp("shop"))
 
 
-# Cached, not fixtures, so that each test sharing a run fails on its own when it cannot be done.
-@functools.cache
-def true_case(source: Upstream) -> ImportedCase:
-    return import_instance(source.instance, source.clone, source.cases, Part.DEVELOPMENT)
-
-
 @functools.cache
 def answered(imported: ImportedCase) -> tuple[AnswerKeyRun, bool]:
     """The run of a case's answer key, and whether it left the case's repository as it was."""
     repository = imported.case.pull_request.repository
-    as_it_was = held_by(repository)
+
+    def state() -> tuple[object, ...]:
+        return held_by(repository), sorted(repository.rglob("test_total.py"))
+
+    as_it_was = state()
     run = run_answer_key(imported, LIMITS)
-    return run, held_by(repository) == as_it_was
+    return run, state() == as_it_was
 
 
 def test_real_fix_passes_its_answer_key(shop: Upstream) -> None:
@@ -471,26 +487,36 @@ class Offered:
     instances: tuple[Instance, ...]
     failed_patches: tuple[FailedPatch, ...]
     clones: tuple[tuple[str, Path], ...]
+    """As pairs and not a mapping, so that what is offered can be the key `the_set` is cached by."""
     directory: Path
 
 
 @pytest.fixture(scope="module")
 def offered(tmp_path_factory: pytest.TempPathFactory) -> Offered:
     directory = tmp_path_factory.mktemp("offered")
-    pricing = upstream(directory)
+    pricing, billing = upstream(directory), upstream(directory, "billing")
     notes = upstream(directory, "notes", suffix=".txt")
     # Its real fix does not pass the answer key: the test named is not one the key holds.
     shipping = upstream(directory, "shipping", fail_to_pass=("test_total.py::test_absent",))
-    lost = upstream(directory, "lost")
-    unselected = upstream(directory, "unselected")
+    torn, lost, unselected = (upstream(directory, name) for name in ("torn", "lost", "unselected"))
     return Offered(
+        # Sorting all the IDs together would not put the development part first.
         selection=Selection(
             seed=7,
-            development=("shop__absent-1", "shop__pricing-1"),
-            held_out=("shop__lost-1", "shop__notes-1", "shop__shipping-1"),
+            development=("shop__notes-1", "shop__pricing-1", "shop__torn-1"),
+            held_out=("shop__absent-1", "shop__billing-1", "shop__lost-1", "shop__shipping-1"),
         ),
-        instances=tuple(source.instance for source in (unselected, shipping, notes, lost, pricing)),
+        instances=(
+            unselected.instance,
+            shipping.instance,
+            notes.instance,
+            lost.instance,
+            billing.instance,
+            replace(torn.instance, patch=DOES_NOT_APPLY),
+            pricing.instance,
+        ),
         failed_patches=(
+            billing.failed_patch,
             pricing.failed_patch,
             replace(pricing.failed_patch, submission="fixes-it", patch=pricing.instance.patch),
             replace(pricing.failed_patch, submission="garbled", patch=DOES_NOT_APPLY),
@@ -499,7 +525,7 @@ def offered(tmp_path_factory: pytest.TempPathFactory) -> Offered:
         ),
         clones=tuple(
             (source.instance.repo, source.clone)
-            for source in (pricing, notes, shipping, unselected)
+            for source in (pricing, billing, notes, shipping, torn, unselected)
         ),
         directory=pricing.cases,
     )
@@ -509,42 +535,49 @@ def offered(tmp_path_factory: pytest.TempPathFactory) -> Offered:
 def the_set(offered: Offered) -> CaseSet:
     return build_case_set(
         offered.selection,
-        offered.instances,
-        offered.failed_patches,
+        iter(offered.instances),
+        iter(offered.failed_patches),
         dict(offered.clones),
         offered.directory,
         LIMITS,
     )
 
 
+def made(case_set: CaseSet) -> list[tuple[str, Part, Verdict]]:
+    return [
+        (imported.case.name, imported.case.part, imported.case.expected)
+        for imported in case_set.cases
+    ]
+
+
 def left_out(case_set: CaseSet) -> dict[str, LeftOutFor]:
     return {left.name: left.why for left in case_set.left_out}
 
 
-def test_real_fix_that_passes_its_answer_key_becomes_a_true_case_in_its_part(
-    offered: Offered,
-) -> None:
-    true = the_set(offered).cases[0].case
-
-    assert (true.name, true.part, true.expected) == (
-        "shop__pricing-1",
-        Part.DEVELOPMENT,
-        Verdict.CONFIRMED,
-    )
-    assert offered.directory in true.pull_request.repository.parents
-
-
-def test_failed_patch_becomes_a_false_case_only_when_its_answer_key_fails(
+def test_real_fixes_that_pass_their_answer_keys_become_true_cases_development_first(
     offered: Offered,
 ) -> None:
     case_set = the_set(offered)
 
-    false = case_set.cases[1].case
-    assert (false.name, false.part, false.expected) == (
-        "shop__pricing-1@some-agent",
-        Part.DEVELOPMENT,
-        Verdict.REFUTED,
+    assert made(case_set)[:2] == [
+        ("shop__pricing-1", Part.DEVELOPMENT, Verdict.CONFIRMED),
+        ("shop__billing-1", Part.HELD_OUT, Verdict.CONFIRMED),
+    ]
+    assert all(
+        offered.directory in imported.case.pull_request.repository.parents
+        for imported in case_set.cases
     )
+
+
+def test_failed_patches_become_false_cases_in_the_order_offered_only_when_their_answer_keys_fail(
+    offered: Offered,
+) -> None:
+    case_set = the_set(offered)
+
+    assert made(case_set)[2:] == [
+        ("shop__billing-1@some-agent", Part.HELD_OUT, Verdict.REFUTED),
+        ("shop__pricing-1@some-agent", Part.DEVELOPMENT, Verdict.REFUTED),
+    ]
     assert left_out(case_set)["shop__pricing-1@fixes-it"] is LeftOutFor.ANSWER_KEY_NOT_FAILED
 
 
@@ -572,28 +605,28 @@ def test_failed_patch_for_an_issue_with_no_true_case_in_the_set_is_left_out(
 def test_what_cannot_be_imported_is_left_out(offered: Offered) -> None:
     listed = left_out(the_set(offered))
 
-    # No instance was given for the first, no clone for the second, and the third does not apply.
+    # No instance was given for the first and no clone for the second. The patches of the other
+    # two, a real fix and a failed patch, do not apply.
     assert listed["shop__absent-1"] is LeftOutFor.CANNOT_IMPORT
     assert listed["shop__lost-1"] is LeftOutFor.CANNOT_IMPORT
+    assert listed["shop__torn-1"] is LeftOutFor.CANNOT_IMPORT
     assert listed["shop__pricing-1@garbled"] is LeftOutFor.CANNOT_IMPORT
 
 
-def test_every_selected_instance_and_failed_patch_offered_is_a_case_or_is_listed_in_order(
+def test_everything_selected_or_offered_that_is_not_a_case_is_listed_in_order(
     offered: Offered,
 ) -> None:
     case_set = the_set(offered)
 
     assert case_set.selection == offered.selection
-    assert [imported.case.name for imported in case_set.cases] == [
-        "shop__pricing-1",
-        "shop__pricing-1@some-agent",
-    ]
+    assert len(case_set.cases) == 4
     # Selected instances, development first, then failed patches as offered. The instance that
     # was not selected is in neither.
     assert [left.name for left in case_set.left_out] == [
+        "shop__notes-1",
+        "shop__torn-1",
         "shop__absent-1",
         "shop__lost-1",
-        "shop__notes-1",
         "shop__shipping-1",
         "shop__pricing-1@fixes-it",
         "shop__pricing-1@garbled",

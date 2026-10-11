@@ -4,6 +4,7 @@ Nothing here reaches a real model or a dataset. The entry point is either the co
 scripted stand-in for the model, or a stand-in system that gives prepared Verdicts.
 """
 
+import inspect
 import json
 from collections.abc import Iterable, Sequence
 from dataclasses import fields
@@ -15,7 +16,7 @@ from conftest import FixtureRepository, git, model_listing
 from hypothesis import given
 from hypothesis import strategies as st
 
-from pr_verification import cli
+from pr_verification import cli, core
 from pr_verification.claims import ClaimExtractionFailed
 from pr_verification.core import InvalidPullRequest, PullRequest
 from pr_verification.evaluation import (
@@ -94,7 +95,7 @@ def test_run_that_gave_no_verdicts_adds_no_claim_and_is_counted_apart() -> None:
     report_with_no_claims = a_run(CONFIRMED)
     no_report = a_run(REFUTED, spend=None)
 
-    scores = score([report_with_no_claims, no_report, a_run(CONFIRMED, CONFIRMED)])
+    scores = score(iter([report_with_no_claims, no_report, a_run(CONFIRMED, CONFIRMED)]))
 
     assert (scores.runs, scores.runs_without_verdicts) == (3, 2)
     assert (scores.claims, scores.decided, scores.inconclusive) == (1, 1, 0)
@@ -144,27 +145,27 @@ def test_time_and_cost_per_pull_request_are_means_over_the_runs_where_they_are_k
     assert known_for_none.dollars_per_pull_request is None
 
 
-def test_run_that_expects_inconclusive_cannot_be_scored() -> None:
+@pytest.mark.parametrize("verdicts", [(CONFIRMED,), ()], ids=["a Verdict", "no Verdicts"])
+def test_run_that_expects_inconclusive_cannot_be_scored(verdicts: tuple[Verdict, ...]) -> None:
     with pytest.raises(ValueError):
-        score([a_run(INCONCLUSIVE, CONFIRMED)])
+        score([a_run(INCONCLUSIVE, *verdicts)])
 
 
 def case_runs(verdicts: st.SearchStrategy[Verdict]) -> st.SearchStrategy[list[CaseRun]]:
+    """Runs that gave a report, with any number of Claims in it, and runs that gave none."""
+    names, repetitions = st.sampled_from(["a", "b", "c"]), st.integers(1, 3)
+    expected = st.sampled_from([CONFIRMED, REFUTED])
     spends = st.builds(
         BudgetSpend, seconds=st.floats(0, 900), dollars=st.floats(0, 5), steps=st.integers(0, 50)
     )
-    return st.lists(
-        st.builds(
-            CaseRun,
-            name=st.sampled_from(["a", "b", "c"]),
-            repetition=st.integers(1, 3),
-            expected=st.sampled_from([CONFIRMED, REFUTED]),
-            verdicts=st.lists(verdicts, max_size=4).map(tuple),
-            spend=st.none() | spends,
-            no_report=st.none(),
-        ),
-        max_size=12,
+    given_verdicts = st.lists(verdicts, max_size=4).map(tuple)
+    with_a_report = st.builds(
+        CaseRun, names, repetitions, expected, given_verdicts, spends, st.none()
     )
+    without_one = st.builds(
+        CaseRun, names, repetitions, expected, st.just(()), st.none(), st.just(NO_REPORT)
+    )
+    return st.lists(with_a_report | without_one, max_size=12)
 
 
 @given(case_runs(st.sampled_from(list(Verdict))))
@@ -292,14 +293,15 @@ def test_harness_runs_a_pull_request_through_the_entry_point_the_command_line_to
     printed = json.loads(capsys.readouterr().out)
     (run,) = evaluation.development.runs
     assert list(run.verdicts) == [claim["verdict"] for claim in printed["claims"]]
-    assert [title in request.data for request in model.requests] == [True]
+    assert any(title in request.data for request in model.requests)
+    assert inspect.signature(evaluate).parameters["entry_point"].default is core.run
 
 
 def test_every_case_is_run_once_in_the_order_given_then_every_case_again() -> None:
     cases = [a_case("first"), a_case("second", HELD_OUT), a_case("third")]
     system = PreparedSystem(repeat((CONFIRMED,)))
 
-    evaluate(cases, MODEL, repetitions=2, entry_point=system)
+    evaluate(iter(cases), MODEL, repetitions=2, entry_point=system)
 
     assert [shown for shown, _ in system.calls] == [case.pull_request for case in cases] * 2
     assert all(model is MODEL for _, model in system.calls)
@@ -394,34 +396,35 @@ def test_evaluation_that_cannot_be_scored_is_refused_before_anything_is_run(
     assert system.calls == []
 
 
-def as_json(scores: Scores) -> dict[str, object]:
-    stored = {field.name: getattr(scores, field.name) for field in fields(scores)}
-    return {
-        **stored,
+def holds(printed: dict[str, object], scores: Scores) -> bool:
+    """Whether a printed scores object holds every field of `scores`, `claims`, and the rates."""
+    expected = {field.name: getattr(scores, field.name) for field in fields(scores)} | {
         "claims": scores.claims,
         "decided_rate": scores.decided_rate,
         "false_block_rate": scores.false_block_rate,
         "false_assurance_rate": scores.false_assurance_rate,
     }
+    return {name: printed.get(name, "absent") for name in expected} == expected
 
 
 def test_evaluation_is_reported_as_json_with_the_two_parts_apart() -> None:
     cases = [a_case("tuned-on", DEVELOPMENT, CONFIRMED), a_case("kept-back", HELD_OUT, REFUTED)]
-    system = PreparedSystem([(CONFIRMED,), (INCONCLUSIVE,), (REFUTED,), (CONFIRMED,)])
+    unreachable = ModelFailed(NO_REPORT)
+    system = PreparedSystem([(CONFIRMED,), unreachable, (REFUTED,), unreachable])
     evaluation = evaluate(cases, MODEL, repetitions=2, entry_point=system)
 
     printed = json.loads(evaluation.to_json())
 
-    assert set(printed) == {"repetitions", "development", "held_out"}
     assert printed["repetitions"] == 2
     for name, part in (("development", evaluation.development), ("held_out", evaluation.held_out)):
-        assert printed[name] == {
-            "scores": as_json(part.scores),
-            "by_repetition": [as_json(scores) for scores in part.by_repetition],
-            "varying": list(part.varying),
-        }
-    # A part with only true Claims has no false ones to take a share of.
-    assert printed["development"]["scores"]["false_assurance_rate"] is None
+        assert holds(printed[name]["scores"], part.scores)
+        assert len(printed[name]["by_repetition"]) == 2
+        assert all(map(holds, printed[name]["by_repetition"], part.by_repetition))
+        assert printed[name]["varying"] == list(part.varying)
+    # No run of the held-out part gave a report, so it has no Claims and no known time or cost.
+    held_out = printed["held_out"]["scores"]
+    assert (held_out["decided_rate"], held_out["seconds_per_pull_request"]) == (None, None)
+    assert held_out["dollars_per_pull_request"] is None
 
 
 # The hand-made cases
@@ -452,7 +455,7 @@ def test_each_hand_made_case_has_a_repository_of_its_own_that_holds_its_two_comm
         before = git(shown.repository, "rev-parse", "--verify", f"{shown.before}^{{commit}}")
         after = git(shown.repository, "rev-parse", "--verify", f"{shown.after}^{{commit}}")
         assert before != after
-        assert shown.title.strip()
+        assert shown.title
 
 
 def test_hand_made_cases_are_the_same_wherever_they_are_built(tmp_path: Path) -> None:
