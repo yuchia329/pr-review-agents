@@ -140,6 +140,44 @@ class Sandbox(Protocol):
         ...
 
 
+class SandboxWithHomes(Sandbox, Protocol):
+    """A Sandbox whose home directories can be saved to a file and put back from one.
+
+    The home directory of a commit is where its install phase leaves what it installs, so this
+    is what lets installed dependencies be used again in another Sandbox.
+    """
+
+    def save_home(self, commit: str, archive: Path) -> None:
+        """Save the home directory of `commit`, as the runs against it so far left it.
+
+        `archive` is where the file goes, in a directory that exists. A file already there is
+        replaced. The file is there only once it is whole: a save that fails leaves the file
+        that was there before, or none. What the file looks like inside is the Sandbox's own
+        business.
+
+        Raises `SandboxFailed` when the Sandbox itself cannot do it.
+        """
+        ...
+
+    def restore_home(self, commit: str, archive: Path) -> None:
+        """Make the home directory of `commit` hold exactly what `archive` holds.
+
+        `archive` is a file `save_home` wrote: in this Sandbox or in another with the same
+        image, for this commit or for another. Whatever the home directory held before is
+        gone. Each file and directory saved is back under the same name with the same contents
+        and permissions, and belongs to the user that commands run as, so a later run can
+        read, run, and change what an earlier install phase left. The working copy is not
+        touched.
+
+        What is in the archive was written by code that ran in a Sandbox. It is unpacked only
+        inside one, never on the machine that started the Sandbox.
+
+        Raises `SandboxFailed` when the Sandbox itself cannot do it, as when `archive` is not
+        a file `save_home` wrote.
+        """
+        ...
+
+
 _VOLUME = "/sandbox"
 """Where a commit's volume sits inside the container."""
 
@@ -165,7 +203,8 @@ memory limit. That report and the report of its death come by different routes."
 
 
 class ContainerSandbox:
-    """The `Sandbox` as a local container (ADR 0001). It keeps every promise `Sandbox.run` makes.
+    """The `Sandbox` as a local container (ADR 0001). It keeps every promise `Sandbox.run` makes,
+    and those of `SandboxWithHomes`.
 
     A container is a weaker boundary than a virtual machine: an escape through the kernel could
     reach the process that started it. That limit is documented, not removed.
@@ -223,6 +262,14 @@ class ContainerSandbox:
             return _run_to_its_end(container, limits.seconds)
         finally:
             _docker("rm", "--force", "--volumes", container)
+
+    def save_home(self, commit: str, archive: Path) -> None:
+        """See `SandboxWithHomes.save_home`."""
+        raise NotImplementedError
+
+    def restore_home(self, commit: str, archive: Path) -> None:
+        """See `SandboxWithHomes.restore_home`."""
+        raise NotImplementedError
 
     def close(self) -> None:
         """Remove everything this Sandbox made. Calling it again does nothing."""

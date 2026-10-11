@@ -23,6 +23,19 @@ REPRODUCTION_PATH = "test_pr_verification_reproduction.py"
 PYTHON_VERSIONS = ("3.14", "3.13", "3.12", "3.11", "3.10")
 """The Python versions a repository can be run on, newest first."""
 
+LOCK_FILES = (
+    "dev-requirements.txt",
+    "pyproject.toml",
+    "requirements-dev.txt",
+    "requirements-test.txt",
+    "requirements.txt",
+    "setup.cfg",
+    "setup.py",
+    "test-requirements.txt",
+)
+"""The root files that decide how a Python repository is installed, sorted. A file that one of
+them includes in turn, as a requirements file can, is not followed."""
+
 _TEST_NAMES = ("test", "tests", "testing", "dev")
 """What an extra or a dependency group that holds a project's test dependencies is named."""
 
@@ -82,6 +95,10 @@ class PythonEcosystem:
         `image` is the official Python image `python:<version>-slim`, where the version is the
         first in `PYTHON_VERSIONS` that `requires-python` in `pyproject.toml` allows, or the
         first of all when the commit does not state one there.
+
+        `test_framework` is `pytest`. `test_layout` names each directory that holds a file of
+        the commit named `test_*.py` or `*_test.py`, which is what pytest takes for a test
+        file. `lock_files` is `LOCK_FILES`, whichever of them the commit holds.
 
         Returns `Unsupported` with the reason `NOT_A_PYTHON_PROJECT` when the commit matches
         none of the layouts.

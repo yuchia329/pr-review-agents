@@ -33,6 +33,26 @@ class Commands:
     """The command that runs the repository's tests in `Phase.TEST`, from the root of the
     working copy, after the install commands. Its result is what `read_results` reads."""
 
+    test_framework: str = ""
+    """The name of the test framework `test` runs, as that framework's own project writes it,
+    such as `pytest`. Empty when the Ecosystem's test tooling has no name."""
+
+    test_layout: tuple[str, ...] = ()
+    """Where the commit keeps its tests: the directories that hold its test files, as paths
+    from the root of the repository with `/` between their parts and `.` for the root itself,
+    sorted, each once. Each Ecosystem states what it takes for a test file. Empty when the
+    commit holds none."""
+
+    lock_files: tuple[str, ...] = ()
+    """The dependency lock file of the repository, as the files that make it up: the paths from
+    the root of the repository of every file the Ecosystem reads to decide `image`, `install`,
+    and what the install commands install, sorted, each once. A path is named whether or not
+    the commit holds a file there, so that a file added later counts as a change. Two commits
+    that agree on every path, each holding the same contents there or each holding no file,
+    get the same `image` and the same `install`. A repository that pins nothing still has
+    them: they are then the files that declare its dependencies. Empty when the Ecosystem
+    names none."""
+
 
 @dataclass(frozen=True)
 class Unsupported:
