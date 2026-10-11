@@ -107,15 +107,21 @@ is removed from any error Jev sends back.
 
 Jev takes 32k of its own tokens for the state and the question, and publishes no tokenizer. A
 token is seldom shorter than a byte, so `JevDecider` refuses an input over 30,000 bytes of UTF-8
-with `InputTooLong` and sends nothing. That refuses some inputs Jev would take. Whether it
-keeps every input within Jev's limit is not confirmed: how Jev counts a state, and what it does
-with one that is too long, has not been tried.
+with `InputTooLong` and sends nothing. That refuses some inputs Jev would take.
+
+Tried against Jev itself on 2026-10-11, with states of exactly 30,000 bytes sent straight to
+it: plain words came to 5,276 of Jev's tokens, CJK text to 10,333, and random letters and
+digits to 21,117, each well within 32k. A state of about 40,000 words was refused with HTTP 400
+and `max_tokens_exceeded`, so Jev does not cut an input short either. Had such a state come
+through `JevDecider`, that refusal would be a `DecisionFailed` and not an `InputTooLong`; no
+state under the byte limit has been found that reaches it.
 
 The client was written from TypeSafe's API reference and first checked on 2026-10-10 against
 the response shapes that reference documents, replayed locally, and against `laya-serve`, which
 serves the same request and response shape. It first reached Jev itself on 2026-10-11, in the
-comparison below: 30 choices asked, 30 answered. A yes-or-no question, an input over the limit,
-and a wrong key have not been tried against Jev itself.
+comparison below: 30 choices asked, 30 answered. The same day a yes-or-no question was answered
+0.15 for a state that was stuck and 0.95 for one that was moving, and a wrong key was refused
+with HTTP 401, reported in one line that did not hold the key.
 
 ## The three-way comparison
 
