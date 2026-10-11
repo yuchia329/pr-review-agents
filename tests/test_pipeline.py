@@ -431,9 +431,9 @@ def test_failure_while_working_on_one_claim_does_not_stop_work_on_the_others(
         {"Adds tax": writes("fixed"), "Rounds": response, "Keeps the net price": writes("broken")}
     )
 
-    first, failed, last = gather(a_pipeline(tmp_path / "state", Sandboxes(shop)), shop, model)
+    first, unfinished, last = gather(a_pipeline(tmp_path / "state", Sandboxes(shop)), shop, model)
 
-    assert failed == Gathered((), COULD_NOT_FINISH.format(failure=failure))
+    assert unfinished == Gathered((), COULD_NOT_FINISH.format(failure=failure))
     assert [len(gathered.evidence) for gathered in (first, last)] == [1, 1]
     assert (first.inconclusive, last.inconclusive) == (None, None)
 
@@ -581,7 +581,8 @@ def test_another_orchestration_takes_the_place_of_the_pipeline_with_the_roles_un
     another = run(pull_request, by_another, orchestration=LastClaimFirst(shop))
 
     assert another.claims == report.claims
-    assert [claim.verdict for claim in another.claims] == list(Verdict)
+    verdicts = [Verdict.CONFIRMED, Verdict.REFUTED, Verdict.INCONCLUSIVE]
+    assert [claim.verdict for claim in another.claims] == verdicts
     asked = [json.loads(request.data)["task"]["claim"] for request in by_another.requests[1:]]
     assert asked == [*["Rounds"] * ATTEMPT_CAP, "Keeps", "Adds tax"]
 

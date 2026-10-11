@@ -1,13 +1,20 @@
 import json
 
 import pytest
-from conftest import FixtureRepository, model_listing
+from conftest import FixtureRepository, GathersNothing, model_listing
 
+from pr_verification import core, verdict
 from pr_verification.claims import CLAIM_KIND, ClaimExtractionFailed, classify_claim
-from pr_verification.core import PullRequest, run
-from pr_verification.decision import DecisionFailed, ScriptedDecider
-from pr_verification.model import ScriptedModel
-from pr_verification.report import ClaimKind, ClassifiedClaim, GateDecision, Verdict
+from pr_verification.core import PullRequest
+from pr_verification.decision import Decider, DecisionFailed, ScriptedDecider
+from pr_verification.model import Model, ScriptedModel
+from pr_verification.report import ClaimKind, ClassifiedClaim, GateDecision, Report, Verdict
+
+
+def run(pull_request: PullRequest, model: Model, decider: Decider | None = None) -> Report:
+    """The core's entry point with an orchestration that gathers no Evidence, so that no
+    Sandbox is opened: these tests are of the Claims, not of how they are verified."""
+    return core.run(pull_request, model, decider, orchestration=GathersNothing())
 
 
 def _pull_request(
@@ -37,7 +44,7 @@ def test_claims_the_pull_request_makes_are_listed_in_the_report(
     ]
 
 
-def test_each_claim_is_inconclusive_because_it_has_not_been_verified_yet(
+def test_each_claim_is_inconclusive_when_no_evidence_was_gathered_for_it(
     fixture_repository: FixtureRepository,
 ) -> None:
     report = run(
@@ -46,7 +53,7 @@ def test_each_claim_is_inconclusive_because_it_has_not_been_verified_yet(
     )
 
     assert [claim.verdict for claim in report.claims] == [Verdict.INCONCLUSIVE] * 2
-    assert all("not been verified yet" in claim.reason for claim in report.claims)
+    assert all(claim.reason == verdict.NO_REPRODUCTION_RAN for claim in report.claims)
     assert all(claim.evidence == () for claim in report.claims)
     assert report.gate.decision is GateDecision.PASS
     assert report.gate.note == "Claims: 0 Confirmed, 0 Refuted, 2 Inconclusive."

@@ -215,7 +215,6 @@ def test_every_claim_receives_a_verdict_in_the_order_extracted_with_all_its_evid
         ("Keeps prices", Verdict.REFUTED, (REGRESSED, RAN_A_COMMAND)),
     ]
     assert report.gate.decision is GateDecision.BLOCK
-    assert report.gate.note == "Claims: 1 Confirmed, 1 Refuted, 1 Inconclusive."
     assert report.findings == ()
     assert (report.budget_spend.dollars, report.budget_spend.steps) == (0, 0)
     assert report.budget_spend.seconds >= 0

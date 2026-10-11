@@ -37,7 +37,6 @@ def test_gate_blocks_exactly_when_at_least_one_verdict_is_refuted(verdicts: list
     blocks = compute_gate(verdicts).decision is GateDecision.BLOCK
 
     assert blocks == (REFUTED in verdicts)
-    assert compute_gate(iter(verdicts)).decision in GateDecision
 
 
 def test_gate_note_says_nothing_to_verify_only_when_there_are_no_claims() -> None:

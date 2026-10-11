@@ -2,7 +2,7 @@ import json
 
 import httpx
 import pytest
-from conftest import FixtureRepository
+from conftest import FixtureRepository, GathersNothing
 
 from pr_verification.core import PullRequest, run
 from pr_verification.model import ModelFailed, ModelRequest
@@ -276,6 +276,7 @@ def test_core_lists_the_claims_the_model_behind_the_endpoint_extracts_and_never_
             title="Fix the crash on empty input",
         ),
         _model(provider, key="secret-key"),
+        orchestration=GathersNothing(),
     )
 
     assert [claim.text for claim in report.claims] == ["Fixes the crash on empty input"]
