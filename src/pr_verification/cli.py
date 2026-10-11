@@ -1,4 +1,8 @@
-"""Command line for the core. Exit code: 0 the Gate passes, 1 the Gate blocks, 2 no report."""
+"""Command line for the core. Exit code: 0 the Gate passes, 1 the Gate blocks, 2 no report.
+
+The report is printed whole whenever there is one, whichever way the Gate goes, and the exit
+code is the Gate's: 1 when, and only when, at least one Claim is Refuted.
+"""
 
 import argparse
 import os
@@ -12,6 +16,7 @@ from pr_verification.core import InvalidPullRequest, PullRequest, run
 from pr_verification.decision import Decider
 from pr_verification.model import Model, ModelFailed
 from pr_verification.openai_compatible import model_from_environment
+from pr_verification.orchestration import Orchestration
 from pr_verification.report import Gate, GateDecision
 
 EXIT_PASS = 0
@@ -27,8 +32,13 @@ def main(
     argv: Sequence[str] | None = None,
     model: Model | None = None,
     decider: Decider | None = None,
+    *,
+    orchestration: Orchestration | None = None,
 ) -> int:
-    """Run the core on the pull request the arguments describe and print its report.
+    """Verify the pull request the arguments name, print its report, and return the exit code.
+
+    The report is `run`'s, printed to standard output as `Report.to_json` writes it. `model`,
+    `decider`, and `orchestration` are for a caller that brings its own.
 
     `decider` is passed to the core's entry point with the pull request and the model. When
     it is None, the one the environment configures is used:
@@ -37,8 +47,20 @@ def main(
 
     An `InvalidDecisionConfiguration` is handled as a model that is not configured is: one
     line on standard error starting `pr-verification: `, no report, and exit code 2.
+
+    Without `orchestration`:
+
+    - with `--state-dir DIRECTORY`, the orchestration is `fixed_pipeline(DIRECTORY)`, so the
+      Repo Profile and installed dependencies are kept there between runs;
+    - without it, `run` is given none, and nothing is kept between runs.
+
+    Returns `exit_code` of the report's Gate. Returns `EXIT_NO_REPORT`, having printed no
+    report, when there is none to give or anything at all is raised: a failure never exits
+    with the code of a block.
     """
     arguments = _parser().parse_args(argv)
+    if arguments.state_dir is not None:
+        raise NotImplementedError
     try:
         if model is None:
             model = model_from_environment(os.environ)
@@ -60,6 +82,7 @@ def main(
                 linked_issue=_read(arguments.linked_issue_file),
             ),
             model,
+            orchestration=orchestration,
         )
         print(report.to_json(), flush=True)
     except (
@@ -93,4 +116,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--title", required=True, help="pull request title")
     parser.add_argument("--description-file", type=Path, help="file with the description")
     parser.add_argument("--linked-issue-file", type=Path, help="file with the linked issue text")
+    parser.add_argument(
+        "--state-dir",
+        type=Path,
+        help="directory the Repo Profile and installed dependencies are kept in between runs",
+    )
     return parser

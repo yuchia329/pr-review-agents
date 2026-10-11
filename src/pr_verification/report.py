@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 
+from pr_verification.ecosystem import Results, Unreadable
 from pr_verification.sandbox import Command, RunResult
 
 
@@ -59,8 +60,11 @@ class ReproductionEvidence(RunEvidence):
     """Evidence obtained by running one Reproduction against both commits.
 
     A `RunEvidence` whose `command` ran the Reproduction. In the printed report it appears
-    among a Claim's `evidence` as a `RunEvidence` does, and with `path` and `reproduction`, so
-    that the Reproduction and its output on both commits can be read there.
+    among a Claim's `evidence` as a `RunEvidence` does, and with `path`, `reproduction`,
+    `before_results`, and `after_results`, so that the Reproduction and its output on both
+    commits can be read there. Results that were read appear as `passed`, `failed`, and
+    `could_not_run`, results that could not be read as `reason`, and results never read as
+    null.
     """
 
     path: str
@@ -68,6 +72,12 @@ class ReproductionEvidence(RunEvidence):
     reproduction: str
     """The text of the Reproduction, exactly as it was run. A model wrote it from what it
     read, so it is Untrusted Content."""
+    before_results: Results | Unreadable | None = None
+    """Which tests of the Reproduction passed and failed against the code before the pull
+    request, as its Ecosystem read them from `before`. None when they were never read. A
+    Verdict is computed from these and from `after_results`, and from nothing else here."""
+    after_results: Results | Unreadable | None = None
+    """The same, against the code after the pull request."""
 
 
 @dataclass(frozen=True)
