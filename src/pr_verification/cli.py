@@ -13,7 +13,12 @@ from pathlib import Path
 
 from pr_verification.claims import ClaimExtractionFailed
 from pr_verification.core import InvalidPullRequest, PullRequest, run
-from pr_verification.decision import Decider
+from pr_verification.decision import (
+    Decider,
+    InvalidDecisionConfiguration,
+    configured_decider,
+    decision_configuration,
+)
 from pr_verification.model import Model, ModelFailed
 from pr_verification.openai_compatible import model_from_environment
 from pr_verification.orchestration import Orchestration, fixed_pipeline
@@ -72,6 +77,8 @@ def main(
                 file=sys.stderr,
             )
             return EXIT_NO_REPORT
+        if decider is None:
+            decider = configured_decider(decision_configuration(os.environ), model)
         report = run(
             PullRequest(
                 repository=arguments.repo,
@@ -82,11 +89,13 @@ def main(
                 linked_issue=_read(arguments.linked_issue_file),
             ),
             model,
+            decider,
             orchestration=orchestration,
         )
         print(report.to_json(), flush=True)
     except (
         InvalidPullRequest,
+        InvalidDecisionConfiguration,
         ModelFailed,
         ClaimExtractionFailed,
         OSError,

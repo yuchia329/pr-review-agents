@@ -8,6 +8,13 @@ dependencies = [
     "packaging>=24",
 ]
 
+[project.optional-dependencies]
+# Laya is the default implementation of the decision layer. It brings PyTorch with it, so it
+# is installed only where it is wanted: without it, every decision is passed to the small LLM.
+laya = [
+    "laya>=0.4.2,<0.5",
+]
+
 [project.scripts]
 pr-verification = "pr_verification.cli:main"
 

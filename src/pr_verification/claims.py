@@ -76,4 +76,4 @@ def classify_claim(decider: Decider, claim: str) -> ClaimKind:
     `claim` is Untrusted Content, and the decider reads it only as data. Nothing the
     decider raises is caught.
     """
-    raise NotImplementedError
+    return ClaimKind(decider.decide(claim, CLAIM_KIND).top)

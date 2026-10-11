@@ -17,7 +17,7 @@ from typing import Any
 
 from pr_verification.claims import ClaimExtractionFailed
 from pr_verification.core import InvalidPullRequest, PullRequest, run
-from pr_verification.decision import Decider, Question
+from pr_verification.decision import Decider, InputTooLong, Question, options_of
 from pr_verification.model import Model, ModelFailed
 from pr_verification.report import BudgetSpend, Report, Verdict
 from pr_verification.repository import commit_staged, git, new_repository
@@ -509,17 +509,17 @@ class DecisionScores:
     @property
     def accuracy(self) -> float | None:
         """The Decision Accuracy: `correct / decisions`."""
-        raise NotImplementedError
+        return self.correct / self.decisions if self.decisions else None
 
     @property
     def seconds_per_decision(self) -> float | None:
         """`seconds / decisions`."""
-        raise NotImplementedError
+        return self.seconds / self.decisions if self.decisions else None
 
     @property
     def dollars_per_decision(self) -> float | None:
         """`dollars / decisions`."""
-        raise NotImplementedError
+        return self.dollars / self.decisions if self.decisions else None
 
 
 @dataclass(frozen=True)
@@ -534,7 +534,38 @@ class DecisionComparison:
         order. Each holds every field of `DecisionScores` under its own name, and
         `accuracy`, `seconds_per_decision`, and `dollars_per_decision`. A rate or a mean
         that is None is null."""
-        raise NotImplementedError
+        return json.dumps(
+            {
+                name: {
+                    **asdict(scores),
+                    "accuracy": scores.accuracy,
+                    "seconds_per_decision": scores.seconds_per_decision,
+                    "dollars_per_decision": scores.dollars_per_decision,
+                }
+                for name, scores in self.scores.items()
+            },
+            indent=2,
+        )
+
+
+def _score_decider(
+    cases: tuple[DecisionCase, ...], decider: Decider, clock: Callable[[], float]
+) -> DecisionScores:
+    correct = failed = passed_on = 0
+    seconds = dollars = 0.0
+    for case in cases:
+        started = clock()
+        try:
+            decision = decider.decide(case.state, case.question)
+        except (ModelFailed, InputTooLong):
+            failed += 1
+            continue
+        finally:
+            seconds += clock() - started
+        correct += decision.top == case.expected
+        passed_on += decision.passed_on is not None
+        dollars += decision.dollars
+    return DecisionScores(len(cases), correct, failed, passed_on, seconds, dollars)
 
 
 def compare_deciders(
@@ -563,4 +594,16 @@ def compare_deciders(
     case's `expected` is not one of `options_of(case.question)`. No cases, or no deciders,
     is not an error.
     """
-    raise NotImplementedError
+    cases = tuple(cases)
+    names = Counter(case.name for case in cases)
+    shared = sorted(name for name, count in names.items() if count > 1)
+    if shared:
+        raise ValueError(f"more than one case is called {', '.join(shared)}")
+    for case in cases:
+        if case.expected not in options_of(case.question):
+            raise ValueError(
+                f"case {case.name} expects {case.expected!r}, which its question does not offer"
+            )
+    return DecisionComparison(
+        {name: _score_decider(cases, decider, clock) for name, decider in deciders.items()}
+    )

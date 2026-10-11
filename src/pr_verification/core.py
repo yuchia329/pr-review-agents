@@ -7,11 +7,18 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
-from pr_verification.claims import extract_claims
+from pr_verification.claims import classify_claim, extract_claims
 from pr_verification.decision import Decider
 from pr_verification.model import Model
 from pr_verification.orchestration import Gathered, Orchestration, fixed_pipeline
-from pr_verification.report import BudgetSpend, Claim, Report, Verdict
+from pr_verification.report import (
+    BudgetSpend,
+    Claim,
+    ClaimKind,
+    ClassifiedClaim,
+    Report,
+    Verdict,
+)
 from pr_verification.repository import resolve_commit
 from pr_verification.verdict import compute_verdict
 
@@ -97,12 +104,16 @@ def run(
     claims = extract_claims(
         model, pull_request.title, pull_request.description, pull_request.linked_issue
     )
+    kinds: tuple[ClaimKind | None, ...] = tuple(
+        None if decider is None else classify_claim(decider, text) for text in claims
+    )
     gathered = _gather(orchestration, claims, pull_request.repository, before, after, model)
     return Report(
         before=before,
         after=after,
         claims=tuple(
-            _verified(text, answer) for text, answer in zip(claims, gathered, strict=True)
+            _verified(text, kind, answer)
+            for text, kind, answer in zip(claims, kinds, gathered, strict=True)
         ),
         findings=(),
         budget_spend=BudgetSpend(seconds=time.monotonic() - started, dollars=0.0, steps=0),
@@ -136,14 +147,17 @@ def _gather(
     return gathered
 
 
-def _verified(text: str, gathered: Gathered) -> Claim:
-    """One Claim of the report: its Verdict, computed from the Evidence gathered for it."""
+def _verified(text: str, kind: ClaimKind | None, gathered: Gathered) -> Claim:
+    """One Claim of the report: its Verdict, computed from the Evidence gathered for it, and
+    its kind when it was classified."""
     computed = compute_verdict(gathered.evidence)
     reason = computed.reason
     # What the orchestration says can explain an Inconclusive Verdict, and can never give one.
     if computed.verdict is Verdict.INCONCLUSIVE and gathered.inconclusive is not None:
         reason = gathered.inconclusive
-    return Claim(text, computed.verdict, reason, gathered.evidence)
+    if kind is None:
+        return Claim(text, computed.verdict, reason, gathered.evidence)
+    return ClassifiedClaim(text, computed.verdict, reason, gathered.evidence, kind=kind)
 
 
 def _resolve_commit(repository: Path, role: str, commit: str) -> str:
