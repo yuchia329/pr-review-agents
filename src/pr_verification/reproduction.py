@@ -56,6 +56,10 @@ ENDINGS: Mapping[AttemptResult, str] = {
 }
 """How `ATTEMPT_CAP_REACHED` describes a last attempt, by its result."""
 
+COULD_NOT_FINISH = "The Reproduction writer could not finish its work: {failure}"
+"""Why a Claim is Inconclusive when the model or the Sandbox itself failed. `failure` is what
+the `ModelFailed` or `SandboxFailed` raised said."""
+
 
 def compare_runs(before: Results | Unreadable, after: Results | Unreadable) -> AttemptResult:
     """What a Reproduction's results on the two commits show, as read by its Ecosystem.
@@ -99,16 +103,16 @@ class ReproductionRun:
     """The run record of the Reproduction writer for one Behavioural Claim."""
 
     attempts: tuple[Attempt, ...]
-    """Every attempt made, in order, each with its result. At least one, and never more than
-    the cap on attempts."""
+    """Every attempt that came to a result, in order. Never more than the cap on attempts,
+    and none when the model or the Sandbox failed during the first."""
 
     evidence: ReproductionEvidence | None
     """The Reproduction of the last attempt and its runs on both commits, when that attempt
-    shows a difference. None when the cap on attempts was reached first."""
+    shows a difference. None when the work ended any other way."""
 
     inconclusive: str | None
-    """Why the Claim is Inconclusive, when the cap on attempts was reached. None when there
-    is `evidence`: exactly one of the two is None."""
+    """Why the Claim is Inconclusive, when the work ended without `evidence`. None when
+    there is `evidence`: exactly one of the two is None."""
 
 
 def write_reproduction(
@@ -164,10 +168,15 @@ def write_reproduction(
     `evidence`, and `inconclusive` is `ATTEMPT_CAP_REACHED` filled in. The cap is enforced
     here, by code: whatever the model says, no more than `attempt_cap` attempts are made.
 
+    When the model raises `ModelFailed` or the Sandbox raises `SandboxFailed`, the work
+    ends there: no further request is made to the model and nothing more is run. The record
+    is still returned, with the attempts before the one that was under way, no `evidence`,
+    and `inconclusive` as `COULD_NOT_FINISH` filled in. A failure inside the system leaves
+    the Claim Inconclusive, and what was tried before it is not lost.
+
     Every attempt that came to a result is kept in the record, whatever the result.
 
-    Raises `ValueError` before any request when `attempt_cap` is less than 1. Raises as
-    `run_role` does, and `SandboxFailed` is not caught: when the model or the Sandbox itself
-    fails there is no record, and the failure is the caller's to answer.
+    Raises `ValueError` before any request when `attempt_cap` or `step_cap` is less than 1.
+    Any other exception is a fault in the system and is raised.
     """
     raise NotImplementedError
