@@ -176,8 +176,10 @@ def write_reproduction(
     An attempt that shows a difference ends the work: no further request is made to the
     model, and `evidence` holds `source` `EvidenceSource.RAN_CODE`, the command that ran the
     Reproduction, both results, and `observation` as `run_on_both_commits` writes it, with
-    the placement's `path` and the Reproduction's text. Any other result is revised with
-    another attempt, until `attempt_cap` attempts have been made. Then there is no
+    the placement's `path`, the Reproduction's text, and as `before_results` and
+    `after_results` what `ecosystem.read_results` gave for the two runs in step 4. Any other
+    result is revised with another attempt, until `attempt_cap` attempts have been made. Then
+    there is no
     `evidence`, and `inconclusive` is `ATTEMPT_CAP_REACHED` filled in. The cap is enforced
     here, by code: whatever the model says, no more than `attempt_cap` attempts are made.
 
