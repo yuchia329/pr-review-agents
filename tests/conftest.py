@@ -58,7 +58,14 @@ def commit_snapshots(path: Path, *snapshots: Mapping[str, str]) -> tuple[str, ..
 @pytest.fixture(autouse=True)
 def no_model_configured(monkeypatch: pytest.MonkeyPatch) -> None:
     """A model configured on the developer's machine must not be reached from a test."""
-    for name in ("PR_VERIFICATION_ENDPOINT", "PR_VERIFICATION_MODEL", "PR_VERIFICATION_API_KEY"):
+    for name in (
+        "PR_VERIFICATION_ENDPOINT",
+        "PR_VERIFICATION_MODEL",
+        "PR_VERIFICATION_API_KEY",
+        "PR_VERIFICATION_DECISION",
+        "PR_VERIFICATION_DECISION_THRESHOLD",
+        "PR_VERIFICATION_JEV_API_KEY",
+    ):
         monkeypatch.delenv(name, raising=False)
 
 

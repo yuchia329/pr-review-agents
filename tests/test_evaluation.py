@@ -5,8 +5,9 @@ scripted stand-in for the model, or a stand-in system that gives prepared Verdic
 """
 
 import inspect
+import itertools
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import fields
 from itertools import repeat
 from pathlib import Path
@@ -19,12 +20,27 @@ from hypothesis import strategies as st
 from pr_verification import cli, core
 from pr_verification.claims import ClaimExtractionFailed
 from pr_verification.core import InvalidPullRequest, PullRequest
+from pr_verification.decision import (
+    NO,
+    YES,
+    Choice,
+    DecisionFailed,
+    FallbackDecider,
+    Implementation,
+    InputTooLong,
+    ScriptedDecider,
+    SmallLLMDecider,
+    YesOrNo,
+)
 from pr_verification.evaluation import (
     Case,
     CaseRun,
+    DecisionCase,
+    DecisionScores,
     Part,
     PartEvaluation,
     Scores,
+    compare_deciders,
     evaluate,
     hand_made_cases,
     score,
@@ -289,7 +305,8 @@ def test_harness_runs_a_pull_request_through_the_entry_point_the_command_line_to
     evaluation = evaluate([case], model, repetitions=1)
 
     arguments = ["--repo", str(repository), "--before", before, "--after", after, "--title", title]
-    cli.main(arguments, model=model_listing(*claims))
+    deciding = ScriptedDecider(["behavioural", "behavioural"])
+    cli.main(arguments, model=model_listing(*claims), decider=deciding)
     printed = json.loads(capsys.readouterr().out)
     (run,) = evaluation.development.runs
     assert list(run.verdicts) == [claim["verdict"] for claim in printed["claims"]]
@@ -486,3 +503,166 @@ def test_harness_runs_the_hand_made_cases_against_the_core(tmp_path: Path) -> No
         runs = evaluated.runs
         assert [run.name for run in runs] == [case.name for case in cases if case.part is part]
         assert all(run.no_report is None and len(run.verdicts) == 1 for run in runs)
+
+
+# Comparing implementations of the decision interface
+
+CLOSER = YesOrNo("Is the agent getting closer to its goal?")
+KIND = Choice("Which kind of Claim is this?", ("behavioural", "structural"))
+DECISIONS = (
+    DecisionCase("stuck", "The same install error three times.", CLOSER, expected=NO),
+    DecisionCase("rename", "Renames parse_all to parse_many", KIND, expected="structural"),
+    DecisionCase("moving", "A new test now fails for a new reason.", CLOSER, expected=YES),
+)
+
+
+def ticking(step: float = 1.0) -> Iterator[float]:
+    """A clock that has moved on by `step` seconds each time it is read."""
+    return itertools.count(start=100.0, step=step)
+
+
+def test_same_decisions_are_run_through_each_implementation_in_the_order_given() -> None:
+    laya = ScriptedDecider([NO, "structural", YES], made_by=Implementation.LAYA)
+    jev = ScriptedDecider([NO, "structural", YES], made_by=Implementation.JEV)
+    small_llm = ScriptedDecider([NO, "structural", YES], made_by=Implementation.SMALL_LLM)
+
+    comparison = compare_deciders(
+        iter(DECISIONS), {"laya": laya, "jev": jev, "small_llm": small_llm}
+    )
+
+    asked = [(case.state, case.question) for case in DECISIONS]
+    assert laya.asked == jev.asked == small_llm.asked == asked
+    assert list(comparison.scores) == ["laya", "jev", "small_llm"]
+    assert all(scores.decisions == 3 for scores in comparison.scores.values())
+
+
+def test_accuracy_of_an_implementation_is_the_share_of_decisions_whose_top_is_expected() -> None:
+    right = ScriptedDecider([NO, "structural", YES])
+    wrong_twice = ScriptedDecider([{YES: 0.6, NO: 0.4}, "behavioural", {YES: 0.9, NO: 0.1}])
+
+    scores = compare_deciders(DECISIONS, {"right": right, "wrong twice": wrong_twice}).scores
+
+    assert (scores["right"].correct, scores["right"].accuracy) == (3, 1.0)
+    assert scores["wrong twice"].correct == 1
+    assert scores["wrong twice"].accuracy == pytest.approx(1 / 3)
+    assert scores["right"].failed == scores["wrong twice"].failed == 0
+
+
+def test_latency_of_an_implementation_is_the_time_its_own_decisions_took() -> None:
+    clock = ticking(step=0.25)
+    read: list[float] = []
+
+    def reading() -> float:
+        read.append(next(clock))
+        return read[-1]
+
+    deciders = {
+        "first": ScriptedDecider([NO, "structural", YES]),
+        "second": ScriptedDecider([NO, "structural", DecisionFailed("no answer")]),
+    }
+
+    scores = compare_deciders(DECISIONS, deciders, clock=reading).scores
+
+    assert len(read) == 2 * 3 * 2
+    assert scores["first"].seconds == pytest.approx(0.75)
+    assert scores["first"].seconds_per_decision == pytest.approx(0.25)
+    assert scores["second"].seconds == pytest.approx(0.75)
+
+
+def test_cost_of_an_implementation_is_what_its_decisions_cost_together() -> None:
+    answers = [
+        json.dumps({"probabilities": {YES: 0, NO: 1}}),
+        json.dumps({"probabilities": {"behavioural": 0, "structural": 1}}),
+        json.dumps({"probabilities": {YES: 1, NO: 0}}),
+    ]
+    small_llm = SmallLLMDecider(ScriptedModel(answers), dollars_per_request=0.002)
+    in_process = ScriptedDecider([NO, "structural", YES])
+
+    scores = compare_deciders(DECISIONS, {"small_llm": small_llm, "laya": in_process}).scores
+
+    assert scores["small_llm"].dollars == pytest.approx(0.006)
+    assert scores["small_llm"].dollars_per_decision == pytest.approx(0.002)
+    assert scores["laya"].dollars == 0.0
+
+
+def test_decisions_passed_to_the_small_llm_are_counted_for_the_implementation_asked_first() -> None:
+    first = ScriptedDecider([{YES: 0.45, NO: 0.55}, "structural", InputTooLong(900, 512)])
+    behind = ScriptedDecider([NO, YES], made_by=Implementation.SMALL_LLM)
+    with_fallback = FallbackDecider(first, behind, 0.75, first_asked=Implementation.LAYA)
+
+    scores = compare_deciders(DECISIONS, {"laya": with_fallback}).scores
+
+    assert scores["laya"].passed_on == 2
+    assert scores["laya"].correct == 3
+
+
+def test_decision_that_fails_or_is_too_long_is_counted_as_failed_and_the_rest_are_asked() -> None:
+    failing = ScriptedDecider([DecisionFailed("no answer"), InputTooLong(size=900, limit=512), YES])
+
+    scores = compare_deciders(DECISIONS, {"failing": failing}).scores["failing"]
+
+    assert (scores.decisions, scores.failed, scores.correct) == (3, 2, 1)
+    assert (scores.passed_on, scores.dollars) == (0, 0.0)
+    assert scores.accuracy == pytest.approx(1 / 3)
+    assert len(failing.asked) == 3
+
+
+def test_fault_while_comparing_implementations_is_raised_and_not_scored() -> None:
+    with pytest.raises(Fault):
+        compare_deciders(DECISIONS, {"faulty": ScriptedDecider([NO, Fault("a defect")])})
+
+
+@pytest.mark.parametrize(
+    "cases",
+    [
+        (DECISIONS[0], DECISIONS[1], DECISIONS[0]),
+        (DecisionCase("no-such-option", "A state.", CLOSER, expected="maybe"),),
+    ],
+    ids=["two cases share a name", "the expected answer is not an option"],
+)
+def test_decisions_that_cannot_be_scored_are_refused_before_anything_is_asked(
+    cases: tuple[DecisionCase, ...],
+) -> None:
+    decider = ScriptedDecider([NO, "structural", NO])
+
+    with pytest.raises(ValueError):
+        compare_deciders(cases, {"laya": decider})
+    assert decider.asked == []
+
+
+def test_comparison_of_no_decisions_has_no_rates() -> None:
+    scores = compare_deciders([], {"laya": ScriptedDecider([])}).scores["laya"]
+
+    assert (scores.decisions, scores.correct, scores.failed) == (0, 0, 0)
+    assert scores.accuracy is None
+    assert scores.seconds_per_decision is None
+    assert scores.dollars_per_decision is None
+
+
+def test_comparison_of_no_implementations_has_no_scores() -> None:
+    comparison = compare_deciders(DECISIONS, {})
+
+    assert dict(comparison.scores) == {}
+    assert json.loads(comparison.to_json()) == {}
+
+
+def test_printed_comparison_shows_accuracy_latency_and_cost_for_each_implementation() -> None:
+    deciders = {
+        "laya": ScriptedDecider([NO, "behavioural", YES]),
+        "jev": ScriptedDecider([NO, "structural", YES]),
+    }
+
+    comparison = compare_deciders(DECISIONS, deciders, clock=ticking(step=0.5).__next__)
+
+    printed = json.loads(comparison.to_json())
+    assert list(printed) == ["laya", "jev"]
+    assert set(printed["laya"]) == {field.name for field in fields(DecisionScores)} | {
+        "accuracy",
+        "seconds_per_decision",
+        "dollars_per_decision",
+    }
+    assert printed["laya"]["correct"] == 2
+    assert printed["laya"]["accuracy"] == pytest.approx(2 / 3)
+    assert printed["laya"]["seconds_per_decision"] == pytest.approx(0.5)
+    assert printed["laya"]["dollars_per_decision"] == 0.0
+    assert json.loads(compare_deciders([], deciders).to_json())["laya"]["accuracy"] is None

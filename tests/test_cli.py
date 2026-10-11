@@ -5,6 +5,7 @@ import pytest
 from conftest import FixtureRepository, model_listing
 
 from pr_verification.cli import exit_code, main
+from pr_verification.decision import DecisionFailed, ScriptedDecider
 from pr_verification.model import ModelFailed, ModelRequest, ScriptedModel
 from pr_verification.report import (
     BudgetSpend,
@@ -95,6 +96,7 @@ def test_command_line_reports_the_claims_made_in_the_title_and_the_two_text_file
     linked_issue = tmp_path / "issue.md"
     linked_issue.write_text("Upload gives up after one timeout.\n")
     model = model_listing("Fixes the crash on empty input", "Adds a retry to upload")
+    decider = ScriptedDecider(["behavioural", "behavioural"])
 
     code = main(
         [
@@ -106,6 +108,7 @@ def test_command_line_reports_the_claims_made_in_the_title_and_the_two_text_file
             "--linked-issue-file", str(linked_issue),
         ],
         model,
+        decider,
     )  # fmt: skip
 
     printed = json.loads(capsys.readouterr().out)
@@ -114,6 +117,7 @@ def test_command_line_reports_the_claims_made_in_the_title_and_the_two_text_file
         ("Adds a retry to upload", "inconclusive"),
     ]
     assert all(claim["reason"] and claim["evidence"] == [] for claim in printed["claims"])
+    assert [claim["kind"] for claim in printed["claims"]] == ["behavioural", "behavioural"]
     assert printed["gate"] == {
         "decision": "pass",
         "note": "Claims: 0 Confirmed, 0 Refuted, 2 Inconclusive.",
@@ -143,6 +147,51 @@ def test_command_line_exits_two_without_a_report_when_the_model_response_is_unus
     assert code == 2
     assert captured.out == ""
     assert "Traceback" not in captured.err
+
+
+def test_command_line_exits_two_without_a_report_when_a_decision_fails(
+    fixture_repository: FixtureRepository, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = main(
+        [
+            "--repo", str(fixture_repository.path),
+            "--before", fixture_repository.before,
+            "--after", fixture_repository.after,
+            "--title", "Fix the crash on empty input",
+        ],
+        model_listing("Fixes the crash on empty input"),
+        ScriptedDecider([DecisionFailed("the decision model gave no answer")]),
+    )  # fmt: skip
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert captured.out == ""
+    assert captured.err == "pr-verification: the decision model gave no answer\n"
+
+
+def test_command_line_exits_two_without_a_report_when_the_decision_layer_is_misconfigured(
+    fixture_repository: FixtureRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("PR_VERIFICATION_DECISION", "gpt")
+
+    code = main(
+        [
+            "--repo", str(fixture_repository.path),
+            "--before", fixture_repository.before,
+            "--after", fixture_repository.after,
+            "--title", "Tidy up",
+        ],
+        model_listing(),
+    )  # fmt: skip
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert captured.out == ""
+    assert captured.err.startswith("pr-verification: ")
+    assert "PR_VERIFICATION_DECISION" in captured.err
+    assert len(captured.err.splitlines()) == 1
 
 
 def test_command_line_exits_two_without_a_report_when_no_model_is_configured(
