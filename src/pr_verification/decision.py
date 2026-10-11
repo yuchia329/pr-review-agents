@@ -383,9 +383,9 @@ class LayaDecider:
     Nothing leaves the machine and no request is made to any model interface.
     """
 
+    # Read again from the checkpoint when Laya is loaded.
     input_limit: int = 512
-    """The largest input Laya takes, in its own tokens. It is read again from the checkpoint
-    when Laya is loaded."""
+    """The largest input Laya takes, in its own tokens."""
 
     def __init__(self) -> None:
         """Loads nothing. Laya is loaded into this process by the first call to `decide`
@@ -481,8 +481,9 @@ JEV_MODEL = "jev-1.13.0"
 
 JEV_INPUT_LIMIT = 30_000
 """The most that is sent to Jev, in bytes of UTF-8. Jev takes 32k of its own tokens for the
-state and the question, and its tokens cannot be counted here. A token is never less than a
-byte, so an input within this limit is within Jev's, with room left for what Jev adds."""
+state and the question, and its tokens cannot be counted here. A token is seldom less than a
+byte, so an input within this limit should be within Jev's, with room left for what Jev adds.
+Not confirmed against Jev itself."""
 
 _JEV_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 
@@ -678,7 +679,8 @@ def decision_configuration(environment: Mapping[str, str]) -> DecisionConfigurat
         threshold = math.nan
     if not 0 <= threshold <= 1:
         raise InvalidDecisionConfiguration(f"{THRESHOLD_VARIABLE} must be a number from 0 to 1")
-    jev_key = environment.get(JEV_KEY_VARIABLE, "")
+    # A key of nothing but spaces is no key: sent, it would be an empty one.
+    jev_key = environment.get(JEV_KEY_VARIABLE, "").strip()
     if implementation is Implementation.JEV and not jev_key:
         raise InvalidDecisionConfiguration(
             f"{JEV_KEY_VARIABLE} must be set for decisions to be made by Jev"

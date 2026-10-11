@@ -40,10 +40,9 @@ brings PyTorch with it, so it is an extra:
 uv sync --extra laya
 ```
 
-Without the extra, Laya is `unavailable` and every decision goes to the small LLM. So does every
-decision when Laya is installed and cannot be loaded, and the report does not say why: the only
-trace is `passed_on` on the decision. The first
-decision downloads the English checkpoint, `convaiinnovations/laya` (about 810 MB), from
+Without the extra, Laya is `unavailable` and every decision goes to the small LLM. So does
+every decision when Laya is installed and cannot be loaded, and the report does not say why:
+the only trace is `passed_on` on the decision. The first decision downloads the English checkpoint, `convaiinnovations/laya` (about 810 MB), from
 Hugging Face into its cache; later runs load it from there. The state of a decision never leaves
 the machine.
 
@@ -70,8 +69,8 @@ The input is laid out as `[CLS] choice question: <question> [SEP] [MASK] <option
 <state> [SEP]`. `LayaDecider` counts that layout with Laya's own tokenizer before asking, and
 raises `InputTooLong` when it is over 512, when an option is over 48, or when the options
 together leave fewer than 16 tokens of the 512 for the question, which is where Laya starts
-to shorten every option; the decision is then passed to the small LLM. For five inputs of 27 to 409 tokens the count was equal to the
-`input_tokens` Laya reported. A state that brought the input to exactly 512 tokens was answered
+to shorten every option; the decision is then passed to the small LLM. For five inputs of 27
+to 409 tokens the count was equal to the `input_tokens` Laya reported. A state that brought the input to exactly 512 tokens was answered
 with nothing dropped, and one token more was refused. With the Claim classifier's question, 480
 tokens are left for the Claim.
 
@@ -107,9 +106,10 @@ question is Jev's `noul` and a choice its `choice`. The key is sent to Jev and n
 is removed from any error Jev sends back.
 
 Jev takes 32k of its own tokens for the state and the question, and publishes no tokenizer. A
-token is never shorter than a byte, so `JevDecider` refuses an input over 30,000 bytes of UTF-8
-with `InputTooLong` and sends nothing. That refuses some inputs Jev would take and never sends
-one it would cut.
+token is seldom shorter than a byte, so `JevDecider` refuses an input over 30,000 bytes of UTF-8
+with `InputTooLong` and sends nothing. That refuses some inputs Jev would take. Whether it
+keeps every input within Jev's limit is not confirmed: how Jev counts a state, and what it does
+with one that is too long, could not be checked without a key.
 
 **Jev has not been reached from this project.** It is in early access and there is no key. The
 client was written from TypeSafe's API reference and checked two ways on 2026-10-10: against
@@ -147,8 +147,8 @@ No decision failed. What the numbers say:
   checkpoints: a fast base to fine-tune, not a decision model to use untrained.
 - **Laya is not confident either, which is what makes the default safe.** Its top probability
   ran from 0.52 to 0.78 with a median of 0.63, and reached 0.75 for 1 Claim of 30. At the
-  default threshold, then, 29 of 30 decisions are passed to the small LLM: the answers are the
-  small LLM's, and Laya adds its loading time for nothing.
+  default threshold, then, 29 of 30 decisions are passed to the small LLM: all but one of the
+  answers are the small LLM's, and Laya adds its loading time for almost nothing.
 - **Laya is about 400 times faster for each decision** than this local model, so it is worth
   having if it can be made right: by fine-tuning it on Claims, and fitting its temperature, as
   its documentation describes. Neither is done here; fine-tuning the decision model is out of
@@ -162,5 +162,7 @@ What is still to do:
   speed of this machine and not of the model.
 - More cases, and cases taken from real pull requests, before a threshold is fitted. With
   thirty, one Claim moves the accuracy by 0.03.
-- Until then, `PR_VERIFICATION_DECISION=small_llm` gives the same answers as the default
-  without loading Laya.
+- Until then, `PR_VERIFICATION_DECISION=small_llm` answers every decision with the small LLM
+  and loads nothing. On these cases that differs from the default in 1 decision of 30, the one
+  Laya kept for itself.
+- The times on a machine with no GPU at all, such as a hosted pipeline runner.
