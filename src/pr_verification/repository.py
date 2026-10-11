@@ -58,6 +58,22 @@ def new_repository(directory: Path) -> Path:
     return repository
 
 
+def repository_at(source: Path, commit: str, directory: Path) -> Path:
+    """Make a repository under `directory` as `new_repository` does, with `commit` staged.
+
+    It holds `commit` and its ancestors, taken from `source`, and no other commit, no ref, and
+    no note of where they were taken from. `source` is only read. Raises as `git` does.
+    """
+    commit = resolve_commit(source, commit)
+    repository = new_repository(directory)
+    # Protocol 2 hands over a commit asked for by its ID whether or not a ref points at it.
+    # git's own record of a fetch names `source`, so none is written.
+    asking = ("-c", "protocol.version=2", "fetch", "--quiet", "--no-tags", "--no-write-fetch-head")
+    git(repository, *asking, str(source.resolve()), commit)
+    git(repository, "read-tree", commit)
+    return repository
+
+
 def commit_staged(repository: Path, message: str, *parents: str) -> str:
     """Commit what is staged in `repository`, with these parents, and return its full ID.
 
