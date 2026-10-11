@@ -12,6 +12,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from pr_verification.agent import Role, RoleRun, run_role
+from pr_verification.decision import Decider
 from pr_verification.ecosystem import (
     LONGEST_REPRODUCTION,
     ReproductionEcosystem,
@@ -130,6 +131,8 @@ class ReproductionRun:
 
 def write_reproduction(
     claim: str,
+    progress_guard: Decider | None = None,
+    /,
     *,
     model: Model,
     sandbox: Sandbox,
@@ -158,6 +161,8 @@ def write_reproduction(
        each null where the attempt has none. So the role's context holds its Claim, what
        its earlier attempts did, and what it reads, and Sandbox output reaches the model
        only there, as data.
+       The run is given `progress_guard`, which is passed by position after the Claim, so
+       it is watched for loops as `run_role` says.
        The role finishes with `{"reproduction": "<text>"}`. When its run stopped at the
        step cap, or its answer holds under `reproduction` no string, a blank one, or one
        longer than `LONGEST_REPRODUCTION` characters, the attempt's result is
@@ -191,9 +196,17 @@ def write_reproduction(
 
     Every attempt that came to a result is kept in the record, whatever the result.
 
+    Each attempt's run is watched on its own. What loop detection found in one attempt is in
+    that attempt's `run` and nowhere else, and the next attempt starts with nothing found.
+    Detection moves neither cap: whatever is found, no more than `attempt_cap` attempts are
+    made, of no more than `step_cap` steps each. A `DecisionFailed` from the progress guard
+    is a `ModelFailed`, and ends the work as one does.
+
     Raises `ValueError` before any request when `attempt_cap` or `step_cap` is less than 1.
     Any other exception is a fault in the system and is raised.
     """
+    if progress_guard is not None:
+        raise NotImplementedError
     if attempt_cap < 1 or step_cap < 1:
         raise ValueError(f"a cap is under 1: {attempt_cap} attempts of {step_cap} steps")
     role = Role(

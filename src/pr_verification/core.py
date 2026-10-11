@@ -136,7 +136,9 @@ def run(
 
     With `orchestration` None, the fixed pipeline is used and nothing is kept between runs: it
     is `fixed_pipeline` on a temporary directory, which is removed before the report is
-    returned or an exception goes on.
+    returned or an exception goes on. Its `progress_guard` is `decider`, so the decider that
+    classifies the Claims also answers the progress guard of the roles the pipeline runs, and
+    with `decider` None they have none. An orchestration that is given is used as it is.
 
     Raises `InvalidPullRequest`, `ClaimExtractionFailed`, and `ModelFailed` from steps 1 to
     3, where there is no report to give. Raises `ValueError` when the orchestration gives

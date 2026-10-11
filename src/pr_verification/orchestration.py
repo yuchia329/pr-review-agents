@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from pr_verification.budget import Ledger
+from pr_verification.decision import Decider
 from pr_verification.ecosystem import ReproductionEcosystem, Unsupported, find_commands
 from pr_verification.evidence import ending
 from pr_verification.model import Model
@@ -160,6 +161,10 @@ class FixedPipeline:
     discover: Discover = find_commands
     """Works out the repository's Ecosystem and how to install and test it."""
 
+    progress_guard: Decider | None = None
+    """Answers the progress guard of every role the pipeline runs. With None, no role has
+    one."""
+
     def gather(
         self, claims: tuple[str, ...], *, repository: Path, before: str, after: str, model: Model
     ) -> tuple[Gathered, ...]:
@@ -178,11 +183,12 @@ class FixedPipeline:
            `sandbox_for` opens each Sandbox with `open_sandbox(repository, image)`.
         3. Prepares the code after it, with `prepare_pull_request(repository, after, ...)` in
            the Sandbox and with the Repo Profile that step 2 gave.
-        4. For each Claim in turn, calls `write_reproduction` with the Claim, `model`, that
-           Sandbox, the Ecosystem, `repository`, `before`, `after`, and `limits`, and with
-           the caps `write_reproduction` has unless given others. The Claim is given the
-           `ReproductionRun`'s `evidence` as its one piece of Evidence when there is one, and
-           otherwise no Evidence and the `ReproductionRun`'s `inconclusive`.
+        4. For each Claim in turn, calls `write_reproduction` with the Claim, the pipeline's
+           `progress_guard`, `model`, that Sandbox, the Ecosystem, `repository`, `before`,
+           `after`, and `limits`, and with the caps `write_reproduction` has unless given
+           others. The Claim is given the `ReproductionRun`'s `evidence` as its one piece of
+           Evidence when there is one, and otherwise no Evidence and the `ReproductionRun`'s
+           `inconclusive`.
 
         When step 2 or step 3 answers `CommandFailed` or raises `SandboxFailed`, no
         Reproduction is written, no request is made to the model, and every Claim is given no
@@ -204,6 +210,8 @@ class FixedPipeline:
         system and is raised, as `write_reproduction` raises it: it is not turned into an
         Inconclusive Verdict.
         """
+        if self.progress_guard is not None:
+            raise NotImplementedError
         if not claims:
             return ()
         with ExitStack() as opened:
@@ -334,13 +342,16 @@ def _failure(failed: CommandFailed) -> str:
     return f"the command {' '.join(failed.command)} ended with {ending(failed.run)}"
 
 
-def fixed_pipeline(state: Path) -> FixedPipeline:
+def fixed_pipeline(state: Path, *, progress_guard: Decider | None = None) -> FixedPipeline:
     """The fixed pipeline that keeps what it remembers between runs under `state`.
 
     `state` need not exist yet. The Repo Profile is kept by a `DirectoryStore` on
     `state / "profiles"` and installed dependencies by a `DependencyCache` on
-    `state / "dependencies"`. Everything else is as `FixedPipeline` has it unless given.
+    `state / "dependencies"`. Its `progress_guard` is the one given. Everything else is as
+    `FixedPipeline` has it unless given.
     """
+    if progress_guard is not None:
+        raise NotImplementedError
     return FixedPipeline(
         store=DirectoryStore(state / "profiles"), cache=DependencyCache(state / "dependencies")
     )

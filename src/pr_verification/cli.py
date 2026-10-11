@@ -65,9 +65,12 @@ def main(
 
     Without `orchestration`:
 
-    - with `--state-dir DIRECTORY`, the orchestration is `fixed_pipeline(DIRECTORY)`, so the
-      Repo Profile and installed dependencies are kept there between runs;
+    - with `--state-dir DIRECTORY`, the orchestration is
+      `fixed_pipeline(DIRECTORY, progress_guard=decider)`, with the decider that `run` is
+      given, so the Repo Profile and installed dependencies are kept there between runs;
     - without it, `run` is given none, and nothing is kept between runs.
+
+    Either way the decider answers the progress guard of the roles the fixed pipeline runs.
 
     Returns `exit_code` of the report's Gate. Returns `EXIT_NO_REPORT`, having printed no
     report, when there is none to give or anything at all is raised: a failure never exits

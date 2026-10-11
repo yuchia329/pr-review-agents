@@ -2,13 +2,18 @@
 
 The loop is the project's own code on top of the model interface. No agent framework is used,
 because the caps and the handling of Untrusted Content need control of the loop itself.
+
+The loop also watches a role for going round in circles. A role that repeats itself, or whose
+steps bring it no closer to its goal, is told so and goes on. The step cap holds whatever is
+detected.
 """
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
+from pr_verification.decision import Decider, YesOrNo
 from pr_verification.model import Model, ModelRequest
 
 NO_SUCH_TOOL = "This role has no tool of that name, so nothing was run."
@@ -19,6 +24,21 @@ UNREADABLE_RESPONSE = (
     'either {"tool": "<name>", "arguments": {...}} or {"finish": {...}}.'
 )
 """What a role is told when its response is neither a request for a tool nor a finish."""
+
+REPEAT_LIMIT = 3
+"""How many steps in a row must be the same step to be an exact repeat."""
+
+ALTERNATION_LIMIT = 4
+"""How many steps in a row must go back and forth between two steps to be an alternation:
+two rounds."""
+
+PROGRESS_INTERVAL = 4
+"""How many steps a run takes between one asking of the progress guard and the next. A
+starting value: it is to be chosen again from measurement, so nothing may rely on the number
+itself."""
+
+PROGRESS = YesOrNo("Given its task and its latest steps, is the agent getting closer to its goal?")
+"""The question the progress guard asks. `NO` is the answer that finds a loop."""
 
 _HOW_TO_ANSWER = """\
 You work in steps. At each step, reply with one JSON object and nothing else, in one of two forms:
@@ -107,6 +127,52 @@ class Step:
     the empty string for `FINISHED`."""
 
 
+class LoopKind(StrEnum):
+    """What loop detection found a role to be doing."""
+
+    EXACT_REPEAT = "exact_repeat"
+    """The role took the same step again and again, and got the same result each time."""
+
+    ALTERNATION = "alternation"
+    """The role went back and forth between two steps, and got the same two results each
+    time."""
+
+    NO_PROGRESS = "no_progress"
+    """The progress guard judged that the role's latest steps brought it no closer to its
+    goal, though no two of them need be the same."""
+
+
+TOLD: Mapping[LoopKind, str] = {
+    LoopKind.EXACT_REPEAT: (
+        "Your last steps were the same step taken again and again, and each got the same "
+        "result. Taking it once more will get that result again. Take a different step, or "
+        "finish with what you have."
+    ),
+    LoopKind.ALTERNATION: (
+        "Your last steps went back and forth between the same two steps, and each got the "
+        "same result as the time before. Going round again will get those results again. "
+        "Take a different step, or finish with what you have."
+    ),
+    LoopKind.NO_PROGRESS: (
+        "Your latest steps do not seem to have brought you closer to finishing your task. "
+        "Take a different approach, or finish with what you have."
+    ),
+}
+"""What a role is told when a loop is detected, by its kind. Written by the project: it holds
+nothing of the task, of any response, or of anything a tool returned."""
+
+
+@dataclass(frozen=True)
+class Trigger:
+    """One time loop detection found something in a run. The role was told of it."""
+
+    kind: LoopKind
+    """What was found."""
+
+    step: int
+    """The step it was found after, counted from 1: `steps[step - 1]` of the run."""
+
+
 class Stopped(StrEnum):
     """Why a run of a role ended."""
 
@@ -134,8 +200,47 @@ class RoleRun:
     """The JSON object the model finished with, or None when the run stopped at the step cap.
     It is the model's word, shaped by whatever the role read: data to check, never a Verdict."""
 
+    triggers: tuple[Trigger, ...] = ()
+    """Every time loop detection found something, in the order found. Empty when it never
+    did."""
 
-def run_role(role: Role, task: Mapping[str, object], model: Model) -> RoleRun:
+
+def detect_repeat(steps: Sequence[Step]) -> LoopKind | None:
+    """Whether the last of `steps` repeat, comparing results as well as actions.
+
+    `steps` are in the order taken. Two steps are the same step when they have the same
+    action and the same result:
+
+    - The action is what the `response` asked for. Two responses that are both JSON are the
+      same action when they hold the same value: the order of an object's members and the
+      whitespace between them carry no meaning. A response that is not JSON is the same
+      action only as a response with exactly the same text.
+    - The result is `result`. Two are the same only when their text is exactly the same.
+
+    So a step that is taken again and gets a different result is not the same step. A retry
+    that comes out differently, as after a network failure, is never a repeat.
+
+    Only the end of `steps` is looked at:
+
+    - `EXACT_REPEAT` when the last `REPEAT_LIMIT` steps are all the same step.
+    - `ALTERNATION` when the last `ALTERNATION_LIMIT` steps go back and forth between two
+      steps that are not the same, as in X, Y, X, Y: each is the same step as the one two
+      before it, and not the same step as the one before it.
+    - None otherwise, and so whenever there are fewer steps than a limit asks for.
+
+    Never `NO_PROGRESS`, which only the progress guard finds. Nothing of a step is read but
+    its `response` and its `result`, and no model is asked.
+    """
+    raise NotImplementedError
+
+
+def run_role(
+    role: Role,
+    task: Mapping[str, object],
+    model: Model,
+    *,
+    progress_guard: Decider | None = None,
+) -> RoleRun:
     """Run `role` on `task` until the model finishes or the step cap is reached.
 
     `task` is what the role is asked to work on, such as its Claim, as a JSON object. It may
@@ -150,8 +255,8 @@ def run_role(role: Role, task: Mapping[str, object], model: Model) -> RoleRun:
       nothing of `task`, of any response, or of anything a tool returned.
     - `data` is a JSON object with exactly two members: `task`, as given, and `steps`, a list
       with one object for each step taken so far, in order, whose only members are that
-      step's `response` and `result`. Everything the role reads reaches the model here, as
-      data.
+      step's `response` and `result`, and `told` where loop detection told the role
+      something after that step. Everything the role reads reaches the model here, as data.
 
     The response is read as a JSON object and decides the step's outcome. A response can be
     read when it is one of these and has no other member:
@@ -175,9 +280,48 @@ def run_role(role: Role, task: Mapping[str, object], model: Model) -> RoleRun:
     enforced here, by code, whatever the model says, so a run never makes more than
     `role.step_cap` requests to the model.
 
+    Loop detection
+        After every step that leaves the run going, which is one that neither finishes nor
+        reaches the step cap, the steps taken so far are checked:
+
+        1. `detect_repeat` is asked about them.
+        2. When it finds nothing, there is a `progress_guard`, and the number of steps
+           taken is a multiple of `PROGRESS_INTERVAL`, the progress guard is asked. It is a
+           decision: `progress_guard.decide` is called once. The question is `PROGRESS`. The
+           state is a JSON object with exactly two members: `task`, as given, and `steps`,
+           the last `PROGRESS_INTERVAL` steps in order, each an object whose only members
+           are that step's `response` and `result`. When the `top` of the `Decision` is
+           `NO`, what is found is `NO_PROGRESS`. So the guard catches a role whose steps all
+           differ and make no progress, and when the two probabilities are equal it finds
+           nothing.
+
+        Finding something is a trigger, of whichever kind, and it is answered on the first
+        rung of the ladder: the role is told what was detected and the run goes on. The
+        trigger is recorded in `RoleRun.triggers`. In every later request of the run, the
+        object in `steps` for the step it was found after has the member `told`, which is
+        `TOLD` for the kind found. Nothing else changes: `instructions` are as they were,
+        telling is not a step, and each `Step` records what it would have.
+
+        Every trigger of a run is answered this way, the first and any after it. Stopping a
+        role that triggers again is the next rung of the ladder, and it is not built here.
+
+        The step cap holds throughout. Whatever is detected, and whatever the role is told,
+        a run makes no more than `role.step_cap` requests to the model and stops with
+        `Stopped.STEP_CAP` at the cap. The progress guard is asked no more than once for
+        every `PROGRESS_INTERVAL` steps taken. With `progress_guard` None it is never asked,
+        and only `detect_repeat` can find anything.
+
+        What the progress guard is given may be Untrusted Content, which a decider reads
+        only as data. Its answer steers the role's effort and is no Verdict (ADR 0002).
+
     Raises `ValueError` before any request when `role.step_cap` is less than 1 or two of
-    `role.tools` share a name. `ModelFailed` and whatever a tool raises are not caught.
+    `role.tools` share a name. `ModelFailed` and whatever a tool raises are not caught. Nor
+    is anything `progress_guard` raises: a `DecisionFailed` is a `ModelFailed`, and ends the
+    run as a failing model does. `progress_guard` is expected to be one that passes on an
+    input beyond a size limit, as a configured decider is.
     """
+    if progress_guard is not None:
+        raise NotImplementedError
     if role.step_cap < 1:
         raise ValueError(f"the step cap of the role {role.name!r} is {role.step_cap}: under 1")
     tools = {tool.name: tool for tool in role.tools}
