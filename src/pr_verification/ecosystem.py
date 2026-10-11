@@ -103,7 +103,8 @@ class Ecosystem(Protocol):
 
 
 LONGEST_REPRODUCTION = 20_000
-"""The most characters the text of one Reproduction may hold and still be placed."""
+"""The most characters the text of one Reproduction may hold and still be placed. A command
+carries the text in an argument, and this many characters fit in one as UTF-8 in base64."""
 
 
 @dataclass(frozen=True)

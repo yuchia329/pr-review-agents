@@ -135,11 +135,12 @@ def write_reproduction(
        `reading_tools(repository, after)` and no other, so it has no tool that runs
        anything. Its step cap is `step_cap`, and its instructions hold
        `ecosystem.reproduction_form()`. Its task is `{"claim": claim, "attempts": [...]}`,
-       where `attempts` has one object for each earlier attempt, in order, holding
-       `reproduction`, `result`, `before`, and `after`: the Reproduction's text, the value
-       of the `AttemptResult`, and the output of the two runs, each null where the attempt
-       has none. So the role's context holds its Claim, what its earlier attempts did, and
-       what it reads, and Sandbox output reaches the model only there, as data.
+       where `attempts` has one object for each earlier attempt, in order, whose only
+       members are `reproduction`, `result`, `before`, and `after`: the Reproduction's text,
+       the value of the `AttemptResult`, and the output of the two runs the attempt records,
+       each null where the attempt has none. So the role's context holds its Claim, what
+       its earlier attempts did, and what it reads, and Sandbox output reaches the model
+       only there, as data.
        The role finishes with `{"reproduction": "<text>"}`. When its run stopped at the
        step cap, or its answer holds under `reproduction` no string, a blank one, or one
        longer than `LONGEST_REPRODUCTION` characters, the attempt's result is

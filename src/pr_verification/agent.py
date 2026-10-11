@@ -128,12 +128,13 @@ def run_role(role: Role, task: Mapping[str, object], model: Model) -> RoleRun:
     A step is one request to the model and what comes of the response. In every request:
 
     - `instructions` hold `role.instructions` whole, and the name and the description of
-      each of `role.tools` whole, and are written from nothing else. They are the same on
-      every step of a run, and hold nothing of `task`, of any response, or of anything a
-      tool returned.
+      each of `role.tools` whole, beside the loop's own fixed wording on how to answer. They
+      are written from nothing else: they are the same on every step of a run, and hold
+      nothing of `task`, of any response, or of anything a tool returned.
     - `data` is a JSON object with exactly two members: `task`, as given, and `steps`, a list
-      with one object for each step taken so far, in order, holding that step's `response`
-      and `result`. Everything the role reads reaches the model here, as data.
+      with one object for each step taken so far, in order, whose only members are that
+      step's `response` and `result`. Everything the role reads reaches the model here, as
+      data.
 
     The response is read as a JSON object and decides the step's outcome. A response can be
     read when it is one of these and has no other member:
