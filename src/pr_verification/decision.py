@@ -10,7 +10,7 @@ No decision is a Verdict. What is decided here steers the work, such as which ki
 is; Verdicts and the Gate are computed by code from Evidence (ADR 0002).
 """
 
-import importlib
+import importlib.util
 import json
 import math
 from collections.abc import Iterable, Mapping
@@ -206,15 +206,23 @@ def _decision(
     if (
         not isinstance(numbers, dict)
         or set(numbers) != set(options)
-        or not all(_is_number(number) and number >= 0 for number in numbers.values())
+        or not all(_is_number(number) for number in numbers.values())
     ):
         raise DecisionFailed(_one_line(unusable))
-    total = sum(numbers.values())
+    try:
+        weights = {option: float(numbers[option]) for option in options}
+    except OverflowError:
+        # An integer too large to be a float: JSON sets no bound on one.
+        raise DecisionFailed(_one_line(unusable)) from None
+    total = sum(weights.values())
     # Numbers that are each finite can still have a sum that is not.
-    if not (math.isfinite(total) and total > 0):
+    if not (all(weight >= 0 for weight in weights.values()) and 0 < total < math.inf):
         raise DecisionFailed(_one_line(unusable))
     return Decision(
-        question, {option: numbers[option] / total for option in options}, made_by, dollars=dollars
+        question,
+        {option: weight / total for option, weight in weights.items()},
+        made_by,
+        dollars=dollars,
     )
 
 
@@ -364,6 +372,10 @@ LAYA_CHECKPOINT = "convaiinnovations/laya"
 _LAYA_OPTION_LIMIT = 48
 """The most tokens Laya reads of one option. It cuts a longer one short without saying so."""
 
+_LAYA_QUESTION_RESERVE = 16
+"""The tokens Laya keeps back from the options for the question. Options that leave it fewer
+are each cut short to make the room, without Laya saying so."""
+
 
 class LayaDecider:
     """The decision interface answered by Laya, run in this process.
@@ -384,29 +396,30 @@ class LayaDecider:
     def _loaded(self) -> Any:
         """Laya, loaded at the first call. A failure is not kept, so the next call tries again."""
         if self._agent is None:
+            if importlib.util.find_spec("laya") is None:
+                raise DecisionUnavailable(
+                    "Laya is not installed: install pr-verification with its laya extra"
+                )
             try:
                 # On the processor whatever the machine has: probabilities then do not move
                 # with the hardware, and a threshold fitted on one machine holds on another.
                 agent = importlib.import_module("laya").load(LAYA_CHECKPOINT, device="cpu")
-                self.input_limit = int(agent.cfg["max_len"])
-            except ImportError as error:
-                raise DecisionUnavailable(
-                    "Laya is not installed: install pr-verification with its laya extra"
-                ) from error
-            except Exception as error:
-                # Whatever stops the checkpoint being fetched or built, Laya cannot be used.
+            except (ImportError, OSError, RuntimeError) as error:
+                # The package or PyTorch will not import, the checkpoint cannot be fetched or
+                # read, or the machine cannot build it. Anything else is a fault and is raised.
                 raise DecisionUnavailable(
                     _one_line(f"Laya could not be loaded: {type(error).__name__}: {error}")
                 ) from error
+            self.input_limit = int(agent.cfg["max_len"])
             self._agent = agent
         return self._agent
 
-    @staticmethod
-    def _size(agent: Any, state: str, text: str, options: tuple[str, ...]) -> int:
+    def _size(self, agent: Any, state: str, text: str, options: tuple[str, ...]) -> int:
         """How many tokens Laya's input for a question is, counted as Laya lays it out:
         `[CLS] choice question: text [SEP] [MASK] option ... [SEP] state [SEP]`.
 
-        Raises `InputTooLong` for an option beyond what Laya reads of one option.
+        Raises `InputTooLong` for an option beyond what Laya reads of one option, and for
+        options that together leave Laya too little room for the question.
         """
         mask = agent.tok.mask_token
 
@@ -414,11 +427,13 @@ class LayaDecider:
             ids = agent.tok(written.replace(mask, " "), add_special_tokens=False)["input_ids"]
             return len(ids)
 
-        longest = max(tokens(" " + option) for option in options)
-        if longest > _LAYA_OPTION_LIMIT:
-            raise InputTooLong(longest, _LAYA_OPTION_LIMIT)
-        head = tokens("choice question: " + text) + sum(1 + tokens(" " + o) for o in options)
-        return 3 + head + tokens(state) + 1
+        each = [tokens(" " + option) for option in options]
+        if max(each) > _LAYA_OPTION_LIMIT:
+            raise InputTooLong(max(each), _LAYA_OPTION_LIMIT)
+        marked = sum(each) + len(each)
+        if marked + _LAYA_QUESTION_RESERVE > self.input_limit:
+            raise InputTooLong(marked + _LAYA_QUESTION_RESERVE, self.input_limit)
+        return 3 + tokens("choice question: " + text) + marked + tokens(state) + 1
 
     def decide(self, state: str, question: Question) -> Decision:
         """Answer with Laya's probabilities, in one pass and without generating text.
@@ -432,21 +447,25 @@ class LayaDecider:
         """
         options = options_of(question)
         agent = self._loaded()
-        size = self._size(agent, state, question.text, options)
-        if size > self.input_limit:
-            raise InputTooLong(size, self.input_limit)
         asked = {"type": "choice", "instructions": question.text, "criteria": list(options)}
         try:
+            # Counting is inside: text that cannot be encoded fails in Laya's tokenizer.
+            size = self._size(agent, state, question.text, options)
+            if size > self.input_limit:
+                raise InputTooLong(size, self.input_limit)
             # The head is given the whole limit: left alone, Laya cuts a question to its own
             # smaller budget without saying so.
             result = agent.predict(state, {_ASKED: asked}, head_max_len=self.input_limit)
-            cut = result["usage"]["state_tokens_dropped"]
+            read = result["usage"]["input_tokens"]
             numbers = result["answers"][_ASKED]["probabilities"]
         except (ValueError, RuntimeError, LookupError, TypeError) as error:
             raise DecisionFailed(_one_line(f"Laya gave no answer: {error}")) from error
-        if cut:
-            # Laya counted more than was counted here, and answered about part of the state.
-            raise InputTooLong(self.input_limit + cut, self.input_limit)
+        if read != size:
+            # Laya laid the input out otherwise than it was counted here, so it may have cut
+            # something: its answer cannot pass for an answer to the whole input.
+            raise DecisionFailed(
+                f"Laya read {read} tokens of an input counted as {size}, so its answer is not used"
+            )
         return _decision(
             question,
             numbers,
@@ -512,7 +531,10 @@ class JevDecider:
                 "instructions": question.text,
                 "criteria": dict.fromkeys(options),
             }
-        size = len((state + question.text + "".join(options)).encode())
+        try:
+            size = len((state + question.text + "".join(options)).encode())
+        except UnicodeEncodeError:
+            raise DecisionFailed("the input for Jev holds text that cannot be sent") from None
         if size > JEV_INPUT_LIMIT:
             raise InputTooLong(size, JEV_INPUT_LIMIT)
         body = {"state": state, "model": JEV_MODEL, "questions": {_ASKED: asked}}

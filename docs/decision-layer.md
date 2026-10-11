@@ -40,7 +40,9 @@ brings PyTorch with it, so it is an extra:
 uv sync --extra laya
 ```
 
-Without the extra, Laya is `unavailable` and every decision goes to the small LLM. The first
+Without the extra, Laya is `unavailable` and every decision goes to the small LLM. So does every
+decision when Laya is installed and cannot be loaded, and the report does not say why: the only
+trace is `passed_on` on the decision. The first
 decision downloads the English checkpoint, `convaiinnovations/laya` (about 810 MB), from
 Hugging Face into its cache; later runs load it from there. The state of a decision never leaves
 the machine.
@@ -54,8 +56,8 @@ checked by running it:
   primitive can follow its labels instead of the state on this checkpoint: asked whether an
   agent was getting closer to its goal, it answered 0.0 with a confidence of 1.0, which would
   never be passed on.
-- **Nothing is cut short.** Left alone, Laya cuts a long state, a long question, and a long
-  option to fit, and reports only the first.
+- **Nothing is cut short.** Left alone, Laya cuts a long state, a long question, and long
+  options to fit, and reports only the first. Each case is counted before Laya is asked.
 
 ### Input size limit
 
@@ -66,15 +68,18 @@ one option**.
 
 The input is laid out as `[CLS] choice question: <question> [SEP] [MASK] <option> ... [SEP]
 <state> [SEP]`. `LayaDecider` counts that layout with Laya's own tokenizer before asking, and
-raises `InputTooLong` when it is over 512 or when an option is over 48; the decision is then
-passed to the small LLM. For five inputs of 27 to 409 tokens the count was equal to the
+raises `InputTooLong` when it is over 512, when an option is over 48, or when the options
+together leave fewer than 16 tokens of the 512 for the question, which is where Laya starts
+to shorten every option; the decision is then passed to the small LLM. For five inputs of 27 to 409 tokens the count was equal to the
 `input_tokens` Laya reported. A state that brought the input to exactly 512 tokens was answered
 with nothing dropped, and one token more was refused. With the Claim classifier's question, 480
 tokens are left for the Claim.
 
 Laya's separate budget of 192 tokens for the question and its options is lifted to the whole
-limit on each call, so a long question is not cut either. Should the two counts ever disagree,
-Laya's report of dropped state tokens is checked after the answer, and the answer is refused.
+limit on each call, so a long question is not cut either. After each answer the count made
+here is compared with the `input_tokens` Laya reports. Should they ever differ, as after a
+change to the `laya` package, the decision fails rather than use an answer to an input that
+may have been cut.
 
 ### Load time and time per decision
 
