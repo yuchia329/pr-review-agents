@@ -4,6 +4,7 @@ Nothing here reaches a real model or a dataset. The entry point is either the co
 scripted stand-in for the model, or a stand-in system that gives prepared Verdicts.
 """
 
+import functools
 import inspect
 import itertools
 import json
@@ -13,7 +14,7 @@ from itertools import repeat
 from pathlib import Path
 
 import pytest
-from conftest import FixtureRepository, git, model_listing
+from conftest import GathersNothing, commit_snapshots, git, model_listing
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -290,12 +291,12 @@ def a_case(name: str, part: Part = DEVELOPMENT, expected: Verdict = CONFIRMED) -
 
 
 def test_harness_runs_a_pull_request_through_the_entry_point_the_command_line_tool_calls(
-    fixture_repository: FixtureRepository, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    repository, before, after = (
-        fixture_repository.path,
-        fixture_repository.before,
-        fixture_repository.after,
+    # A repository of no Ecosystem, so the fixed pipeline both runs use opens no Sandbox.
+    repository = tmp_path / "repository"
+    before, after = commit_snapshots(
+        repository, {"greeting.txt": "hello\n"}, {"greeting.txt": "hello there\n"}
     )
     title = "Make the greeting friendlier"
     claims = ("The greeting is friendlier", "The greeting is longer")
@@ -497,7 +498,10 @@ def test_harness_runs_the_hand_made_cases_against_the_core(tmp_path: Path) -> No
     cases = hand_made_cases(tmp_path)
     model = ScriptedModel(json.dumps({"claims": [case.pull_request.title]}) for case in cases)
 
-    evaluation = evaluate(cases, model, repetitions=1)
+    # The core with an orchestration that gathers nothing, so that no Sandbox is opened.
+    entry_point = functools.partial(core.run, orchestration=GathersNothing())
+
+    evaluation = evaluate(cases, model, repetitions=1, entry_point=entry_point)
 
     for part, evaluated in ((DEVELOPMENT, evaluation.development), (HELD_OUT, evaluation.held_out)):
         runs = evaluated.runs

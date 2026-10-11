@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import FixtureRepository, model_listing
+from conftest import FixtureRepository, GathersNothing, model_listing
 
 from pr_verification.cli import exit_code, main
 from pr_verification.decision import DecisionFailed, ScriptedDecider
@@ -109,6 +109,7 @@ def test_command_line_reports_the_claims_made_in_the_title_and_the_two_text_file
         ],
         model,
         decider,
+        orchestration=GathersNothing(),
     )  # fmt: skip
 
     printed = json.loads(capsys.readouterr().out)

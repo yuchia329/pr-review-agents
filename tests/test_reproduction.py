@@ -270,6 +270,23 @@ def test_reproduction_that_behaves_differently_is_evidence_and_ends_the_work(
     assert len(model.requests) == 1
 
 
+TAX_PASSED = Results(passed=("test_tax",), failed=(), could_not_run=())
+TAX_FAILED = Results(passed=(), failed=("test_tax",), could_not_run=())
+
+
+@pytest.mark.parametrize(
+    ("text", "before", "after"),
+    [("fixed", TAX_FAILED, TAX_PASSED), ("broken", TAX_PASSED, TAX_FAILED)],
+)
+def test_evidence_holds_what_the_ecosystem_read_of_the_last_attempts_run_on_each_commit(
+    pricing: FixtureRepository, text: str, before: Results, after: Results
+) -> None:
+    run, _ = write(pricing, writes("cannot set up"), writes(text))
+
+    assert run.evidence is not None
+    assert (run.evidence.before_results, run.evidence.after_results) == (before, after)
+
+
 @pytest.mark.parametrize("text", ["fixed", "timed out"])
 def test_reproduction_is_placed_then_run_on_before_then_after_through_the_sandbox_alone(
     pricing: FixtureRepository, text: str

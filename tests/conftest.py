@@ -7,7 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from pr_verification.model import ModelFailed, ModelRequest, ScriptedModel
+from pr_verification.ecosystem import Results, Unreadable
+from pr_verification.model import Model, ModelFailed, ModelRequest, ScriptedModel
+from pr_verification.orchestration import Gathered
+from pr_verification.report import EvidenceSource, ReproductionEvidence
+from pr_verification.sandbox import RunResult
 
 
 @dataclass(frozen=True)
@@ -102,3 +106,46 @@ def asks(tool: str, **arguments: object) -> str:
 def finishes(**answer: object) -> str:
     """A response in which a role finishes with an answer."""
     return json.dumps({"finish": answer})
+
+
+def results(passed: str = "", failed: str = "", errors: str = "") -> Results:
+    """Results in which each letter names one test."""
+    return Results(passed=tuple(passed), failed=tuple(failed), could_not_run=tuple(errors))
+
+
+def a_reproduction(
+    before: Results | Unreadable | None,
+    after: Results | Unreadable | None,
+    *,
+    text: str = "assert total(100) == 120.0",
+    output: str = "",
+    exit_status: int = 0,
+    observation: str = "before: exit status 0; after: exit status 0",
+) -> ReproductionEvidence:
+    """Evidence from a Reproduction whose tests ended on the two commits as given. What both
+    runs printed and how they exited is the same, and says nothing of how the tests ended."""
+    ran = RunResult(output=output, exit_status=exit_status, limit_hit=None)
+    return ReproductionEvidence(
+        source=EvidenceSource.RAN_CODE,
+        observation=observation,
+        command=("run-reproduction",),
+        before=ran,
+        after=ran,
+        path="reproduction.txt",
+        reproduction=text,
+        before_results=before,
+        after_results=after,
+    )
+
+
+class GathersNothing:
+    """A stand-in orchestration that gathers no Evidence for any Claim and records each call."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[tuple[str, ...], Path, str, str, Model]] = []
+
+    def gather(
+        self, claims: tuple[str, ...], *, repository: Path, before: str, after: str, model: Model
+    ) -> tuple[Gathered, ...]:
+        self.calls.append((claims, repository, before, after, model))
+        return tuple(Gathered(()) for _ in claims)
