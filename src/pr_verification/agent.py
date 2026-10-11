@@ -61,7 +61,7 @@ class StepOutcome(StrEnum):
     RAN_TOOL = "ran_tool"
     """The response asked for one of the role's tools, and it was run."""
 
-    NO_SUCH_TOOL = "no_such_tool"
+    REFUSED = "refused"
     """The response asked for a tool the role was not given. Nothing was run."""
 
     UNREADABLE = "unreadable"
@@ -85,9 +85,9 @@ class Step:
     """The name of the tool that was run, or None when the outcome is not `RAN_TOOL`."""
 
     result: str
-    """What the role is shown for this step: what the tool returned for `RAN_TOOL`,
-    `NO_SUCH_TOOL` for a tool it was not given, `UNREADABLE_RESPONSE` for a response that
-    could not be read, and the empty string for `FINISHED`."""
+    """What the role is shown for this step: what the tool returned for `RAN_TOOL`, the
+    text `NO_SUCH_TOOL` for `REFUSED`, the text `UNREADABLE_RESPONSE` for `UNREADABLE`, and
+    the empty string for `FINISHED`."""
 
 
 class Stopped(StrEnum):
@@ -127,24 +127,29 @@ def run_role(role: Role, task: Mapping[str, object], model: Model) -> RoleRun:
 
     A step is one request to the model and what comes of the response. In every request:
 
-    - `instructions` are written from `role.instructions` and the names and descriptions of
-      `role.tools`, and from nothing else. They are the same on every step of a run, and hold
-      nothing of `task`, of any response, or of anything a tool returned.
+    - `instructions` hold `role.instructions` whole, and the name and the description of
+      each of `role.tools` whole, and are written from nothing else. They are the same on
+      every step of a run, and hold nothing of `task`, of any response, or of anything a
+      tool returned.
     - `data` is a JSON object with exactly two members: `task`, as given, and `steps`, a list
       with one object for each step taken so far, in order, holding that step's `response`
       and `result`. Everything the role reads reaches the model here, as data.
 
-    The response is read as a JSON object and decides the step's outcome:
+    The response is read as a JSON object and decides the step's outcome. A response can be
+    read when it is one of these and has no other member:
 
-    - `{"tool": "<name>", "arguments": {...}}` asks for a tool. `arguments` may be left out,
-      which gives the tool an empty object. When `<name>` is one of `role.tools`, that tool
-      is run once with the arguments and the outcome is `RAN_TOOL`. When it is not, no tool
-      of any role is run and the outcome is `NO_SUCH_TOOL`.
-    - `{"finish": {...}}` ends the run. The outcome is `FINISHED` and the object is the
-      run's `answer`.
-    - Anything else is `UNREADABLE`: text that is not JSON, JSON that is not an object, an
-      object with other members or with both `tool` and `finish`, a `tool` that is not a
-      string, or `arguments` or `finish` that is not an object.
+    - `{"tool": "<name>", "arguments": {...}}` asks for a tool, where the name is a string
+      and the arguments are an object. `arguments` may be left out, which gives the tool an
+      empty object. When the name is that of one of `role.tools`, that tool is run once with
+      the arguments and the outcome is `RAN_TOOL`. When it is not, nothing is run and the
+      outcome is `REFUSED`.
+    - `{"finish": {...}}` ends the run, where what it finishes with is an object. The
+      outcome is `FINISHED` and that object is the run's `answer`.
+
+    Anything else is `UNREADABLE`, and that is settled before any tool is looked up: text
+    that is not JSON, JSON that is not an object, an object with any other member or with
+    both `tool` and `finish`, a `tool` that is not a string, or `arguments` or `finish` that
+    is not an object.
 
     Every outcome counts as a step, and `Step` says what each records. After a step that
     does not finish, the role is asked again, unless the run has taken `role.step_cap`

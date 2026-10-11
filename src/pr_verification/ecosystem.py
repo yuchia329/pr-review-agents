@@ -10,7 +10,7 @@ through `find_commands`.
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from pr_verification.sandbox import Command, RunResult
 
@@ -102,6 +102,10 @@ class Ecosystem(Protocol):
         ...
 
 
+LONGEST_REPRODUCTION = 20_000
+"""The most characters the text of one Reproduction may hold and still be placed."""
+
+
 @dataclass(frozen=True)
 class Placement:
     """Where one Reproduction goes in a working copy, and how it is put there and run."""
@@ -109,18 +113,23 @@ class Placement:
     path: str
     """The file the Reproduction is written to, by its path from the root of the working copy."""
 
-    place: Command
+    write: Command
     """Run from the root of the working copy, writes the Reproduction to `path`, replacing
-    whatever is there, and exits with status 0. It needs no network."""
+    whatever is there, and exits with status 0 when it has. It needs no network."""
 
     run: Command
-    """Run from the root of the working copy after `place`, in `Phase.TEST`, runs the tests
+    """Run from the root of the working copy after `write`, in `Phase.TEST`, runs the tests
     of the Reproduction and no other. Its result is read with `Ecosystem.read_results`, as
     the result of `Commands.test` is."""
 
 
+@runtime_checkable
 class ReproductionEcosystem(Ecosystem, Protocol):
-    """An Ecosystem that also says how a Reproduction is written, placed, and run."""
+    """An Ecosystem that also says how a Reproduction is written, placed, and run.
+
+    The Ecosystem that `find_commands` gives in `Commands.ecosystem` is asked with
+    `isinstance` whether it is one.
+    """
 
     def reproduction_form(self) -> str:
         """What a Reproduction is in this Ecosystem, told to the model that writes one.
@@ -136,6 +145,10 @@ class ReproductionEcosystem(Ecosystem, Protocol):
         Runs nothing and writes nothing itself: the commands are for a Sandbox to run. The
         same placement serves the commits before and after a pull request, each in its own
         working copy, once the install commands have been run there.
+
+        Any text of up to `LONGEST_REPRODUCTION` characters can be placed, whatever
+        characters it holds: the file written holds exactly that text, as UTF-8, and nothing
+        in the text is read as anything but the content of the file.
         """
         ...
 

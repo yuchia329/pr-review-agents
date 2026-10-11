@@ -33,19 +33,26 @@ def reading_tools(repository: Path, commit: str) -> tuple[Tool, ...]:
     anywhere else, such as `../secrets` or an absolute path, names no file of the commit.
     What the tools return is Untrusted Content.
 
+    A file's text is its bytes read as UTF-8, with U+FFFD in place of any that are not. Its
+    lines are what the text holds between line feeds, numbered from 1: the line feed is not
+    part of the line, a last line with no line feed after it counts, and an empty file has
+    no lines. Where a tool returns several entries, a line feed sits between one and the
+    next and none follows the last.
+
     `list_files` takes an optional `directory`
-        Returns the path of every file of the commit, one to a line, in sorted order. With
-        `directory`, only the files under that directory. `NOTHING_FOUND` when there are none.
+        Returns the path of every file of the commit, in sorted order. With `directory`,
+        named as a file is and with or without a `/` at its end, only the files under that
+        directory. `NOTHING_FOUND` when there are none.
 
     `search` takes `text`
-        Returns every line of the commit's files that holds `text` exactly as written, as
-        `<path>:<line number>:<line>`, one to a line, by path and then by line number. Lines
-        are numbered from 1. `text` is not a pattern and letter case matters. Files that are
-        not text are left out. `NOTHING_FOUND` when no line holds it.
+        Returns every line of the commit's files that holds `text` exactly as written, each
+        as `<path>:<line number>:<line>`, by path and then by line number. `text` is not a
+        pattern and letter case matters. `NOTHING_FOUND` when no line holds it.
 
     `read_file` takes `path`
-        Returns the text of the file, each line as `<line number>:<line>`. `NO_SUCH_FILE`
-        when the commit has no file at that path, as for a directory.
+        Returns every line of the file, each as `<line number>:<line>`, and so the empty
+        string for an empty file. `NO_SUCH_FILE` when the commit has no file at that path,
+        as for a directory.
 
     Each answers `BAD_ARGUMENTS` when an argument it needs is missing, when an argument is
     not a string or is empty, or when it is given an argument it does not take.
@@ -86,15 +93,16 @@ def locate(
 
     - `source` is `EvidenceSource.READ_CODE`;
     - `path`, `first_line`, and `last_line` are the place's;
-    - `excerpt` is those lines of the file as the commit holds them, each ending as it does
-      in the file, whatever the role said they hold;
+    - `excerpt` is those lines of the file as the commit holds them, with a line feed
+      between one and the next, whatever the role said they hold;
     - `observation` is `<path> lines <first_line> to <last_line>`, written by code.
 
     A place is left out when it is not an object with exactly those three members, when its
     path is not a file of the commit, or when its lines are not whole numbers with
-    `1 <= first_line <= last_line <= the number of lines in the file`. So the model's word
-    alone is never recorded as Evidence. There is no Evidence at all when the run stopped at
-    the step cap, or when its answer has no list under `places`.
+    `1 <= first_line <= last_line <= the number of lines in the file`, lines being what
+    `reading_tools` says they are. So the model's word alone is never recorded as Evidence.
+    There is no Evidence at all when the run stopped at the step cap, or when its answer has
+    no list under `places`.
 
     Raises as `run_role` does.
     """

@@ -161,8 +161,10 @@ class PythonEcosystem:
     def reproduction_form(self) -> str:
         """See `ReproductionEcosystem.reproduction_form`.
 
-        A Reproduction is one pytest test file: it imports the repository's code and holds
-        at least one test function.
+        A Reproduction is one pytest test file that holds at least one test function. The
+        model is told to import the repository's code inside each test function, so that a
+        name the code before the pull request lacks fails that test, where an import at the
+        top of the file would stop any test from running.
         """
         raise NotImplementedError
 
