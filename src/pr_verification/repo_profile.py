@@ -11,13 +11,24 @@ gathers Evidence with it: when that caller finds it no longer works against the 
 it calls `ProfileStore.discard`, and the next run learns the profile again.
 """
 
+import hashlib
+import json
+import os
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Protocol
 
-from pr_verification.ecosystem import Commands, Unsupported, find_commands
-from pr_verification.sandbox import Command, Limits, RunResult, SandboxWithHomes
+from pr_verification.ecosystem import Commands, Results, Unsupported, find_commands
+from pr_verification.repository import git
+from pr_verification.sandbox import (
+    Command,
+    Limits,
+    Phase,
+    RunResult,
+    SandboxFailed,
+    SandboxWithHomes,
+)
 
 Discover = Callable[[Path, str], Commands | Unsupported]
 """The shape of `pr_verification.ecosystem.find_commands`, which is what discovery is."""
@@ -75,7 +86,48 @@ def digest_lock_files(repository: Path, commit: str, lock_files: tuple[str, ...]
 
     Raises as `pr_verification.repository.git` does when `commit` is not in the repository.
     """
-    raise NotImplementedError
+    # Each entry is `<mode> <type> <object>\t<path>`. A submodule is listed and is not a file.
+    listing = os.fsdecode(git(repository, "ls-tree", "-r", "-z", "--end-of-options", commit))
+    files = {
+        path: details.split()[2]
+        for details, _, path in (entry.partition("\t") for entry in listing.split("\0"))
+        if " blob " in details
+    }
+    # The contents are read, not taken from git's name for them: two repositories can name the
+    # same contents differently.
+    held = [
+        (path, hashlib.sha256(git(repository, "cat-file", "blob", files[path])).hexdigest())
+        if path in files
+        # Nothing stands for a file that is missing, as no contents can: an empty file has some.
+        else (path, None)
+        for path in lock_files
+    ]
+    return _digest(held)
+
+
+def _digest(value: object) -> str:
+    """A short text that stands for `value`, which is text, nothing, or lists of these: the same
+    for values that are equal, and another for any that are not."""
+    return hashlib.sha256(json.dumps(value).encode()).hexdigest()
+
+
+def _kept_for(repository: Path, directory: Path) -> Path:
+    """The directory under `directory` that holds what is kept for `repository`.
+
+    It is named after the resolved path of the repository and need not exist yet. Raises
+    `ValueError` when `directory` is the directory of `repository` or lies inside it.
+    """
+    directory, repository = directory.resolve(), repository.resolve()
+    if directory == repository or repository in directory.parents:
+        raise ValueError(
+            f"{directory} is in the repository {repository}, where a pull request could put a file"
+        )
+    return directory / _digest(str(repository))
+
+
+def _is_texts(kept: object) -> bool:
+    """Whether `kept` is a list of texts, as JSON gives back a tuple of them."""
+    return isinstance(kept, list) and all(isinstance(text, str) for text in kept)
 
 
 class ProfileStore(Protocol):
@@ -111,7 +163,7 @@ class DirectoryStore:
 
     def __init__(self, directory: Path) -> None:
         """A store that keeps its profiles under `directory`, which need not exist yet."""
-        raise NotImplementedError
+        self._directory = directory
 
     def load(self, repository: Path) -> RepoProfile | None:
         """See `ProfileStore.load`. The profile loaded equals the one saved.
@@ -119,15 +171,50 @@ class DirectoryStore:
         What is kept for a repository but cannot be read back as a profile, as when its file
         was damaged or left by another version of the system, is no profile: None.
         """
-        raise NotImplementedError
+        file = self._file(repository)
+        try:
+            kept = json.loads(file.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        except (ValueError, RecursionError):
+            # Damaged: not text, or not JSON.
+            return None
+        match kept:
+            case {
+                "image": str(image),
+                "install": [*install],
+                "test": [*test],
+                "test_framework": str(test_framework),
+                "test_layout": [*test_layout],
+                "lock_files": [*lock_files],
+                "lock_digest": str(lock_digest),
+                **others,
+            } if not others and all(map(_is_texts, (*install, test, test_layout, lock_files))):
+                return RepoProfile(
+                    image,
+                    tuple(map(tuple, install)),
+                    tuple(test),
+                    test_framework,
+                    tuple(test_layout),
+                    tuple(lock_files),
+                    lock_digest,
+                )
+        # Not what `save` writes, so left by another version of the system.
+        return None
 
     def save(self, repository: Path, profile: RepoProfile) -> None:
         """See `ProfileStore.save`."""
-        raise NotImplementedError
+        file = self._file(repository)
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text(json.dumps(asdict(profile), indent=2), encoding="utf-8")
 
     def discard(self, repository: Path) -> None:
         """See `ProfileStore.discard`."""
-        raise NotImplementedError
+        self._file(repository).unlink(missing_ok=True)
+
+    def _file(self, repository: Path) -> Path:
+        """Where the profile of `repository` is kept. Raises `ValueError` as the store does."""
+        return _kept_for(repository, self._directory) / "profile.json"
 
 
 class DependencyCache:
@@ -141,7 +228,7 @@ class DependencyCache:
 
     def __init__(self, directory: Path) -> None:
         """A cache that keeps its archives under `directory`, which need not exist yet."""
-        raise NotImplementedError
+        self._directory = directory
 
     def archive(self, repository: Path, image: str, lock_digest: str) -> Path:
         """Where the archive for `repository`, run in `image`, with one digest of its lock file
@@ -160,7 +247,9 @@ class DependencyCache:
         Raises `ValueError` when `directory` is the directory of `repository` or lies inside
         it, both resolved: a pull request could put a file there.
         """
-        raise NotImplementedError
+        kept = _kept_for(repository, self._directory)
+        kept.mkdir(parents=True, exist_ok=True)
+        return kept / f"{_digest([image, lock_digest])}.home"
 
 
 @dataclass(frozen=True)
@@ -258,7 +347,79 @@ def prepare_target(
     Raises `SandboxFailed` when a Sandbox itself cannot do what is asked of it, and
     `ValueError` as `DirectoryStore` and `DependencyCache` do.
     """
-    raise NotImplementedError
+    profile = store.load(repository)
+    if profile is not None:
+        prepared = _prepare_with(profile, repository, target, cache, sandbox_for, limits)
+        if prepared is not None:
+            return prepared
+        store.discard(repository)
+
+    commands = discover(repository, target)
+    if isinstance(commands, Unsupported):
+        return commands
+    digest = digest_lock_files(repository, target, commands.lock_files)
+    archive = cache.archive(repository, commands.image, digest)
+    sandbox = sandbox_for(commands.image)
+    failed = _install(sandbox, commands.install, target, limits)
+    if failed is not None:
+        return failed
+    sandbox.save_home(target, archive)
+    tested = sandbox.run(commands.test, commit=target, phase=Phase.TEST, limits=limits)
+    if not isinstance(commands.ecosystem.read_results(tested), Results):
+        return CommandFailed(commands.test, tested)
+    profile = RepoProfile(
+        image=commands.image,
+        install=commands.install,
+        test=commands.test,
+        test_framework=commands.test_framework,
+        test_layout=commands.test_layout,
+        lock_files=commands.lock_files,
+        lock_digest=digest,
+    )
+    store.save(repository, profile)
+    return Prepared(profile, sandbox, learned=True)
+
+
+def _prepare_with(
+    profile: RepoProfile,
+    repository: Path,
+    target: str,
+    cache: DependencyCache,
+    sandbox_for: SandboxFor,
+    limits: Limits,
+) -> Prepared | None:
+    """Install the target commit's dependencies with a stored profile, as `prepare_target`
+    describes. None when the profile no longer holds and is to be discarded."""
+    digest = digest_lock_files(repository, target, profile.lock_files)
+    if profile.lock_digest != digest:
+        return None
+    archive = cache.archive(repository, profile.image, digest)
+    sandbox = sandbox_for(profile.image)
+    put_back = archive.exists()
+    if put_back:
+        try:
+            sandbox.restore_home(target, archive)
+        except SandboxFailed:
+            # So that the next run installs from nothing, and does not meet this archive again.
+            archive.unlink(missing_ok=True)
+            raise
+    if _install(sandbox, profile.install, target, limits) is not None:
+        return None
+    if not put_back:
+        sandbox.save_home(target, archive)
+    return Prepared(profile, sandbox, learned=False)
+
+
+def _install(
+    sandbox: SandboxWithHomes, install: tuple[Command, ...], commit: str, limits: Limits
+) -> CommandFailed | None:
+    """Run install commands against a commit in order, up to the first that does not work.
+    None when each exited with status 0."""
+    for command in install:
+        run = sandbox.run(command, commit=commit, phase=Phase.INSTALL, limits=limits)
+        if run.exit_status != 0:
+            return CommandFailed(command, run)
+    return None
 
 
 def prepare_pull_request(
@@ -292,4 +453,8 @@ def prepare_pull_request(
     Raises `SandboxFailed` when the Sandbox itself cannot do what is asked of it, and
     `ValueError` as `DependencyCache` does.
     """
-    raise NotImplementedError
+    digest = digest_lock_files(repository, commit, profile.lock_files)
+    archive = cache.archive(repository, profile.image, digest)
+    if archive.exists():
+        sandbox.restore_home(commit, archive)
+    return _install(sandbox, profile.install, commit, limits)

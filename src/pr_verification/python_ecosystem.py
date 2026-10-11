@@ -2,8 +2,10 @@
 
 import base64
 import os
+import posixpath
 import re
 import tomllib
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +80,9 @@ test from running.
 
 The tests run with no network. They can use the standard library, pytest, and whatever the
 repository's own tests can import, and nothing else."""
+
+_TEST_FILES = ("test_*.py", "*_test.py")
+"""What pytest takes for a test file, going by its name."""
 
 _SUMMARY_STARTS = re.compile(r"^=+ short test summary info =+$", re.MULTILINE)
 _SESSION_ENDED = re.compile(r"^=+ .+ in \d[\d.]*s( \([\d:]+\))? =+$", re.MULTILINE)
@@ -159,6 +164,9 @@ class PythonEcosystem:
             # pip reads dependency groups only from 25.1 on, and some of the images hold an older.
             install=((*_INSTALL, "--upgrade", "pip"), (*_INSTALL, *to_install)),
             test=_TEST,
+            test_framework="pytest",
+            test_layout=_test_layout(files),
+            lock_files=LOCK_FILES,
         )
 
     def read_results(self, run: RunResult) -> Results | Unreadable:
@@ -245,6 +253,16 @@ def _table(tables: dict[str, Any], name: str) -> dict[str, Any]:
 def _named_for_tests(table: dict[str, Any]) -> list[str]:
     """The extras or dependency groups in a table that hold test dependencies, as written."""
     return [name for name in table if name.lower() in _TEST_NAMES]
+
+
+def _test_layout(files: list[str]) -> tuple[str, ...]:
+    """The directories that hold a test file, among the paths of a commit's files."""
+    holding = {
+        posixpath.dirname(path) or "."
+        for path in files
+        if any(fnmatchcase(posixpath.basename(path), pattern) for pattern in _TEST_FILES)
+    }
+    return tuple(sorted(holding))
 
 
 def _image(pyproject: dict[str, Any]) -> str:

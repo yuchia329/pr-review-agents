@@ -204,6 +204,23 @@ _OUT_OF_MEMORY_REPORTED_WITHIN = 2.0
 """How many seconds after a command is killed the runtime may take to report that it went over the
 memory limit. That report and the report of its death come by different routes."""
 
+# A home directory is saved and put back by commands run in the Sandbox's own image, as any
+# command is, so an archive is written and unpacked only inside the Sandbox. The image has to
+# hold `sh`, `tar`, `chmod`, and `find`.
+
+_SAVE_HOME: Command = ("tar", "-c", "-f", "-", "-C", f"{_VOLUME}/{_HOME}", ".")
+"""Writes a commit's home directory to standard output as one file: the archive."""
+
+_RESTORE_HOME: Command = (
+    "sh",
+    "-c",
+    # Emptied first, so that nothing is left over. An install phase can leave directories that
+    # even their owner may not change, so the owner is let into all of them before that.
+    f"chmod -R u+rwX {_VOLUME}/{_HOME} && find {_VOLUME}/{_HOME} -mindepth 1 -delete"
+    f" && tar -x -p -f - -C {_VOLUME}/{_HOME}",
+)
+"""Makes a commit's home directory hold what the archive on standard input holds, and no more."""
+
 
 class ContainerSandbox:
     """The `Sandbox` as a local container (ADR 0001). It keeps every promise `Sandbox.run` makes,
@@ -239,18 +256,9 @@ class ContainerSandbox:
             raise SandboxFailed(f"the Sandbox could not do the run: {error}") from error
 
     def _run(self, command: Command, volume: str, phase: Phase, limits: Limits) -> RunResult:
-        # Nothing of the starting process is passed in: no environment, and no file but the volume.
         container = _docker(
             "create",
-            # The command is started directly, not handed to a program the image names.
-            "--entrypoint", "",
-            "--volume", f"{volume}:{_VOLUME}",
-            "--workdir", f"{_VOLUME}/{_WORKING_COPY}",
-            "--env", f"HOME={_VOLUME}/{_HOME}",
-            "--user", f"{_USER_ID}:{_USER_ID}",
-            "--cap-drop", "ALL",
-            "--security-opt", "no-new-privileges",
-            "--network", "bridge" if phase is Phase.INSTALL else "none",
+            *_held_in(volume, network="bridge" if phase is Phase.INSTALL else "none"),
             "--memory", str(limits.memory_bytes),
             # The same again for memory and swap together leaves no swap to spill into.
             "--memory-swap", str(limits.memory_bytes),
@@ -268,11 +276,54 @@ class ContainerSandbox:
 
     def save_home(self, commit: str, archive: Path) -> None:
         """See `SandboxWithHomes.save_home`."""
-        raise NotImplementedError
+        try:
+            volume = self._volume_for(commit)
+            # Written beside the archive, whose place it takes in one step once it is whole.
+            descriptor, partial = tempfile.mkstemp(dir=archive.parent, prefix=f"{archive.name}.")
+            try:
+                with open(descriptor, "wb") as written:
+                    self._carry_home(volume, _SAVE_HOME, stdout=written)
+                os.replace(partial, archive)
+            except BaseException:
+                os.unlink(partial)
+                raise
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise SandboxFailed(f"the Sandbox could not save a home directory: {error}") from error
 
     def restore_home(self, commit: str, archive: Path) -> None:
         """See `SandboxWithHomes.restore_home`."""
-        raise NotImplementedError
+        try:
+            volume = self._volume_for(commit)
+            with open(archive, "rb") as saved:
+                self._carry_home(volume, _RESTORE_HOME, stdin=saved)
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise SandboxFailed(
+                f"the Sandbox could not restore a home directory: {error}"
+            ) from error
+
+    def _carry_home(
+        self,
+        volume: str,
+        command: Command,
+        *,
+        stdin: IO[bytes] | None = None,
+        stdout: IO[bytes] | None = None,
+    ) -> None:
+        """Run the command that writes or unpacks an archive, on a commit's volume and with no
+        network. The archive goes straight from or to the file given: it is never read here."""
+        _docker(
+            "run",
+            "--rm",
+            *_held_in(volume, network="none"),
+            # The runtime would otherwise keep a second copy of the archive as the run's output.
+            "--log-driver", "none",
+            # Without this the command is given no standard input to read an archive from.
+            *(["--interactive"] if stdin else []),
+            self._image,
+            *command,
+            stdin=stdin,
+            stdout=stdout,
+        )  # fmt: skip
 
     def close(self) -> None:
         """Remove everything this Sandbox made. Calling it again does nothing."""
@@ -325,13 +376,37 @@ class ContainerSandbox:
             _docker("rm", "--force", "--volumes", holder)
 
 
-def _docker(*arguments: str, stdin: IO[bytes] | None = None, stderr: int = subprocess.PIPE) -> str:
-    """What one command to the container runtime printed. Raises `SandboxFailed` when it fails."""
+def _held_in(volume: str, network: str) -> tuple[str, ...]:
+    """The options that hold a command in, for a container made on a commit's volume.
+
+    Nothing of the starting process is passed in: no environment, and no file but the volume.
+    """
+    return (
+        # The command is started directly, not handed to a program the image names.
+        "--entrypoint", "",
+        "--volume", f"{volume}:{_VOLUME}",
+        "--workdir", f"{_VOLUME}/{_WORKING_COPY}",
+        "--env", f"HOME={_VOLUME}/{_HOME}",
+        "--user", f"{_USER_ID}:{_USER_ID}",
+        "--cap-drop", "ALL",
+        "--security-opt", "no-new-privileges",
+        "--network", network,
+    )  # fmt: skip
+
+
+def _docker(
+    *arguments: str,
+    stdin: IO[bytes] | None = None,
+    stdout: IO[bytes] | None = None,
+    stderr: int = subprocess.PIPE,
+) -> str:
+    """What one command to the container runtime printed, or nothing when it printed to a file
+    given as `stdout`. Raises `SandboxFailed` when it fails."""
     try:
         done = subprocess.run(
             ["docker", *arguments],
             stdin=stdin,
-            stdout=subprocess.PIPE,
+            stdout=stdout or subprocess.PIPE,
             stderr=stderr,
             encoding="utf-8",
             errors="replace",
@@ -339,9 +414,9 @@ def _docker(*arguments: str, stdin: IO[bytes] | None = None, stderr: int = subpr
     except OSError as error:
         raise SandboxFailed(f"cannot run the container runtime: {error}") from error
     if done.returncode != 0:
-        refusal = (done.stderr or done.stdout).strip()
+        refusal = (done.stderr or done.stdout or "").strip()
         raise SandboxFailed(f"the container runtime failed to {arguments[0]}: {refusal}")
-    return done.stdout
+    return done.stdout or ""
 
 
 def _state(container: str) -> dict[str, Any]:

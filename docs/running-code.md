@@ -1,9 +1,10 @@
 # Running code
 
 Pull request code and Reproductions are run in one place only, the Sandbox. What is specific to a
-language sits behind the Ecosystem boundary. The contracts are the docstrings in
-`src/pr_verification/sandbox.py`, `ecosystem.py`, and `python_ecosystem.py`; this page says what
-is needed to use them and where their limits are.
+language sits behind the Ecosystem boundary. What is kept between pull requests is the Repo
+Profile and the installed dependencies. The contracts are the docstrings in
+`src/pr_verification/sandbox.py`, `ecosystem.py`, `python_ecosystem.py`, and `repo_profile.py`;
+this page says what is needed to use them and where their limits are.
 
 ## The Sandbox
 
@@ -16,8 +17,9 @@ Each run is a new container. What it is given:
 - The files of one commit, as a working copy it may write to, and a home directory. Both are kept
   in a volume that belongs to that commit, so an install phase leaves what it installed for the
   test phase, and the commit before a pull request never sees what the commit after it left.
-- Nothing else from the machine that started it: no environment variable, no file, no socket of
-  the container runtime.
+- Nothing else from the machine that started it: no environment variable, no socket of the
+  container runtime, and no file but a home directory put back from an earlier run (see "What
+  is kept between runs").
 - A user that is not root, with every capability dropped and no way to gain privileges.
 - The network in the install phase, and none in the test phase.
 - Limits on time, memory, and processors. A run that reaches the time limit or the memory limit
@@ -44,6 +46,68 @@ credentials out of them.
 
 In the install phase the network is open, so code that runs while installing, such as a
 `setup.py`, can send out anything it can read. That is the files of the commit and nothing else.
+
+## What is kept between runs
+
+Two things, each in a directory outside the repository that the caller names (ADR 0004). Both
+refuse a directory that is the repository or lies inside it.
+
+- **The Repo Profile**, in a `DirectoryStore`: the image, the install commands, the test command,
+  the test framework, the test layout, and the lock files with a digest of their contents. It is
+  one JSON file for each repository.
+- **Installed dependencies**, in a `DependencyCache`: the home directory the install commands
+  left, as one archive for each repository, image, and digest of the lock file.
+
+`prepare_target` fills both, from the target commit only. A profile is saved once its install
+commands and its test command have been run against that commit. It is used again while the
+lock files hold the same contents, and learned again when they change or an install command
+stops working. `prepare_pull_request` reads both and writes neither.
+
+An archive is a tar file of the home directory. It is written and unpacked by `tar` running in
+the Sandbox's own image, as the same user and under the same isolation as any command, with no
+network. On the machine that started the Sandbox it is only ever a file that is passed along.
+
+### Time saved on a repeat run
+
+Measured on Flask at commit `d086db8`, on macOS with Docker Desktop 28.4, with the image already
+fetched. Each run is `prepare_target` in a new Sandbox. Seconds, the median of three rounds,
+with the lowest and highest in brackets.
+
+| Run | Whole | Putting back | Installing | Saving | Proving the test command |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| First run, nothing kept | 15.8 (13.4-17.5) | | 12.4 (9.2-12.4) | 1.3 (1.1-2.5) | 2.0 (1.9-2.0) |
+| Repeat run | 6.2 (5.7-7.2) | 2.0 (1.8-2.3) | 4.1 (3.8-4.2) | | |
+| Repeat run, cache emptied | 11.7 (10.4-14.4) | | 10.5 (9.0-13.1) | 1.0 (1.0-1.2) | |
+
+- A repeat run takes 9.6 seconds less than a first run, which is 61% of it.
+- The dependency cache saves 5.5 seconds: the repeat run against the one with the cache
+  emptied. Putting the 131 MB archive back costs 2.0 seconds and takes 6.4 off installing.
+- The Repo Profile saves the 2.0 seconds of the run that proves the test command, and
+  discovery, which took under 0.05 seconds. The rest of the 4.1 seconds between the first run
+  and the one with the cache emptied is installs from the network taking different times.
+
+What the profile saves grows with the repository's test suite, and Flask's is short. One
+repository on one machine is a small sample: the spread between rounds is as wide as some of
+the differences.
+
+### Known limits
+
+- The image has to hold `sh`, `tar`, `chmod`, and `find`. The `python:<version>-slim` images
+  do. With an image that does not, saving and putting back raise `SandboxFailed`.
+- Saving and putting back have no time limit, and the size of an archive is not limited.
+- Nothing is ever removed from the cache. Each change of the lock file leaves the archive for
+  the old one behind, and a repository that is gone leaves its profile and its archives.
+- A repository is told from another by the resolved path of its directory. One that is checked
+  out somewhere else has no profile and no archive there, and learns again.
+- An image is told from another by its name. An archive saved in `python:3.14-slim` is put back
+  after that name has moved on to a newer build. The install commands are still run afterwards.
+- The lock file is taken to be the files the Ecosystem names. A file that one of them includes
+  is not followed, so a change there alone leaves the profile and the archive in use.
+- A home directory holding something its own user may not read cannot be saved.
+- When an archive cannot be put back, the home directory is left empty or part filled. From
+  `prepare_target` the error goes on and the archive is deleted, so the next run starts clean.
+- A profile is not written in one step. Two runs saving at once can leave a file that reads as
+  no profile, and the next run learns it again. An archive does take its place in one step.
 
 ## The Python Ecosystem
 
@@ -72,6 +136,14 @@ in it is Inconclusive.
 
 The image is `python:<version>-slim`, for the newest of Python 3.14 to 3.10 that
 `requires-python` in `pyproject.toml` allows.
+
+### What the Repo Profile keeps
+
+- The test framework is `pytest`.
+- The test layout is each directory that holds a file named `test_*.py` or `*_test.py`.
+- The lock files are the root files that decide the image and the install commands, whether or
+  not the commit holds them: `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements.txt`, and
+  the four requirements files for test dependencies named above.
 
 ### Known limits
 
