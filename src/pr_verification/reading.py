@@ -5,12 +5,15 @@ Nothing here runs code or changes anything. The files are read from the reposito
 commit holds them, outside the Sandbox, whatever the state of the working tree.
 """
 
+import os
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from pr_verification.agent import RoleRun, Tool
+from pr_verification.agent import Role, RoleRun, Tool, run_role
 from pr_verification.model import Model
-from pr_verification.report import ReadEvidence
+from pr_verification.report import EvidenceSource, ReadEvidence
+from pr_verification.repository import git
 
 NO_SUCH_FILE = "No file of this commit has that path."
 """What a read-only tool answers for a path that is not a file of the commit."""
@@ -23,6 +26,32 @@ BAD_ARGUMENTS = "The arguments are not the ones this tool takes."
 
 LOCATOR_STEP_CAP = 12
 """The most steps one run of the locator takes unless another cap is given."""
+
+_LIST_FILES = """\
+Lists the path of every file, one to a line. Takes an optional "directory", to list only the \
+files under it, as in {"directory": "billing"}."""
+
+_SEARCH = """\
+Finds every line of every file that holds "text" exactly as written, as in {"text": "tax_rate"}. \
+The text is not a pattern, and letter case matters. Each line found is given as \
+<path>:<line number>:<line>."""
+
+_READ_FILE = """\
+Reads one file, named by its "path" from the root of the repository, as in \
+{"path": "billing/tax.py"}. Each line is given as <line number>:<line>."""
+
+_LOCATOR_INSTRUCTIONS = """\
+You find the code that a Claim concerns. A Claim is a checkable statement a pull request makes
+about its own changes, and it is the "claim" of your task.
+
+Your tools read the files of the repository. Use them to find the places a reader would have to
+look at to check the Claim: the functions, classes, settings, or documents it is about. Name only
+lines you have read, and as few of them as show what the Claim concerns.
+
+Do not judge whether the Claim is true. Finish with the places you found, each as a file's path
+and the first and last of its lines, counted from 1, in this form:
+{"places": [{"path": "billing/tax.py", "first_line": 3, "last_line": 9}]}
+When you find none, finish with {"places": []}."""
 
 
 def reading_tools(repository: Path, commit: str) -> tuple[Tool, ...]:
@@ -57,7 +86,7 @@ def reading_tools(repository: Path, commit: str) -> tuple[Tool, ...]:
     Each answers `BAD_ARGUMENTS` when an argument it needs is missing, when an argument is
     not a string or is empty, or when it is given an argument it does not take.
     """
-    raise NotImplementedError
+    return _tools(_Files(repository, commit))
 
 
 @dataclass(frozen=True)
@@ -106,4 +135,135 @@ def locate(
 
     Raises as `run_role` does.
     """
-    raise NotImplementedError
+    files = _Files(repository, commit)
+    role = Role("locator", _LOCATOR_INSTRUCTIONS, _tools(files), step_cap)
+    run = run_role(role, {"claim": claim}, model)
+    places = run.answer.get("places") if run.answer is not None else None
+    read = (_read_place(files, place) for place in places) if isinstance(places, list) else ()
+    return Located(evidence=tuple(place for place in read if place is not None), run=run)
+
+
+def _read_place(files: "_Files", place: object) -> ReadEvidence | None:
+    """The lines a place names, read from the commit, or None when it names no such lines."""
+    if not (isinstance(place, dict) and place.keys() == {"path", "first_line", "last_line"}):
+        return None
+    path, first, last = place["path"], place["first_line"], place["last_line"]
+    if not (isinstance(path, str) and path in files.paths):
+        return None
+    # Asked whether it is an instance of `int`, `true` would pass for 1.
+    if not (type(first) is int and type(last) is int):
+        return None
+    lines = files.lines(path)
+    if not 1 <= first <= last <= len(lines):
+        return None
+    return ReadEvidence(
+        source=EvidenceSource.READ_CODE,
+        observation=f"{path} lines {first} to {last}",
+        path=path,
+        first_line=first,
+        last_line=last,
+        excerpt="\n".join(lines[first - 1 : last]),
+    )
+
+
+class _Files:
+    """The files of one commit, read from git's object store and never from the working tree.
+
+    A file is reached only by finding its path among those the commit lists. Nothing a model
+    wrote is handed to git as a path, so no path can lead out of the commit.
+    """
+
+    def __init__(self, repository: Path, commit: str) -> None:
+        self._repository = repository
+        # Each entry is `<mode> <type> <object>\t<path>`. A submodule is listed and is not a file.
+        listing = os.fsdecode(git(repository, "ls-tree", "-r", "-z", "--end-of-options", commit))
+        self._objects = {
+            path: details.split()[2]
+            for details, _, path in (entry.partition("\t") for entry in listing.split("\0"))
+            if " blob " in details
+        }
+
+    @property
+    def paths(self) -> Collection[str]:
+        """The path of every file of the commit."""
+        return self._objects.keys()
+
+    def lines(self, path: str) -> list[str]:
+        """The lines of the file at `path`, which is one of `paths`."""
+        ((_, lines),) = self.lines_of_each([path])
+        return lines
+
+    def lines_of_each(self, paths: Sequence[str]) -> Iterator[tuple[str, list[str]]]:
+        """Each of these files with its lines, in the order given. Each is one of `paths`."""
+        asked = "".join(f"{self._objects[path]}\n" for path in paths)
+        # One git process reads them all. It answers for each with `<object> <type> <size>`, a
+        # line feed, the content, and a line feed.
+        answers = git(self._repository, "cat-file", "--batch", stdin=asked.encode())
+        start = 0
+        for path in paths:
+            content_starts = answers.index(b"\n", start) + 1
+            content_ends = content_starts + int(answers[start:content_starts].split()[2])
+            yield path, _lines(answers[content_starts:content_ends])
+            start = content_ends + 1
+
+
+def _lines(content: bytes) -> list[str]:
+    """The lines of a file, a line being what `reading_tools` says it is."""
+    lines = content.decode(errors="replace").split("\n")
+    # Nothing after the last line feed is no line: an empty file has none, and a line feed at
+    # the end of a file starts none.
+    if lines[-1] == "":
+        lines.pop()
+    return lines
+
+
+def _tools(files: _Files) -> tuple[Tool, ...]:
+    """The three read-only tools over these files."""
+
+    def list_files(arguments: Mapping[str, object]) -> str:
+        given = _usable(arguments, optional=("directory",))
+        if given is None:
+            return BAD_ARGUMENTS
+        paths = sorted(files.paths)
+        if "directory" in given:
+            under = given["directory"].removesuffix("/") + "/"
+            paths = [path for path in paths if path.startswith(under)]
+        return "\n".join(paths) if paths else NOTHING_FOUND
+
+    def search(arguments: Mapping[str, object]) -> str:
+        given = _usable(arguments, needed=("text",))
+        if given is None:
+            return BAD_ARGUMENTS
+        found = [
+            f"{path}:{number}:{line}"
+            for path, lines in files.lines_of_each(sorted(files.paths))
+            for number, line in enumerate(lines, start=1)
+            if given["text"] in line
+        ]
+        return "\n".join(found) if found else NOTHING_FOUND
+
+    def read_file(arguments: Mapping[str, object]) -> str:
+        given = _usable(arguments, needed=("path",))
+        if given is None:
+            return BAD_ARGUMENTS
+        if given["path"] not in files.paths:
+            return NO_SUCH_FILE
+        lines = files.lines(given["path"])
+        return "\n".join(f"{number}:{line}" for number, line in enumerate(lines, start=1))
+
+    return (
+        Tool("list_files", _LIST_FILES, list_files),
+        Tool("search", _SEARCH, search),
+        Tool("read_file", _READ_FILE, read_file),
+    )
+
+
+def _usable(
+    arguments: Mapping[str, object], needed: Sequence[str] = (), optional: Sequence[str] = ()
+) -> dict[str, str] | None:
+    """The arguments a model gave, when they are ones a tool can use: all it needs, none it
+    does not take, and each a string that is not empty. None when they are not."""
+    if not set(needed) <= arguments.keys() <= {*needed, *optional}:
+        return None
+    given = {name: value for name, value in arguments.items() if isinstance(value, str) and value}
+    return given if len(given) == len(arguments) else None
