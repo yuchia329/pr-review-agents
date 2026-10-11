@@ -1,5 +1,6 @@
 """The Python Ecosystem: pip to install, pytest to test."""
 
+import base64
 import os
 import re
 import tomllib
@@ -55,6 +56,28 @@ _INSTALL = ("python", "-m", "pip", "install", "--user")
 # `--verbosity=0` keeps those lines as they are read whatever the repository's own settings ask.
 # One file that cannot be collected would otherwise stop every other file's tests from running.
 _TEST = ("python", "-m", "pytest", "-rA", "--verbosity=0", "--continue-on-collection-errors")
+
+# Run in isolated mode, so that no file of the repository can pose as a module of the standard
+# library. The text arrives as base64 in an argument of its own: no shell reads it, and Python
+# reads it only as the content of the file.
+_WRITE = (
+    "python", "-I", "-c",
+    "import base64, pathlib, sys; "
+    "pathlib.Path(sys.argv[1]).write_bytes(base64.b64decode(sys.argv[2]))",
+)  # fmt: skip
+
+_REPRODUCTION_FORM = """\
+A Reproduction here is one pytest test file: Python source that holds at least one test function
+whose name starts with `test_`. Each test function asserts one thing about how the code behaves.
+
+The file is placed at the root of the repository and pytest runs it from there, alone, so it
+imports the repository's code as a test file at the root would. Import the repository's code
+inside each test function and never at the top of the file. A name that the code before the pull
+request lacks then fails that one test, where an import at the top of the file would stop every
+test from running.
+
+The tests run with no network. They can use the standard library, pytest, and whatever the
+repository's own tests can import, and nothing else."""
 
 _SUMMARY_STARTS = re.compile(r"^=+ short test summary info =+$", re.MULTILINE)
 _SESSION_ENDED = re.compile(r"^=+ .+ in \d[\d.]*s( \([\d:]+\))? =+$", re.MULTILINE)
@@ -183,7 +206,7 @@ class PythonEcosystem:
         name the code before the pull request lacks fails that test, where an import at the
         top of the file would stop any test from running.
         """
-        raise NotImplementedError
+        return _REPRODUCTION_FORM
 
     def place(self, reproduction: str) -> Placement:
         """See `ReproductionEcosystem.place`.
@@ -193,7 +216,14 @@ class PythonEcosystem:
         runs pytest over that file alone, and `read_results` names each of its tests by node
         ID, as in `test_pr_verification_reproduction.py::test_total_adds_tax`.
         """
-        raise NotImplementedError
+        # Half of a character that takes two code units in UTF-16 has no UTF-8 of its own, and a
+        # model can write one. It is written as it stands, and Python then refuses the file.
+        content = base64.b64encode(reproduction.encode(errors="surrogatepass")).decode("ascii")
+        return Placement(
+            path=REPRODUCTION_PATH,
+            write=(*_WRITE, REPRODUCTION_PATH, content),
+            run=(*_TEST, REPRODUCTION_PATH),
+        )
 
 
 def _pyproject(repository: Path, commit: str) -> dict[str, Any]:

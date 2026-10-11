@@ -11,11 +11,18 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from pr_verification.agent import RoleRun
-from pr_verification.ecosystem import ReproductionEcosystem, Results, Unreadable
-from pr_verification.model import Model
-from pr_verification.report import ReproductionEvidence
-from pr_verification.sandbox import Limits, RunResult, Sandbox
+from pr_verification.agent import Role, RoleRun, run_role
+from pr_verification.ecosystem import (
+    LONGEST_REPRODUCTION,
+    ReproductionEcosystem,
+    Results,
+    Unreadable,
+)
+from pr_verification.evidence import run_on_both_commits
+from pr_verification.model import Model, ModelFailed
+from pr_verification.reading import reading_tools
+from pr_verification.report import ReproductionEvidence, RunEvidence
+from pr_verification.sandbox import Command, Limits, Phase, RunResult, Sandbox, SandboxFailed
 
 ATTEMPT_CAP = 3
 """The most attempts the writer makes for one Claim unless another cap is given."""
@@ -73,7 +80,13 @@ def compare_runs(before: Results | Unreadable, after: Results | Unreadable) -> A
     Never `NO_REPRODUCTION`. Which way a difference points, and so any Verdict, is not
     decided here.
     """
-    raise NotImplementedError
+    if isinstance(before, Unreadable) or isinstance(after, Unreadable):
+        return AttemptResult.COULD_NOT_RUN
+    for read in (before, after):
+        if read.could_not_run or not (read.passed or read.failed):
+            return AttemptResult.COULD_NOT_RUN
+    same = set(before.passed) == set(after.passed) and set(before.failed) == set(after.failed)
+    return AttemptResult.SHOWS_NOTHING if same else AttemptResult.SHOWS_A_DIFFERENCE
 
 
 @dataclass(frozen=True)
@@ -179,4 +192,109 @@ def write_reproduction(
     Raises `ValueError` before any request when `attempt_cap` or `step_cap` is less than 1.
     Any other exception is a fault in the system and is raised.
     """
-    raise NotImplementedError
+    if attempt_cap < 1 or step_cap < 1:
+        raise ValueError(f"a cap is under 1: {attempt_cap} attempts of {step_cap} steps")
+    role = Role(
+        name="reproduction-writer",
+        instructions=_instructions(ecosystem.reproduction_form()),
+        tools=reading_tools(repository, after),
+        step_cap=step_cap,
+    )
+
+    def on_both_commits(command: Command) -> RunEvidence:
+        # The one place an attempt runs anything: in the Sandbox, with no network.
+        return run_on_both_commits(
+            sandbox, command, before=before, after=after, phase=Phase.TEST, limits=limits
+        )
+
+    attempts: list[Attempt] = []
+    try:
+        while len(attempts) < attempt_cap:
+            task = {"claim": claim, "attempts": [_shown(attempt) for attempt in attempts]}
+            run = run_role(role, task, model)
+            text = _reproduction_given(run)
+            if text is None:
+                attempts.append(Attempt(run, None, None, None, AttemptResult.NO_REPRODUCTION))
+                continue
+            placement = ecosystem.place(text)
+            ran = on_both_commits(placement.write)
+            if ran.before.exit_status == 0 and ran.after.exit_status == 0:
+                ran = on_both_commits(placement.run)
+                result = compare_runs(
+                    ecosystem.read_results(ran.before), ecosystem.read_results(ran.after)
+                )
+            else:
+                result = AttemptResult.COULD_NOT_RUN
+            attempts.append(Attempt(run, text, ran.before, ran.after, result))
+            if result is AttemptResult.SHOWS_A_DIFFERENCE:
+                evidence = ReproductionEvidence(
+                    source=ran.source,
+                    observation=ran.observation,
+                    command=ran.command,
+                    before=ran.before,
+                    after=ran.after,
+                    path=placement.path,
+                    reproduction=text,
+                )
+                return ReproductionRun(tuple(attempts), evidence, inconclusive=None)
+    except (ModelFailed, SandboxFailed) as failure:
+        # The attempt under way came to no result, so it is not among those kept.
+        reason = COULD_NOT_FINISH.format(failure=failure)
+        return ReproductionRun(tuple(attempts), evidence=None, inconclusive=reason)
+    ending = ENDINGS[attempts[-1].result]
+    reason = ATTEMPT_CAP_REACHED.format(attempts=len(attempts), ending=ending)
+    return ReproductionRun(tuple(attempts), evidence=None, inconclusive=reason)
+
+
+def _instructions(form: str) -> str:
+    """What the writer's role is told, around what its Ecosystem says a Reproduction is."""
+    return f"""\
+You write a Reproduction for one Behavioural Claim. A Behavioural Claim says that a pull request
+makes the code do something different when it is run, and it is the "claim" of your task. A
+Reproduction is a test of what the Claim says. It is run against the code before the pull request
+and against the code after it.
+
+Write the test from the Claim: it asserts the behaviour the Claim says the code has after the pull
+request, so that it passes on code that behaves that way and fails on code that does not. Do not
+judge whether the Claim is true, and do not write a test that ends the same way whatever the code
+does.
+
+Your tools read the files of the repository as they are after the pull request. Use them to learn
+how the code is called. You cannot run anything yourself: the Reproduction is run for you once you
+finish.
+
+{form}
+
+The "attempts" of your task are the Reproductions you gave before for this Claim, in order. Each
+holds its "reproduction", its "result", and what the last command run for it printed against the
+code "before" and "after" the pull request. A result is one of:
+
+- "{AttemptResult.NO_REPRODUCTION}": you gave no Reproduction that could be placed.
+- "{AttemptResult.COULD_NOT_RUN}": it did not run to an answer on both, as with a set-up error
+  or an import error.
+- "{AttemptResult.SHOWS_NOTHING}": it behaved the same on both, so it shows nothing about the Claim.
+
+When there are attempts, write a Reproduction that mends what the last one's result and output
+show to be wrong with it.
+
+Finish with the whole text of the Reproduction, in this form:
+{{"reproduction": "<text>"}}"""
+
+
+def _shown(attempt: Attempt) -> dict[str, object]:
+    """What the role is shown of an earlier attempt."""
+    return {
+        "reproduction": attempt.reproduction,
+        "result": attempt.result.value,
+        "before": attempt.before.output if attempt.before is not None else None,
+        "after": attempt.after.output if attempt.after is not None else None,
+    }
+
+
+def _reproduction_given(run: RoleRun) -> str | None:
+    """The text of the Reproduction a run of the role finished with, or None when it gave none
+    that can be placed."""
+    text = run.answer.get("reproduction") if run.answer is not None else None
+    if isinstance(text, str) and text.strip() and len(text) <= LONGEST_REPRODUCTION:
+        return text
+    return None
