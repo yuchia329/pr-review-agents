@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pr_verification.claims import extract_claims
+from pr_verification.decision import Decider
 from pr_verification.model import Model
 from pr_verification.report import BudgetSpend, Claim, Report, Verdict
 from pr_verification.repository import resolve_commit
@@ -27,7 +28,20 @@ class InvalidPullRequest(Exception):
     """The pull request as given cannot be verified at all, so there is no report."""
 
 
-def run(pull_request: PullRequest, model: Model) -> Report:
+def run(pull_request: PullRequest, model: Model, decider: Decider | None = None) -> Report:
+    """Verify a pull request and give its report.
+
+    Each Claim the extractor lists is labelled by `classify_claim(decider, text)`, once, in
+    the report's order, and is in the report as a `ClassifiedClaim` with that `kind`.
+    `decider` is the only thing asked: the classifier makes no request to `model` of its
+    own, and a pull request with no Claims asks for no decision.
+
+    When `decider` is None nothing is classified and each Claim is in the report as a plain
+    `Claim`, with no `kind`. The command line always gives one.
+
+    A `DecisionFailed` from the decider is not caught. It is a `ModelFailed`, so there is no
+    report, as when the Claim extractor's model fails.
+    """
     started = time.monotonic()
     before = _resolve_commit(pull_request.repository, "before", pull_request.before)
     after = _resolve_commit(pull_request.repository, "after", pull_request.after)

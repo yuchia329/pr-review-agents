@@ -1,8 +1,11 @@
-"""The Claim extractor: lists the Claims a pull request makes in its own text."""
+"""The Claim extractor, which lists the Claims a pull request makes in its own text, and the
+Claim classifier, which labels each one Behavioural or Structural."""
 
 import json
 
+from pr_verification.decision import Choice, Decider
 from pr_verification.model import Model, ModelRequest
+from pr_verification.report import ClaimKind
 
 INSTRUCTIONS = """\
 You list the Claims a pull request makes about its own changes.
@@ -52,3 +55,25 @@ def _read_claims(response: str) -> tuple[str, ...]:
     ):
         raise ClaimExtractionFailed(f"the model's response has no list of Claims: {response!r}")
     return tuple(claim.strip() for claim in claims)
+
+
+CLAIM_KIND = Choice(
+    "Is this Claim about what the code does when it is run, or about the text of the code?",
+    (ClaimKind.BEHAVIOURAL.value, ClaimKind.STRUCTURAL.value),
+)
+"""The question the Claim classifier asks of each Claim. Its options are the values of
+`ClaimKind`, Behavioural first."""
+
+
+def classify_claim(decider: Decider, claim: str) -> ClaimKind:
+    """Label one Claim Behavioural or Structural, by a decision.
+
+    Asks `decider` exactly once: the state is `claim`, exactly as given, and the question
+    is `CLAIM_KIND`. The kind is the `top` option of the `Decision`, so when the two
+    probabilities are equal the Claim is Behavioural: a Behavioural Claim is the one that
+    cannot be Confirmed or Refuted without a Reproduction.
+
+    `claim` is Untrusted Content, and the decider reads it only as data. Nothing the
+    decider raises is caught.
+    """
+    raise NotImplementedError

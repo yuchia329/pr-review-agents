@@ -7,15 +7,17 @@ runs so that variation between runs is not mistaken for improvement.
 
 import json
 from collections import Counter
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
 from statistics import fmean
+from time import perf_counter
 from typing import Any
 
 from pr_verification.claims import ClaimExtractionFailed
 from pr_verification.core import InvalidPullRequest, PullRequest, run
+from pr_verification.decision import Decider, Question
 from pr_verification.model import Model, ModelFailed
 from pr_verification.report import BudgetSpend, Report, Verdict
 from pr_verification.repository import commit_staged, git, new_repository
@@ -454,3 +456,110 @@ def hand_made_cases(directory: Path) -> tuple[Case, ...]:
     and expected Verdicts, in the same order.
     """
     return tuple(hand_made.built_in(directory) for hand_made in _HAND_MADE)
+
+
+@dataclass(frozen=True)
+class DecisionCase:
+    """One decision with a known answer."""
+
+    name: str
+    """What the case is called. No two cases in one comparison share a name."""
+
+    state: str
+    """The state the question is asked of."""
+
+    question: Question
+    """The question."""
+
+    expected: str
+    """The option that is the right answer: one of the question's options."""
+
+
+@dataclass(frozen=True)
+class DecisionScores:
+    """What one implementation of the decision interface did over the cases of a comparison.
+
+    A decision is correct when its `top` is the case's `expected`. A decision that raised
+    `ModelFailed`, which a `DecisionFailed` is, or `InputTooLong` is failed: it is not
+    correct, and it adds nothing to `passed_on` or `dollars`. So `correct + failed` is never
+    more than `decisions`.
+
+    A rate or a mean whose denominator is 0 is None.
+    """
+
+    decisions: int
+    """How many decisions were asked for: one for each case."""
+
+    correct: int
+    """Decisions whose `top` was the expected option."""
+
+    failed: int
+    """Decisions that raised instead of answering."""
+
+    passed_on: int
+    """Decisions whose `passed_on` is not None: those the small LLM answered in the end."""
+
+    seconds: float
+    """The time taken by all the decisions together, failed ones included."""
+
+    dollars: float
+    """The sum of the `dollars` of the decisions that answered."""
+
+    @property
+    def accuracy(self) -> float | None:
+        """`correct / decisions`."""
+        raise NotImplementedError
+
+    @property
+    def seconds_per_decision(self) -> float | None:
+        """`seconds / decisions`."""
+        raise NotImplementedError
+
+    @property
+    def dollars_per_decision(self) -> float | None:
+        """`dollars / decisions`."""
+        raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class DecisionComparison:
+    """The same decisions answered by each of several implementations, side by side."""
+
+    scores: Mapping[str, DecisionScores]
+    """The scores of each implementation, under the name it was given, in the order given."""
+
+    def to_json(self) -> str:
+        """The comparison as a JSON object with one member for each name in `scores`, in
+        order. Each holds every field of `DecisionScores` under its own name, and
+        `accuracy`, `seconds_per_decision`, and `dollars_per_decision`. A rate or a mean
+        that is None is null."""
+        raise NotImplementedError
+
+
+def compare_deciders(
+    cases: Iterable[DecisionCase],
+    deciders: Mapping[str, Decider],
+    *,
+    clock: Callable[[], float] = perf_counter,
+) -> DecisionComparison:
+    """Run the same decisions through each decider and report accuracy, latency, and cost.
+
+    `deciders` are the implementations to compare, each under the name it is reported by:
+    for the three-way comparison, Laya, Jev, and the small LLM. Each decider in turn, in the
+    order given, is asked every case once, in the order given, with exactly the case's
+    `state` and `question`. So every decider answers the same decisions, and none sees
+    `expected`.
+
+    Each decision is timed on its own: `clock` is read once just before `decide` is called
+    and once just after it returns or raises, and the difference is added to that decider's
+    `seconds`. `clock` is read at no other time. Loading a model is not timed here, since a
+    decider is given already made.
+
+    A decision that raises `ModelFailed` or `InputTooLong` is counted as failed and the
+    comparison carries on. Any other exception is a fault in the system and is raised.
+
+    Raises `ValueError` before asking anything when two cases share a name, or when a
+    case's `expected` is not one of `options_of(case.question)`. No cases, or no deciders,
+    is not an error.
+    """
+    raise NotImplementedError

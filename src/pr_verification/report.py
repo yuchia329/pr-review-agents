@@ -3,7 +3,7 @@
 import json
 from collections import Counter
 from collections.abc import Iterable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 
 from pr_verification.sandbox import Command, RunResult
@@ -13,6 +13,16 @@ class Verdict(StrEnum):
     CONFIRMED = "confirmed"
     REFUTED = "refuted"
     INCONCLUSIVE = "inconclusive"
+
+
+class ClaimKind(StrEnum):
+    """The kind of a Claim, as the Claim classifier labelled it."""
+
+    BEHAVIOURAL = "behavioural"
+    """A Behavioural Claim."""
+
+    STRUCTURAL = "structural"
+    """A Structural Claim."""
 
 
 class EvidenceSource(StrEnum):
@@ -85,6 +95,18 @@ class Claim:
     verdict: Verdict
     reason: str
     evidence: tuple[Evidence, ...] = ()
+
+
+@dataclass(frozen=True)
+class ClassifiedClaim(Claim):
+    """A Claim the Claim classifier has labelled.
+
+    In the printed report it appears as a `Claim` does, and with `kind`: `behavioural` or
+    `structural`.
+    """
+
+    kind: ClaimKind = field(kw_only=True)
+    """The Claim's kind."""
 
 
 @dataclass(frozen=True)

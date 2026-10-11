@@ -9,6 +9,7 @@ from pathlib import Path
 
 from pr_verification.claims import ClaimExtractionFailed
 from pr_verification.core import InvalidPullRequest, PullRequest, run
+from pr_verification.decision import Decider
 from pr_verification.model import Model, ModelFailed
 from pr_verification.openai_compatible import model_from_environment
 from pr_verification.report import Gate, GateDecision
@@ -22,7 +23,21 @@ def exit_code(gate: Gate) -> int:
     return EXIT_BLOCK if gate.decision is GateDecision.BLOCK else EXIT_PASS
 
 
-def main(argv: Sequence[str] | None = None, model: Model | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    model: Model | None = None,
+    decider: Decider | None = None,
+) -> int:
+    """Run the core on the pull request the arguments describe and print its report.
+
+    `decider` is passed to the core's entry point with the pull request and the model. When
+    it is None, the one the environment configures is used:
+    `configured_decider(decision_configuration(os.environ), model)`, which is Laya with the
+    small LLM behind it unless the environment says otherwise.
+
+    An `InvalidDecisionConfiguration` is handled as a model that is not configured is: one
+    line on standard error starting `pr-verification: `, no report, and exit code 2.
+    """
     arguments = _parser().parse_args(argv)
     try:
         if model is None:
