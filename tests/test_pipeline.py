@@ -920,6 +920,9 @@ def test_commit_that_cannot_be_prepared_is_answered_for_as_one_whatever_was_spen
 
 
 # A role that goes round in circles, through the core's entry point
+#
+# The pipeline gives the writer its own step cap, so these tests need a loop to be found, and
+# the progress guard to come due, within `WRITER_STEP_CAP` steps.
 
 CLAIM = "Adds tax"
 READS, READS_ANOTHER = asks("read_file", path="total.txt"), asks("read_file", path="deps.lock")
@@ -986,7 +989,7 @@ def test_progress_guard_is_a_decision_that_tells_a_role_whose_steps_all_differ_i
     assert [given for given, _ in verified] == [Verdict.CONFIRMED]
 
 
-def test_role_that_goes_round_whatever_it_is_told_is_stopped_at_its_caps_with_no_verdict_decided(
+def test_role_that_goes_round_whatever_it_is_told_is_stopped_at_its_caps_and_its_claim_inconclusive(
     shop: FixtureRepository, tmp_path: Path
 ) -> None:
     model = WritesFor({CLAIM: READS})

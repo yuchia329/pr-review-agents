@@ -320,8 +320,10 @@ def back_and_forth(one: Step, other: Step, length: int = ALTERNATION_LENGTH) -> 
 
 def test_same_step_taken_again_and_again_is_an_exact_repeat_once_it_is_long_enough() -> None:
     step, earlier = took(READS, "RATE = 3"), [took(SEARCHES), took("what?")]
+    recorded_otherwise = Step(READS, StepOutcome.REFUSED, tool=None, result="RATE = 3")
 
     assert detect_repeat([step] * REPEAT_LENGTH) is EXACT_REPEAT
+    assert detect_repeat([*[step] * (REPEAT_LENGTH - 1), recorded_otherwise]) is EXACT_REPEAT
     assert detect_repeat([*earlier, *[step] * REPEAT_LENGTH]) is EXACT_REPEAT
     assert detect_repeat([took("what?", UNREADABLE_RESPONSE)] * REPEAT_LENGTH) is EXACT_REPEAT
     assert detect_repeat([*earlier, *[step] * (REPEAT_LENGTH - 1)]) is None
@@ -344,7 +346,8 @@ NOT_FLAGGED = {
         took(INSTALLS, "Installed 3 packages."),
     ],
     "a step that never gets the same result twice": [
-        took(INSTALLS, f"Gave up after {seconds} seconds.") for seconds in range(8)
+        took(INSTALLS, f"Gave up after {seconds} seconds.")
+        for seconds in range(REPEAT_LENGTH + ALTERNATION_LENGTH)
     ],
     "a result that differs only in its whitespace": [
         *[took(READS, "RATE = 3")] * (REPEAT_LENGTH - 1),
@@ -355,7 +358,7 @@ NOT_FLAGGED = {
         took(SEARCHES, "tax.py:1\nprices.py:4"),
     ],
     "one action whose results go back and forth": back_and_forth(
-        took(READS, "The file is locked."), took(READS, "RATE = 3"), 8
+        took(READS, "The file is locked."), took(READS, "RATE = 3"), 2 * ALTERNATION_LENGTH
     ),
 }
 
@@ -372,8 +375,9 @@ def test_responses_that_differ_only_in_member_order_or_whitespace_are_the_same_a
         '{\n  "tool":"read_file",\n  "arguments":{"path":"tax.py","line":3}\n}',
     ]
 
-    in_turn = [took(written[place % 3]) for place in range(REPEAT_LENGTH)]
-    two_of_them = back_and_forth(took(written[0]), took(written[1]), ALTERNATION_LENGTH + 1)
+    long_enough = max(REPEAT_LENGTH, ALTERNATION_LENGTH)
+    in_turn = [took(written[place % len(written)]) for place in range(long_enough)]
+    two_of_them = back_and_forth(took(written[0]), took(written[1]), long_enough)
 
     assert detect_repeat(in_turn) is EXACT_REPEAT
     assert detect_repeat(two_of_them) is EXACT_REPEAT
@@ -386,6 +390,8 @@ def test_responses_that_differ_only_in_member_order_or_whitespace_are_the_same_a
         (READS, asks("search", path="tax.py")),
         (READS, asks("read_file", path="tax.py ")),
         (asks("search", texts=["RATE", "tax"]), asks("search", texts=["tax", "RATE"])),
+        (asks("search", text="RATE", count=True), asks("search", text="RATE", count=1)),
+        (json.dumps({"tool": "list_files"}), asks("list_files")),
         ("what?", "what? "),
         ("[1, 2]", "[1,2]"),
     ],
@@ -394,6 +400,8 @@ def test_responses_that_differ_only_in_member_order_or_whitespace_are_the_same_a
         "another tool",
         "whitespace inside a string",
         "a list in another order",
+        "true where the other has 1",
+        "arguments left out where the other has none",
         "whitespace in text that is not JSON",
         "whitespace in JSON that is not an object",
     ],
@@ -446,6 +454,17 @@ def test_same_action_with_the_same_result_enough_times_is_always_an_exact_repeat
     repeated = [took(data.draw(written(arguments)), result) for _ in range(times)]
 
     assert detect_repeat([*before, *repeated]) is EXACT_REPEAT
+
+
+@given(
+    before=st.lists(STEPS, max_size=6),
+    pair=st.lists(STEPS, min_size=2, max_size=2, unique_by=lambda step: step.response),
+    times=st.integers(ALTERNATION_LENGTH, ALTERNATION_LENGTH + 3),
+)
+def test_two_actions_taken_in_turn_with_the_same_results_enough_times_are_always_an_alternation(
+    before: list[Step], pair: list[Step], times: int
+) -> None:
+    assert detect_repeat([*before, *back_and_forth(pair[0], pair[1], times)]) is ALTERNATION
 
 
 @given(
@@ -536,7 +555,7 @@ def test_role_that_repeats_whatever_it_is_told_triggers_at_each_step_until_its_s
     read = RecordingTool("read_file")
     step_cap = REPEAT_LENGTH + 3
 
-    run, model = run_scripted(role_with(read, step_cap=step_cap), *[READS] * 20)
+    run, model = run_scripted(role_with(read, step_cap=step_cap), *[READS] * (step_cap + 5))
 
     again = range(REPEAT_LENGTH, step_cap)
     assert run.triggers == tuple(Trigger(EXACT_REPEAT, step=step) for step in again)
@@ -583,12 +602,12 @@ def test_progress_guard_is_asked_at_each_interval_about_the_task_and_the_steps_s
 
 
 @pytest.mark.parametrize(
-    ("answer", "found"),
+    ("answer", "no_progress"),
     [(NO, True), ({YES: 0.49, NO: 0.51}, True), (YES, False), ({YES: 0.5, NO: 0.5}, False)],
     ids=["no", "no by a little", "yes", "as likely either way"],
 )
 def test_role_whose_steps_all_differ_is_told_it_makes_no_progress_only_when_the_top_answer_is_no(
-    answer: str | dict[str, float], found: bool
+    answer: str | dict[str, float], no_progress: bool
 ) -> None:
     guard = ScriptedDecider([answer])
 
@@ -597,10 +616,10 @@ def test_role_whose_steps_all_differ_is_told_it_makes_no_progress_only_when_the_
     )
 
     trigger = Trigger(LoopKind.NO_PROGRESS, step=PROGRESS_INTERVAL)
-    assert run.triggers == ((trigger,) if found else ())
+    assert run.triggers == ((trigger,) if no_progress else ())
     assert told(model.requests[-1]) == [
         *[None] * (PROGRESS_INTERVAL - 1),
-        TOLD[LoopKind.NO_PROGRESS] if found else None,
+        TOLD[LoopKind.NO_PROGRESS] if no_progress else None,
     ]
     assert (run.stopped, run.answer) == (Stopped.FINISHED, {"done": True})
 
@@ -615,6 +634,23 @@ def test_progress_guard_is_not_asked_about_steps_in_which_a_repeat_was_found() -
 
     assert run.triggers == (Trigger(EXACT_REPEAT, step=last),)
     assert len(guard.asked) == REPEAT_LENGTH - 1
+
+
+def test_progress_guard_comes_due_by_the_steps_taken_and_is_shown_nothing_the_role_was_told() -> (
+    None
+):
+    # A repeat is found first. The guard is next due at the multiple of the interval after it.
+    due = (REPEAT_LENGTH // PROGRESS_INTERVAL + 1) * PROGRESS_INTERVAL
+    responses = [*[READS] * REPEAT_LENGTH, *differing(due - REPEAT_LENGTH)]
+    guard = ScriptedDecider([YES] * due)
+
+    run, model = watched(guard, *responses, finishes(), step_cap=due + 1)
+
+    shown = [{"response": response, "result": "done"} for response in responses]
+    assert run.triggers == (Trigger(EXACT_REPEAT, step=REPEAT_LENGTH),)
+    assert told(model.requests[-1])[REPEAT_LENGTH - 1] == TOLD[EXACT_REPEAT]
+    assert len(guard.asked) == (REPEAT_LENGTH - 1) // PROGRESS_INTERVAL + 1
+    assert json.loads(guard.asked[-1][0]) == {"task": TASK, "steps": shown[-PROGRESS_INTERVAL:]}
 
 
 def test_progress_guard_is_not_asked_after_a_step_that_ends_the_run() -> None:

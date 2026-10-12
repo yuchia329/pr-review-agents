@@ -645,7 +645,11 @@ def test_each_attempt_is_watched_for_loops_on_its_own_and_starts_with_nothing_fo
 ) -> None:
     again = [READS] * (REPEAT_LENGTH - 1)
 
-    run, model = write(pricing, *again, READS, writes("same"), *again, writes("fixed"))
+    run, model = write(
+        pricing,
+        *[*again, READS, writes("same"), *again, writes("fixed")],
+        step_cap=REPEAT_LENGTH + 1,
+    )
 
     first, second = run.attempts
     assert first.run.triggers == (Trigger(LoopKind.EXACT_REPEAT, step=REPEAT_LENGTH),)
