@@ -1,9 +1,12 @@
 import json
 import shutil
 import subprocess
-from collections.abc import Mapping
-from dataclasses import dataclass
+import threading
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass, field
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -85,6 +88,8 @@ def no_model_configured(monkeypatch: pytest.MonkeyPatch) -> None:
         "PR_VERIFICATION_BUDGET_STEPS",
         "PR_VERIFICATION_INPUT_PRICE",
         "PR_VERIFICATION_OUTPUT_PRICE",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_HEADERS",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -165,3 +170,40 @@ class GathersNothing:
     ) -> tuple[Gathered, ...]:
         self.calls.append((claims, repository, before, after, model))
         return tuple(Gathered(()) for _ in claims)
+
+
+@dataclass
+class Collector:
+    """A stand-in for a collector of traces that listens on this machine, for a run that is
+    given no transport of its own."""
+
+    endpoint: str
+    """What `OTEL_EXPORTER_OTLP_ENDPOINT` is set to for traces to be sent here."""
+
+    received: list[tuple[str, Any]] = field(default_factory=list)
+    """The path and the JSON body of each request that was posted, in order."""
+
+
+@pytest.fixture
+def collector() -> Iterator[Collector]:
+    received: list[tuple[str, Any]] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            body = self.rfile.read(int(self.headers["Content-Length"]))
+            received.append((self.path, json.loads(body)))
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield Collector(f"http://127.0.0.1:{server.server_port}", received)
+    finally:
+        server.shutdown()
+        server.server_close()
