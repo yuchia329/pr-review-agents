@@ -7,16 +7,23 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
-from pr_verification.budget import Budget, Clock
+from pr_verification.budget import Budget, Clock, Ledger
 from pr_verification.claims import classify_claim, extract_claims
-from pr_verification.decision import Decider
+from pr_verification.decision import Decider, Decision, Question
 from pr_verification.model import Model
-from pr_verification.orchestration import Gathered, Orchestration, fixed_pipeline
+from pr_verification.orchestration import (
+    BudgetedOrchestration,
+    Gathered,
+    Orchestration,
+    fixed_pipeline,
+)
 from pr_verification.report import (
     BudgetSpend,
     Claim,
     ClaimKind,
+    ClaimSpend,
     ClassifiedClaim,
+    PullRequestSpend,
     Report,
     Verdict,
 )
@@ -196,18 +203,19 @@ def run(
     Raises `ValueError` when `review` is true and there is no `decider`, and whatever
     `review_pull_request` raises: a fault in the system, and never a failing model.
     """
-    if budget is not None or clock is not time.monotonic or review:
+    if review:
         raise NotImplementedError
-    started = time.monotonic()
+    ledger = Ledger(budget, clock=clock)
     before = _resolve_commit(pull_request.repository, "before", pull_request.before)
     after = _resolve_commit(pull_request.repository, "after", pull_request.after)
     claims = extract_claims(
-        model, pull_request.title, pull_request.description, pull_request.linked_issue
+        ledger.model(model),
+        pull_request.title,
+        pull_request.description,
+        pull_request.linked_issue,
     )
-    kinds: tuple[ClaimKind | None, ...] = tuple(
-        None if decider is None else classify_claim(decider, text) for text in claims
-    )
-    gathered = _gather(orchestration, claims, pull_request.repository, before, after, model)
+    kinds = _classify(decider, claims, ledger, clock)
+    gathered = _gather(orchestration, ledger, claims, pull_request.repository, before, after, model)
     return Report(
         before=before,
         after=after,
@@ -216,12 +224,61 @@ def run(
             for text, kind, answer in zip(claims, kinds, gathered, strict=True)
         ),
         findings=(),
-        budget_spend=BudgetSpend(seconds=time.monotonic() - started, dollars=0.0, steps=0),
+        budget_spend=_spend(ledger, len(claims)),
+    )
+
+
+class _Costed:
+    """Asks a decider, and keeps what its decisions cost."""
+
+    def __init__(self, decider: Decider) -> None:
+        self._decider = decider
+        self.dollars = 0.0
+
+    def decide(self, state: str, question: Question) -> Decision:
+        decision = self._decider.decide(state, question)
+        self.dollars += decision.dollars
+        return decision
+
+
+def _classify(
+    decider: Decider | None, claims: tuple[str, ...], ledger: Ledger, clock: Clock
+) -> tuple[ClaimKind | None, ...]:
+    """The kind of each Claim, with None for one that is not classified: every Claim when there
+    is no decider, and each Claim reached after the Budget was spent. What each decision cost
+    is recorded in `ledger` for no Claim."""
+    kinds: list[ClaimKind | None] = []
+    for text in claims:
+        if decider is None or ledger.stopped_by() is not None:
+            kinds.append(None)
+            continue
+        costed = _Costed(decider)
+        started = clock()
+        kinds.append(classify_claim(costed, text))
+        ledger.record(BudgetSpend(seconds=clock() - started, dollars=costed.dollars, steps=0))
+    return tuple(kinds)
+
+
+def _spend(ledger: Ledger, claims: int) -> PullRequestSpend:
+    """What `ledger` recorded, for the pull request and for each of its `claims` Claims."""
+
+    def spend_on(claim: int) -> ClaimSpend:
+        spent = ledger.spent(claim=claim)
+        return ClaimSpend(spent.seconds, spent.dollars, spent.steps, ledger.stopped_by(claim=claim))
+
+    spent = ledger.spent()
+    return PullRequestSpend(
+        spent.seconds,
+        spent.dollars,
+        spent.steps,
+        stopped_by=ledger.stopped_by(),
+        claims=tuple(spend_on(claim) for claim in range(claims)),
     )
 
 
 def _gather(
     orchestration: Orchestration | None,
+    ledger: Ledger,
     claims: tuple[str, ...],
     repository: Path,
     before: str,
@@ -229,7 +286,8 @@ def _gather(
     model: Model,
 ) -> tuple[Gathered, ...]:
     """What the orchestration gathered for each Claim, with the fixed pipeline when none is
-    given. Raises `ValueError` when it does not answer for each Claim."""
+    given. One that keeps to a Budget is asked within `ledger`. Raises `ValueError` when it
+    does not answer for each Claim."""
     if not claims:
         return ()
     with ExitStack() as kept:
@@ -237,9 +295,14 @@ def _gather(
             # Nothing is kept between runs: what the pipeline remembers goes with the directory.
             state = kept.enter_context(tempfile.TemporaryDirectory())
             orchestration = fixed_pipeline(Path(state))
-        gathered = orchestration.gather(
-            claims, repository=repository, before=before, after=after, model=model
-        )
+        if isinstance(orchestration, BudgetedOrchestration):
+            gathered = orchestration.gather_within(
+                ledger, claims, repository=repository, before=before, after=after, model=model
+            )
+        else:
+            gathered = orchestration.gather(
+                claims, repository=repository, before=before, after=after, model=model
+            )
     if len(gathered) != len(claims):
         raise ValueError(
             f"the orchestration answered for {len(gathered)} Claims of the {len(claims)} asked"

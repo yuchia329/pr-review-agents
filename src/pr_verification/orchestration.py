@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from pr_verification.budget import Ledger
+from pr_verification.budget import BUDGET_SPENT, BudgetSpent, Ledger
 from pr_verification.decision import Decider
 from pr_verification.ecosystem import ReproductionEcosystem, Unsupported, find_commands
 from pr_verification.evidence import ending
@@ -29,12 +29,19 @@ from pr_verification.repo_profile import (
     Discover,
     ProfileStore,
     RepoProfile,
+    SandboxFor,
     prepare_pull_request,
     prepare_target,
 )
 from pr_verification.report import ClaimKind, Evidence
 from pr_verification.reproduction import write_reproduction
-from pr_verification.sandbox import ContainerSandbox, Limits, SandboxFailed, SandboxWithHomes
+from pr_verification.sandbox import (
+    ContainerSandbox,
+    Limits,
+    Sandbox,
+    SandboxFailed,
+    SandboxWithHomes,
+)
 
 LIMITS = Limits(seconds=600.0, memory_bytes=2 * 1024**3, processors=2.0)
 """The most one run in the Sandbox may use unless other limits are given."""
@@ -233,24 +240,20 @@ class FixedPipeline:
         if not claims:
             return ()
         with ExitStack() as opened:
-            ready = self._prepare(repository, before, after, opened)
+            ready = self._prepare(
+                repository,
+                before,
+                after,
+                lambda image: opened.enter_context(self.open_sandbox(repository, image)),
+            )
             if isinstance(ready, str):
                 return tuple(Gathered((), ready) for _ in claims)
-            gathered = []
-            for claim in claims:
-                written = write_reproduction(
-                    claim,
-                    model=model,
-                    sandbox=ready.sandbox,
-                    ecosystem=ready.ecosystem,
-                    repository=repository,
-                    before=before,
-                    after=after,
-                    limits=self.limits,
+            return tuple(
+                self._reproduce(
+                    claim, model, ready.sandbox, ready.ecosystem, repository, before, after
                 )
-                evidence = () if written.evidence is None else (written.evidence,)
-                gathered.append(Gathered(evidence, written.inconclusive))
-            return tuple(gathered)
+                for claim in claims
+            )
 
     def gather_within(
         self,
@@ -333,7 +336,78 @@ class FixedPipeline:
         Every Sandbox opened is closed before the answer is given or an exception goes on.
         Raises what `gather` raises. `BudgetSpent` is never raised from here.
         """
-        raise NotImplementedError
+        if self.progress_guard is not None or kinds is not None:
+            raise NotImplementedError
+        if not claims:
+            return ()
+        with ExitStack() as opened:
+            try:
+                gathered = self._gather_until_spent(
+                    ledger, claims, repository, before, after, model, opened
+                )
+            except BudgetSpent:
+                # It was spent while preparing, so no Claim had been answered for.
+                gathered = []
+        limit = ledger.stopped_by()
+        if limit is None:
+            return tuple(gathered)
+        unresolved = Gathered((), BUDGET_SPENT.format(limit=limit.value))
+        return (*gathered, *[unresolved] * (len(claims) - len(gathered)))
+
+    def _gather_until_spent(
+        self,
+        ledger: Ledger,
+        claims: tuple[str, ...],
+        repository: Path,
+        before: str,
+        after: str,
+        model: Model,
+        opened: ExitStack,
+    ) -> list[Gathered]:
+        """The steps of `gather_within`, for as long as the Budget is not spent: what each Claim
+        is given, for the Claims answered for by then, in the order of `claims`. Raises
+        `BudgetSpent` when the Budget is spent during steps 1 to 3 or by setting the shares
+        aside. Every Sandbox opened is left for `opened` to close."""
+        if ledger.stopped_by() is not None:
+            return []
+        # Each Sandbox as it is used while preparing, with the same Sandbox as it was opened.
+        as_opened: dict[SandboxWithHomes, SandboxWithHomes] = {}
+
+        def sandbox_for(image: str) -> SandboxWithHomes:
+            spent = ledger.stopped_by()
+            if spent is not None:
+                raise BudgetSpent(spent)
+            sandbox = opened.enter_context(self.open_sandbox(repository, image))
+            through = ledger.sandbox(sandbox)
+            as_opened[through] = sandbox
+            return through
+
+        ready = self._prepare(repository, before, after, sandbox_for)
+        if isinstance(ready, str):
+            return [Gathered((), ready) for _ in claims]
+        ledger.share_out(len(claims))
+        sandbox = as_opened[ready.sandbox]
+        gathered: list[Gathered] = []
+        for index, claim in enumerate(claims):
+            if ledger.stopped_by() is not None:
+                break
+            try:
+                gathered.append(
+                    self._reproduce(
+                        claim,
+                        ledger.model(model, claim=index),
+                        ledger.sandbox(sandbox, claim=index),
+                        ready.ecosystem,
+                        repository,
+                        before,
+                        after,
+                    )
+                )
+            except BudgetSpent as spent:
+                if spent.claim is None:
+                    break
+                gathered.append(Gathered((), str(spent)))
+        return gathered
 
     def prepare_target_commit(
         self, repository: Path, target: str
@@ -355,11 +429,37 @@ class FixedPipeline:
         """
         raise NotImplementedError
 
+    def _reproduce(
+        self,
+        claim: str,
+        model: Model,
+        sandbox: Sandbox,
+        ecosystem: ReproductionEcosystem,
+        repository: Path,
+        before: str,
+        after: str,
+    ) -> Gathered:
+        """Step 4 of `gather` for one Claim: what it is given, with every request made to
+        `model` and every run made in `sandbox`."""
+        written = write_reproduction(
+            claim,
+            model=model,
+            sandbox=sandbox,
+            ecosystem=ecosystem,
+            repository=repository,
+            before=before,
+            after=after,
+            limits=self.limits,
+        )
+        evidence = () if written.evidence is None else (written.evidence,)
+        return Gathered(evidence, written.inconclusive)
+
     def _prepare(
-        self, repository: Path, before: str, after: str, opened: ExitStack
+        self, repository: Path, before: str, after: str, sandbox_for: SandboxFor
     ) -> _Ready | str:
         """Steps 1 to 3 of `gather`: what a Reproduction is run with, or why none can be run.
-        Every Sandbox opened on the way is left for `opened` to close."""
+        Each Sandbox is the one `sandbox_for` gives for its image, and closing it is left to
+        the caller."""
         found = self.discover(repository, before)
         if isinstance(found, Unsupported):
             return found.reason
@@ -371,9 +471,7 @@ class FixedPipeline:
                 before,
                 store=self.store,
                 cache=self.cache,
-                sandbox_for=lambda image: opened.enter_context(
-                    self.open_sandbox(repository, image)
-                ),
+                sandbox_for=sandbox_for,
                 limits=self.limits,
                 discover=self.discover,
             )

@@ -7,13 +7,15 @@ here, by code: no model is asked whether any Budget is left, and nothing a model
 limit or what has been recorded (ADR 0003).
 """
 
+import math
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 
-from pr_verification.model import Model
+from pr_verification.model import Model, ModelRequest, PricedModel, PricedResponse
 from pr_verification.report import BudgetLimit, BudgetSpend
-from pr_verification.sandbox import SandboxWithHomes
+from pr_verification.sandbox import Command, Limits, Phase, RunResult, SandboxWithHomes
 
 DEFAULT_SECONDS = 900.0
 """The time limit when none is configured: fifteen minutes."""
@@ -80,7 +82,24 @@ class BudgetSpent(Exception):
     share was spent, which stops the work on that Claim alone."""
 
     def __init__(self, limit: BudgetLimit, claim: int | None = None) -> None:
-        raise NotImplementedError
+        message = BUDGET_SPENT if claim is None else SHARE_SPENT
+        super().__init__(message.format(limit=limit.value))
+        self.limit = limit
+        self.claim = claim
+
+
+_NOTHING = BudgetSpend(seconds=0.0, dollars=0.0, steps=0)
+
+
+def _reached(spent: BudgetSpend, limits: Budget) -> BudgetLimit | None:
+    """The first limit, in the order time, money, steps, that `spent` is at or past."""
+    if spent.seconds >= limits.seconds:
+        return BudgetLimit.TIME
+    if spent.dollars >= limits.dollars:
+        return BudgetLimit.MONEY
+    if spent.steps >= limits.steps:
+        return BudgetLimit.STEPS
+    return None
 
 
 class Ledger:
@@ -122,7 +141,15 @@ class Ledger:
 
         Raises `ValueError` when a limit of `budget` is not more than 0.
         """
-        raise NotImplementedError
+        budget = Budget() if budget is None else budget
+        if not (budget.seconds > 0 and budget.dollars > 0 and budget.steps > 0):
+            raise ValueError(f"a limit of the Budget is not more than 0: {budget}")
+        self._budget = budget
+        self._clock = clock
+        self._spent = _NOTHING
+        # Every share is the same, so one is kept, with what was recorded against each Claim.
+        self._share: Budget | None = None
+        self._claims: list[BudgetSpend] = []
 
     def share_out(self, claims: int) -> None:
         """Set aside a share of the Budget for each of `claims` Claims.
@@ -146,7 +173,17 @@ class Ledger:
         aside. Otherwise raises `BudgetSpent` when the Budget is spent, since nothing is left
         to share.
         """
-        raise NotImplementedError
+        if claims < 1:
+            raise ValueError(f"shares cannot be set aside for {claims} Claims")
+        if self._share is not None:
+            raise ValueError("the shares of the Budget have already been set aside")
+        self._refuse_once_spent(None)
+        self._share = Budget(
+            seconds=(self._budget.seconds - self._spent.seconds) / claims,
+            dollars=(self._budget.dollars - self._spent.dollars) / claims,
+            steps=max(1, (self._budget.steps - self._spent.steps) // claims),
+        )
+        self._claims = [_NOTHING] * claims
 
     def record(self, spend: BudgetSpend, *, claim: int | None = None) -> None:
         """Record one spend: against Claim `claim`, or against no Claim when `claim` is None.
@@ -160,13 +197,21 @@ class Ledger:
         more, and when `claim` names no Claim a share was set aside for. This is looked at
         first: a spend that could never be recorded is a `ValueError` whatever has been spent.
         """
-        raise NotImplementedError
+        if not (spend.seconds >= 0 and spend.dollars >= 0 and spend.steps >= 0):
+            raise ValueError(f"an amount of a spend is not 0 or more: {spend}")
+        self._require_share(claim)
+        self._refuse_once_spent(claim)
+        self._spent = _sum(self._spent, spend)
+        if claim is not None:
+            self._claims[claim] = _sum(self._claims[claim], spend)
 
     def spent(self, *, claim: int | None = None) -> BudgetSpend:
         """What has been recorded so far: for the whole pull request when `claim` is None, and
         against Claim `claim` otherwise. For a Claim no share was set aside for, that is
         nothing: 0.0 seconds, 0.0 dollars, and 0 steps."""
-        raise NotImplementedError
+        if claim is None:
+            return self._spent
+        return self._claims[claim] if self._has_share(claim) else _NOTHING
 
     def stopped_by(self, *, claim: int | None = None) -> BudgetLimit | None:
         """The limit that was reached first: of the Budget when `claim` is None, and of the
@@ -176,7 +221,11 @@ class Ledger:
         The share of a Claim says nothing of the Budget: when the Budget is spent and a Claim's
         share is not, this is None for that Claim.
         """
-        raise NotImplementedError
+        if claim is None:
+            return _reached(self._spent, self._budget)
+        if self._share is None or not self._has_share(claim):
+            return None
+        return _reached(self._claims[claim], self._share)
 
     def model(self, model: Model, *, claim: int | None = None) -> Model:
         """A model that asks `model` through the ledger: each request is counted, and none is
@@ -205,7 +254,8 @@ class Ledger:
         Raises `ValueError`, from this call and not from a later request, when `claim` names
         no Claim a share was set aside for.
         """
-        raise NotImplementedError
+        self._require_share(claim)
+        return _ModelThroughLedger(self, model, claim)
 
     def sandbox(self, sandbox: SandboxWithHomes, *, claim: int | None = None) -> SandboxWithHomes:
         """A Sandbox that uses `sandbox` through the ledger: each use is timed, and none is
@@ -233,7 +283,110 @@ class Ledger:
         Raises `ValueError`, from this call and not from a later use, when `claim` names no
         Claim a share was set aside for.
         """
-        raise NotImplementedError
+        self._require_share(claim)
+        return _SandboxThroughLedger(self, sandbox, claim)
+
+    def _do[Done](
+        self,
+        work: Callable[[], Done],
+        *,
+        claim: int | None,
+        steps: int,
+        dollars: Callable[[Done], float] | None = None,
+    ) -> Done:
+        """Do one piece of work through the ledger, as `model` and `sandbox` say: it is not
+        done once nothing is left to spend, and is otherwise timed and recorded, whether it
+        raises or not. `dollars` says what work that was done cost."""
+        self._refuse_once_spent(claim)
+        cost = 0.0
+        started = self._clock()
+        try:
+            done = work()
+            if dollars is not None:
+                cost = dollars(done)
+            return done
+        finally:
+            self.record(BudgetSpend(self._clock() - started, cost, steps), claim=claim)
+
+    def _no_longer_than_is_left(self, limits: Limits, claim: int | None) -> Limits:
+        """The limits of a run for `claim`, as `sandbox` says: as given for no Claim, and for
+        a Claim with `seconds` lowered to what is left of the time limit of its share, or of
+        the Budget's when less is left of that."""
+        if claim is None or self._share is None:
+            return limits
+        left = min(
+            self._share.seconds - self._claims[claim].seconds,
+            self._budget.seconds - self._spent.seconds,
+        )
+        return replace(limits, seconds=min(limits.seconds, left))
+
+    def _has_share(self, claim: int) -> bool:
+        return 0 <= claim < len(self._claims)
+
+    def _require_share(self, claim: int | None) -> None:
+        if claim is not None and not self._has_share(claim):
+            raise ValueError(f"no share of the Budget was set aside for Claim {claim}")
+
+    def _refuse_once_spent(self, claim: int | None) -> None:
+        """Raise `BudgetSpent` when the Budget is spent, or else when the share of `claim`
+        is."""
+        limit = self.stopped_by()
+        if limit is not None:
+            raise BudgetSpent(limit)
+        if claim is not None:
+            limit = self.stopped_by(claim=claim)
+            if limit is not None:
+                raise BudgetSpent(limit, claim)
+
+
+def _sum(one: BudgetSpend, other: BudgetSpend) -> BudgetSpend:
+    return BudgetSpend(
+        seconds=one.seconds + other.seconds,
+        dollars=one.dollars + other.dollars,
+        steps=one.steps + other.steps,
+    )
+
+
+class _ModelThroughLedger:
+    """The model `Ledger.model` gives."""
+
+    def __init__(self, ledger: Ledger, model: Model, claim: int | None) -> None:
+        self._ledger, self._model, self._claim = ledger, model, claim
+
+    def complete(self, request: ModelRequest) -> str:
+        def ask() -> PricedResponse:
+            if isinstance(self._model, PricedModel):
+                return self._model.complete_priced(request)
+            return PricedResponse(self._model.complete(request), dollars=0.0)
+
+        priced = self._ledger._do(
+            ask, claim=self._claim, steps=1, dollars=lambda priced: priced.dollars
+        )
+        return priced.response
+
+
+class _SandboxThroughLedger:
+    """The Sandbox `Ledger.sandbox` gives."""
+
+    def __init__(self, ledger: Ledger, sandbox: SandboxWithHomes, claim: int | None) -> None:
+        self._ledger, self._sandbox, self._claim = ledger, sandbox, claim
+
+    def run(self, command: Command, *, commit: str, phase: Phase, limits: Limits) -> RunResult:
+        def within_what_is_left() -> RunResult:
+            # Worked out once the run is known to go ahead, so there is time left to give it.
+            within = self._ledger._no_longer_than_is_left(limits, self._claim)
+            return self._sandbox.run(command, commit=commit, phase=phase, limits=within)
+
+        return self._timed(within_what_is_left)
+
+    def save_home(self, commit: str, archive: Path) -> None:
+        self._timed(lambda: self._sandbox.save_home(commit, archive))
+
+    def restore_home(self, commit: str, archive: Path) -> None:
+        self._timed(lambda: self._sandbox.restore_home(commit, archive))
+
+    def _timed[Done](self, use: Callable[[], Done]) -> Done:
+        return self._ledger._do(use, claim=self._claim, steps=0)
 
 
 class InvalidBudget(Exception):
@@ -262,4 +415,26 @@ def budget_from_environment(environment: Mapping[str, str]) -> Budget:
     not a number, is not finite, or is not more than 0, and for a step limit that is not a
     whole number, as `2.5` is not.
     """
-    raise NotImplementedError
+    return Budget(
+        seconds=_limit(environment, SECONDS_VARIABLE, float, DEFAULT_SECONDS),
+        dollars=_limit(environment, DOLLARS_VARIABLE, float, DEFAULT_DOLLARS),
+        steps=_limit(environment, STEPS_VARIABLE, int, DEFAULT_STEPS),
+    )
+
+
+def _limit[Number: (int, float)](
+    environment: Mapping[str, str], variable: str, read: Callable[[str], Number], default: Number
+) -> Number:
+    """The limit `variable` sets, as `read` reads a number, or `default` when it sets none."""
+    text = environment.get(variable, "")
+    if not text:
+        return default
+    try:
+        limit = read(text)
+    except ValueError:
+        limit = None
+    # Compared, since `math.isfinite` raises for a whole number larger than any float.
+    if limit is None or not 0 < limit < math.inf:
+        number = "a whole number" if read is int else "a number"
+        raise InvalidBudget(f"{variable} is set to {text!r}, and must be {number} more than 0")
+    return limit

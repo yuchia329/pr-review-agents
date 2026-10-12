@@ -18,6 +18,26 @@ process list and in pipeline logs. It is sent to the endpoint and nowhere else: 
 report, and it is removed from any error the endpoint sends back before that error is printed.
 The endpoint itself is printed in errors, so put no credentials in its URL.
 
+## The Budget and the model's price
+
+The Budget for one pull request is three limits, and the first one reached stops the work. A Claim
+still unresolved then is Inconclusive, and the report's `budget_spend` says which limit it was.
+
+| Variable | Meaning | When unset |
+| --- | --- | --- |
+| `PR_VERIFICATION_BUDGET_SECONDS` | The time limit, in seconds | 900 |
+| `PR_VERIFICATION_BUDGET_DOLLARS` | The money limit, in dollars | 3 |
+| `PR_VERIFICATION_BUDGET_STEPS` | The step limit: the most requests to a model | 300 |
+| `PR_VERIFICATION_INPUT_PRICE` | Dollars for a million tokens sent to the model | 0 |
+| `PR_VERIFICATION_OUTPUT_PRICE` | Dollars for a million tokens of its responses | 0 |
+
+Each limit must be more than 0, and the step limit a whole number. A limit that is not exits with
+code 2 and no report. The defaults are provisional.
+
+Money is counted from the tokens the endpoint reports for each request, at the two prices. With
+neither price set the model has none, as suits a local model: its requests count towards the time
+and step limits and cost no money.
+
 ## When the model fails
 
 A provider error (an HTTP error, a timeout, an endpoint that cannot be reached) or a response that

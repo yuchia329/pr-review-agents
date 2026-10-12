@@ -71,6 +71,7 @@ class ScriptedModel:
         """`dollars_per_request` is the stand-in's price: what `complete_priced` says each
         request cost. It changes nothing about `complete`."""
         self._responses = tuple(responses)
+        self._dollars_per_request = dollars_per_request
         self.requests: list[ModelRequest] = []
 
     def complete(self, request: ModelRequest) -> str:
@@ -90,4 +91,4 @@ class ScriptedModel:
         `dollars_per_request` the stand-in was made with. Raises `ScriptExhausted` as
         `complete` does.
         """
-        raise NotImplementedError
+        return PricedResponse(self.complete(request), self._dollars_per_request)

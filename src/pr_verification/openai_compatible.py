@@ -1,5 +1,6 @@
 """The model interface over the OpenAI-compatible protocol: a hosted endpoint or a local Ollama."""
 
+import math
 import re
 from collections.abc import Mapping
 
@@ -15,6 +16,8 @@ _TIMEOUT = httpx.Timeout(300.0, connect=10.0)
 # Some models put their thinking in front of the answer, in the same text.
 _THINKING = re.compile(r"\A\s*<think>.*?</think>", re.DOTALL)
 _LONGEST_FAILURE = 500
+# A price is for this many tokens.
+_TOKENS_PRICED = 1_000_000
 
 
 class OpenAICompatibleModel:
@@ -28,8 +31,7 @@ class OpenAICompatibleModel:
     ) -> None:
         """`price` is what the provider charges for this model, or None for a model that has no
         price, as a local one has none. It changes nothing about `complete`."""
-        if price is not None:
-            raise NotImplementedError
+        self._price = price
         self._url = endpoint.rstrip("/") + "/chat/completions"
         self._model = model
         self._name = f"{model} at {endpoint}"
@@ -41,6 +43,34 @@ class OpenAICompatibleModel:
         self._client = httpx.Client(headers=headers, timeout=_TIMEOUT, transport=transport)
 
     def complete(self, request: ModelRequest) -> str:
+        return self._ask(request)[0]
+
+    def complete_priced(self, request: ModelRequest) -> PricedResponse:
+        """Make the one request `complete` makes, and say what it cost at the model's price.
+
+        The response is the one `complete` gives, and whatever `complete` raises is raised.
+
+        The protocol reports the tokens of a request in the `usage` of its answer. `dollars`
+        is `usage.prompt_tokens` at `price.input` plus `usage.completion_tokens` at
+        `price.output`, each price being for a million tokens: 1,000 tokens sent and 500
+        returned, at 2.0 and 6.0, cost 0.005.
+
+        `dollars` is 0.0 when the model was given no price, and when the answer has no `usage`
+        holding both counts as whole numbers that are 0 or more: what is not known is not
+        charged for.
+        """
+        answer, usage = self._ask(request)
+        if self._price is None or not isinstance(usage, dict):
+            return PricedResponse(answer, 0.0)
+        sent = _tokens(usage.get("prompt_tokens"))
+        returned = _tokens(usage.get("completion_tokens"))
+        if sent is None or returned is None:
+            return PricedResponse(answer, 0.0)
+        dollars = (sent * self._price.input + returned * self._price.output) / _TOKENS_PRICED
+        return PricedResponse(answer, dollars)
+
+    def _ask(self, request: ModelRequest) -> tuple[str, object]:
+        """Make one request. The answer's text, and its `usage` when it has one."""
         # Instructions and data travel as separate messages, so Untrusted Content stays data.
         body = {
             "model": self._model,
@@ -57,29 +87,14 @@ class OpenAICompatibleModel:
         if not response.is_success:
             raise self._failed(f"answered with HTTP {response.status_code}: {response.text}")
         try:
-            text = response.json()["choices"][0]["message"]["content"]
+            answered = response.json()
+            text = answered["choices"][0]["message"]["content"]
         except (ValueError, LookupError, TypeError, RecursionError):
             text = None
         answer = _THINKING.sub("", text).strip() if isinstance(text, str) else ""
         if not answer:
             raise self._failed(f"gave a response that holds no text: {response.text}")
-        return answer
-
-    def complete_priced(self, request: ModelRequest) -> PricedResponse:
-        """Make the one request `complete` makes, and say what it cost at the model's price.
-
-        The response is the one `complete` gives, and whatever `complete` raises is raised.
-
-        The protocol reports the tokens of a request in the `usage` of its answer. `dollars`
-        is `usage.prompt_tokens` at `price.input` plus `usage.completion_tokens` at
-        `price.output`, each price being for a million tokens: 1,000 tokens sent and 500
-        returned, at 2.0 and 6.0, cost 0.005.
-
-        `dollars` is 0.0 when the model was given no price, and when the answer has no `usage`
-        holding both counts as whole numbers that are 0 or more: what is not known is not
-        charged for.
-        """
-        raise NotImplementedError
+        return answer, answered.get("usage")
 
     def _failed(self, what: str) -> ModelFailed:
         """One line, without the key: a provider may repeat the key back in its error."""
@@ -110,9 +125,37 @@ def model_from_environment(
     key = environment.get("PR_VERIFICATION_API_KEY", "")
     if not endpoint and not key:
         return None
+    sent = _price(environment, "PR_VERIFICATION_INPUT_PRICE")
+    returned = _price(environment, "PR_VERIFICATION_OUTPUT_PRICE")
+    price = None
+    if sent is not None or returned is not None:
+        price = TokenPrice(input=sent or 0.0, output=returned or 0.0)
     return OpenAICompatibleModel(
         endpoint=endpoint or DEFAULT_ENDPOINT,
         model=environment.get("PR_VERIFICATION_MODEL") or DEFAULT_MODEL,
         key=key,
         transport=transport,
+        price=price,
     )
+
+
+def _price(environment: Mapping[str, str], variable: str) -> float | None:
+    """The dollars for a million tokens that `variable` sets, or None when it sets none."""
+    text = environment.get(variable, "")
+    if not text:
+        return None
+    try:
+        price = float(text)
+    except ValueError:
+        price = math.nan
+    if not 0 <= price < math.inf:
+        raise ModelFailed(f"{variable} is set to {text!r}, and must be a number that is 0 or more")
+    return price
+
+
+def _tokens(count: object) -> int | None:
+    """A count of tokens as `usage` gives one, or None when it is no whole number of 0 or more."""
+    # In Python a truth value is a whole number too, and in JSON it is not.
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        return None
+    return count

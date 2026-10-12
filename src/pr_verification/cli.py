@@ -11,7 +11,7 @@ import traceback
 from collections.abc import Sequence
 from pathlib import Path
 
-from pr_verification.budget import Budget
+from pr_verification.budget import Budget, InvalidBudget, budget_from_environment
 from pr_verification.claims import ClaimExtractionFailed
 from pr_verification.core import InvalidPullRequest, PullRequest, run
 from pr_verification.decision import (
@@ -85,7 +85,7 @@ def main(
     returned is the same as with tracing off.
     """
     arguments = _parser().parse_args(argv)
-    if budget is not None or arguments.review:
+    if arguments.review:
         raise NotImplementedError
     try:
         if orchestration is None and arguments.state_dir is not None:
@@ -102,6 +102,8 @@ def main(
             return EXIT_NO_REPORT
         if decider is None:
             decider = configured_decider(decision_configuration(os.environ), model)
+        if budget is None:
+            budget = budget_from_environment(os.environ)
         report = run(
             PullRequest(
                 repository=arguments.repo,
@@ -114,10 +116,12 @@ def main(
             model,
             decider,
             orchestration=orchestration,
+            budget=budget,
         )
         print(report.to_json(), flush=True)
     except (
         InvalidPullRequest,
+        InvalidBudget,
         InvalidDecisionConfiguration,
         ModelFailed,
         ClaimExtractionFailed,
