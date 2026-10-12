@@ -8,6 +8,7 @@ from conftest import (
     FixtureRepository,
     GathersNothing,
     a_reproduction,
+    a_search,
     commit_snapshots,
     model_listing,
     results,
@@ -34,6 +35,7 @@ from pr_verification.report import (
     PullRequestSpend,
     Report,
     RunEvidence,
+    TextChange,
     Verdict,
 )
 from pr_verification.sandbox import RunResult
@@ -338,34 +340,68 @@ def test_fault_in_the_orchestration_is_raised_and_not_turned_into_a_verdict(
         verify(fixture_repository, Gathers(Fault("the disc is full")), "Adds tax")
 
 
-def test_claim_labelled_structural_is_verified_as_a_behavioural_claim_is(
+NOT_ACCEPTED_FIXED = a_reproduction(results(failed="t"), results(passed="t"), accepted=False)
+NOT_ACCEPTED_REGRESSED = a_reproduction(results(passed="t"), results(failed="t"), accepted=False)
+
+
+@pytest.mark.parametrize(
+    "evidence", [NOT_ACCEPTED_FIXED, NOT_ACCEPTED_REGRESSED], ids=["fails then passes", "regressed"]
+)
+def test_reproduction_the_judge_did_not_accept_decides_no_claim_whatever_gathered_it(
+    fixture_repository: FixtureRepository, evidence: Evidence
+) -> None:
+    report = verify(fixture_repository, Gathers(Gathered((evidence,))), "Adds tax")
+
+    assert report.claims == (
+        Claim("Adds tax", Verdict.INCONCLUSIVE, verdict.DECIDES_NOTHING, (evidence,)),
+    )
+    assert report.gate.decision is GateDecision.PASS
+
+
+RENAMED = a_search(TextChange.REMOVED, 2, 0)
+STILL_THERE = a_search(TextChange.REMOVED, 2, 1)
+
+
+@pytest.mark.parametrize(
+    ("kind", "evidence", "expected", "reason"),
+    [
+        ("structural", (RENAMED,), Verdict.CONFIRMED, verdict.STRUCTURAL_CONFIRMED),
+        ("structural", (STILL_THERE, FIXED), Verdict.REFUTED, verdict.STRUCTURAL_REFUTED),
+        ("structural", (FIXED, SAID), Verdict.INCONCLUSIVE, verdict.NOTHING_SEARCHED),
+        ("structural", (REGRESSED,), Verdict.INCONCLUSIVE, verdict.NOTHING_SEARCHED),
+        ("behavioural", (STILL_THERE,), Verdict.INCONCLUSIVE, verdict.NO_REPRODUCTION_RAN),
+        ("behavioural", (STILL_THERE, FIXED), Verdict.CONFIRMED, verdict.CONFIRMED),
+    ],
+    ids=[
+        "structural, a search that supports",
+        "structural, a search that contradicts beside a Reproduction",
+        "structural, a Reproduction that supports",
+        "structural, a Reproduction that contradicts",
+        "behavioural, a search that contradicts",
+        "behavioural, a Reproduction that supports beside a search",
+    ],
+)
+def test_kind_of_a_claim_settles_which_evidence_decides_it_whatever_was_gathered(
     fixture_repository: FixtureRepository,
+    kind: str,
+    evidence: tuple[Evidence, ...],
+    expected: Verdict,
+    reason: str,
 ) -> None:
     pull_request = PullRequest(
         fixture_repository.path, fixture_repository.before, fixture_repository.after, "Add tax"
     )
-    orchestration = Gathers(Gathered((FIXED,)), Gathered((SAID,)))
 
     report = run(
         pull_request,
-        model_listing("Adds tax", "Renames total"),
-        ScriptedDecider(["structural", "structural"]),
-        orchestration=orchestration,
+        model_listing("Renames total"),
+        ScriptedDecider([kind]),
+        orchestration=Gathers(Gathered(evidence)),
     )
 
     assert report.claims == (
-        ClassifiedClaim(
-            "Adds tax", Verdict.CONFIRMED, verdict.CONFIRMED, (FIXED,), kind=ClaimKind.STRUCTURAL
-        ),
-        ClassifiedClaim(
-            "Renames total",
-            Verdict.INCONCLUSIVE,
-            verdict.NO_REPRODUCTION_RAN,
-            (SAID,),
-            kind=ClaimKind.STRUCTURAL,
-        ),
+        ClassifiedClaim("Renames total", expected, reason, evidence, kind=ClaimKind(kind)),
     )
-    assert orchestration.calls[0][0] == ("Adds tax", "Renames total")
 
 
 def test_without_an_orchestration_the_fixed_pipeline_is_used_and_nothing_is_kept(
@@ -396,11 +432,13 @@ def test_without_an_orchestration_the_fixed_pipeline_is_used_and_nothing_is_kept
 
 class KeepsToABudget:
     """A stand-in orchestration that keeps to a Budget. For each Claim it records the spend
-    prepared against that Claim, and gives what was prepared. It records each call."""
+    prepared against that Claim, and gives what was prepared. It records each call, and the
+    kinds each call told it."""
 
     def __init__(self, *prepared: tuple[BudgetSpend, Gathered]) -> None:
         self._prepared = prepared
         self.calls: list[tuple[Ledger, tuple[str, ...], Path, str, str, Model]] = []
+        self.told: list[tuple[ClaimKind | None, ...] | None] = []
 
     def gather(
         self, claims: tuple[str, ...], *, repository: Path, before: str, after: str, model: Model
@@ -419,6 +457,7 @@ class KeepsToABudget:
         kinds: tuple[ClaimKind | None, ...] | None = None,
     ) -> tuple[Gathered, ...]:
         self.calls.append((ledger, claims, repository, before, after, model))
+        self.told.append(kinds)
         ledger.share_out(len(claims))
         for place, (spend, _) in enumerate(self._prepared):
             ledger.record(spend, claim=place)
@@ -485,6 +524,32 @@ def test_orchestration_that_keeps_to_a_budget_is_asked_once_within_the_ledger_of
     assert given is model
     # The ledger already held the step that listed the Claims, and the report is read from it.
     assert (ledger.spent().steps, report.budget_spend.steps) == (4, 4)
+
+
+@pytest.mark.parametrize(
+    ("labels", "kinds"),
+    [
+        (["structural", "behavioural"], (ClaimKind.STRUCTURAL, ClaimKind.BEHAVIOURAL)),
+        (None, (None, None)),
+    ],
+    ids=["classified", "not classified"],
+)
+def test_orchestration_that_keeps_to_a_budget_is_told_the_kind_of_each_claim_in_order(
+    fixture_repository: FixtureRepository,
+    labels: list[str] | None,
+    kinds: tuple[ClaimKind | None, ...],
+) -> None:
+    orchestration = KeepsToABudget((steps(0), Gathered(())), (steps(0), Gathered(())))
+
+    run(
+        a_pull_request(fixture_repository),
+        model_listing("Renames total", "Adds tax"),
+        None if labels is None else ScriptedDecider(labels),
+        orchestration=orchestration,
+        clock=Clock(),
+    )
+
+    assert orchestration.told == [kinds]
 
 
 def test_report_shows_the_spend_in_each_unit_for_the_pull_request_and_for_each_claim(

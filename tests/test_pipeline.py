@@ -27,7 +27,7 @@ from pr_verification.agent import (
 from pr_verification.budget import BUDGET_SPENT, SHARE_SPENT, Budget, Ledger
 from pr_verification.cli import main
 from pr_verification.core import PullRequest, run
-from pr_verification.decision import NO, ScriptedDecider
+from pr_verification.decision import NO, YES, ScriptedDecider
 from pr_verification.ecosystem import (
     Commands,
     Ecosystem,
@@ -37,6 +37,7 @@ from pr_verification.ecosystem import (
     Unsupported,
     find_commands,
 )
+from pr_verification.judge import ROUND_CAP, ROUND_CAP_REACHED, write_judged_reproduction
 from pr_verification.model import Model, ModelFailed, ModelRequest
 from pr_verification.orchestration import (
     COULD_NOT_PREPARE,
@@ -54,11 +55,16 @@ from pr_verification.repo_profile import (
     RepoProfile,
 )
 from pr_verification.report import (
+    AcceptedReproduction,
     BudgetLimit,
     BudgetSpend,
+    ClaimKind,
+    ClassifiedClaim,
     GateDecision,
     PullRequestSpend,
+    Report,
     ReproductionEvidence,
+    SearchEvidence,
     Verdict,
 )
 from pr_verification.reproduction import (
@@ -68,7 +74,6 @@ from pr_verification.reproduction import (
     ENDINGS,
     WRITER_STEP_CAP,
     AttemptResult,
-    write_reproduction,
 )
 from pr_verification.sandbox import (
     Command,
@@ -78,6 +83,11 @@ from pr_verification.sandbox import (
     Phase,
     RunResult,
     SandboxFailed,
+)
+from pr_verification.structural import (
+    VERIFIER_COULD_NOT_FINISH,
+    VERIFIER_STEP_CAP,
+    VERIFIER_STEP_CAP_REACHED,
 )
 from pr_verification.tracing import SpanKind, record
 
@@ -226,13 +236,26 @@ def writes(reproduction: str) -> str:
 DECLARES = finishes(verdict="confirmed", reason="The fix is plainly right, so no test is needed.")
 """A response in which the model declares a Verdict and gives no Reproduction."""
 
+ACCEPTS = finishes(accepted=True)
+"""A response in which the Reproduction judge accepts a Reproduction."""
+
+WHY = "The test asserts nothing about what the Claim says."
+REJECTS = finishes(accepted=False, reason=WHY)
+"""A response in which the Reproduction judge rejects a Reproduction."""
+
 
 class WritesFor:
     """A stand-in model that lists the Claims prepared when asked by the Claim extractor, and
-    answers a role with the response prepared for the Claim in its task, or raises it."""
+    answers a role with the response prepared for the Claim in its task, or raises it. The
+    Reproduction judge, whose task holds a Reproduction, is answered with what was prepared in
+    `judged` for the Claim, and accepts when nothing was."""
 
-    def __init__(self, responses: Mapping[str, str | Exception]) -> None:
-        self._responses = responses
+    def __init__(
+        self,
+        responses: Mapping[str, str | Exception],
+        judged: Mapping[str, str | Exception] | None = None,
+    ) -> None:
+        self._responses, self._judged = responses, judged or {}
         self.claims = tuple(responses)
         self.requests: list[ModelRequest] = []
 
@@ -241,7 +264,10 @@ class WritesFor:
         asked = json.loads(request.data)
         if "task" not in asked:
             return json.dumps({"claims": self.claims})
-        response = self._responses[asked["task"]["claim"]]
+        task = asked["task"]
+        response = self._responses[task["claim"]]
+        if "reproduction" in task:
+            response = self._judged.get(task["claim"], ACCEPTS)
         if isinstance(response, Exception):
             raise response
         return response
@@ -272,7 +298,10 @@ def shop(tmp_path: Path) -> FixtureRepository:
 
 
 def a_pipeline(
-    state: Path, sandboxes: Sandboxes, discover: Discovery | None = None
+    state: Path,
+    sandboxes: Sandboxes,
+    discover: Discovery | None = None,
+    round_cap: int = ROUND_CAP,
 ) -> FixedPipeline:
     return FixedPipeline(
         store=DirectoryStore(state / "profiles"),
@@ -280,6 +309,7 @@ def a_pipeline(
         limits=WITHIN,
         open_sandbox=sandboxes,
         discover=discover or Discovery(commands()),
+        round_cap=round_cap,
     )
 
 
@@ -470,9 +500,13 @@ def test_nothing_of_one_claim_reaches_the_role_working_on_another(
     gather(a_pipeline(tmp_path / "state", Sandboxes(shop)), shop, model)
 
     assert len(model.tasks("Adds tax")) == ATTEMPT_CAP
-    assert model.tasks("Rounds") == [{"claim": "Rounds", "attempts": []}]
-    (request,) = (request for request in model.requests if '"Rounds"' in request.data)
-    assert "Adds tax" not in request.data and "OUTPUT-OF-SAME" not in request.data
+    assert model.tasks("Rounds") == [
+        {"claim": "Rounds", "attempts": []},
+        {"claim": "Rounds", "reproduction": "fixed"},
+    ]
+    for request in model.requests:
+        if '"Rounds"' in request.data:
+            assert "Adds tax" not in request.data and "OUTPUT-OF-SAME" not in request.data
 
 
 def test_fault_is_raised_and_every_sandbox_opened_is_closed_first(
@@ -594,6 +628,313 @@ def test_trace_of_preparing_a_target_commit_holds_its_sandbox_runs_each_with_no_
     assert [span.attributes["pr_verification.phase"] for span in spans] == ["install", "test"]
 
 
+# The judge, and Claims routed by their kind
+
+
+def test_claim_is_given_a_reproduction_only_when_the_judge_accepted_it(
+    shop: FixtureRepository, tmp_path: Path
+) -> None:
+    model = WritesFor(
+        {"Adds tax": writes("fixed"), "Keeps the net price": writes("fixed")},
+        judged={"Keeps the net price": REJECTS},
+    )
+
+    accepted, rejected = gather(a_pipeline(tmp_path / "state", Sandboxes(shop)), shop, model)
+
+    (evidence,) = accepted.evidence
+    assert isinstance(evidence, AcceptedReproduction) and accepted.inconclusive is None
+    assert rejected == Gathered((), ROUND_CAP_REACHED.format(rounds=ROUND_CAP, reason=WHY))
+
+
+TITLE, DESCRIPTION, LINKED_ISSUE = (
+    "TITLE-OF-THE-PULL-REQUEST",
+    "ITS-DESCRIPTION",
+    "ITS-LINKED-ISSUE",
+)
+
+
+def report_of(
+    repository: FixtureRepository, model: Model, pipeline: FixedPipeline, *kinds: str
+) -> Report:
+    """The report from the core's entry point, where the Claim classifier labels the Claims
+    with these kinds, in order."""
+    pull_request = PullRequest(
+        repository.path, repository.before, repository.after, TITLE, DESCRIPTION, LINKED_ISSUE
+    )
+    return run(pull_request, model, ScriptedDecider(kinds), orchestration=pipeline)
+
+
+@pytest.mark.parametrize(
+    ("text", "round_cap"),
+    [("fixed", ROUND_CAP), ("broken", 1)],
+    ids=["fails then passes", "passes then fails"],
+)
+def test_reproduction_the_judge_rejects_leaves_its_claim_inconclusive_whatever_its_runs_showed(
+    shop: FixtureRepository, tmp_path: Path, text: str, round_cap: int
+) -> None:
+    model = WritesFor({"Adds tax": writes(text)}, judged={"Adds tax": REJECTS})
+    pipeline = a_pipeline(tmp_path / "state", Sandboxes(shop), round_cap=round_cap)
+
+    report = report_of(shop, model, pipeline, "behavioural")
+
+    (claim,) = report.claims
+    assert (claim.verdict, claim.evidence) == (Verdict.INCONCLUSIVE, ())
+    assert claim.reason == ROUND_CAP_REACHED.format(rounds=round_cap, reason=WHY)
+    assert report.gate.decision is GateDecision.PASS
+    judged = [task for task in model.tasks("Adds tax") if "reproduction" in task]
+    assert judged == [{"claim": "Adds tax", "reproduction": text}] * round_cap
+
+
+def test_judge_is_shown_the_claim_and_the_reproduction_and_none_of_the_pull_request(
+    shop: FixtureRepository, tmp_path: Path
+) -> None:
+    model = WritesFor({"Adds tax": writes("fixed")})
+
+    report_of(shop, model, a_pipeline(tmp_path / "state", Sandboxes(shop)), "behavioural")
+
+    judged = [request for request in model.requests if '"reproduction"' in request.data]
+    assert [json.loads(request.data) for request in judged] == [
+        {"task": {"claim": "Adds tax", "reproduction": "fixed"}, "steps": []}
+    ]
+    for untrusted in (TITLE, DESCRIPTION, LINKED_ISSUE, "net and tax", "test_total", "Adds tax"):
+        assert untrusted not in judged[0].instructions
+
+
+RENAMES = "Renames UserManager to AccountManager"
+BEFORE_THE_RENAME = "class UserManager:\n    pass\n\n\nmanager = UserManager()\n"
+CARRIED_OUT = BEFORE_THE_RENAME.replace("UserManager", "AccountManager")
+LEFT_BEHIND = "class AccountManager:\n    pass\n\n\nmanager = UserManager()\n"
+NAMES_BOTH = finishes(
+    texts=[
+        {"text": "UserManager", "change": "removed"},
+        {"text": "AccountManager", "change": "added", "path": "accounts.txt"},
+    ]
+)
+"""A response in which the Structural verifier names what `RENAMES` says is removed and added."""
+
+
+def renaming(path: Path, after: str = CARRIED_OUT) -> FixtureRepository:
+    """A repository with nothing of any Ecosystem in it, and a pull request that renames a class
+    and leaves the file holding it as given."""
+    lock = {"deps.lock": "left-pad 1.0\n"}
+    commits = commit_snapshots(
+        path, lock | {"accounts.txt": BEFORE_THE_RENAME}, lock | {"accounts.txt": after}
+    )
+    return FixtureRepository(path, *commits)
+
+
+@pytest.mark.parametrize(
+    ("after", "still_there", "expected", "reason", "gate"),
+    [
+        (CARRIED_OUT, [], Verdict.CONFIRMED, verdict.STRUCTURAL_CONFIRMED, GateDecision.PASS),
+        (
+            LEFT_BEHIND,
+            ["accounts.txt:5:manager = UserManager()"],
+            Verdict.REFUTED,
+            verdict.STRUCTURAL_REFUTED,
+            GateDecision.BLOCK,
+        ),
+    ],
+    ids=["a rename fully carried out", "a rename that leaves the old name"],
+)
+def test_structural_claim_is_verified_by_reading_with_no_sandbox_and_decided_by_what_code_found(
+    tmp_path: Path,
+    after: str,
+    still_there: list[str],
+    expected: Verdict,
+    reason: str,
+    gate: GateDecision,
+) -> None:
+    accounts = renaming(tmp_path / "repository", after)
+    sandboxes, discovery = Sandboxes(accounts), Discovery(commands())
+    model = WritesFor({RENAMES: NAMES_BOTH})
+
+    report = report_of(
+        accounts, model, a_pipeline(tmp_path / "state", sandboxes, discovery), "structural"
+    )
+
+    (claim,) = report.claims
+    assert isinstance(claim, ClassifiedClaim) and claim.kind is ClaimKind.STRUCTURAL
+    assert (claim.verdict, claim.reason, report.gate.decision) == (expected, reason, gate)
+    assert (sandboxes.opened, discovery.asked) == ([], [])
+    assert model.tasks(RENAMES) == [{"claim": RENAMES}]
+    old_name, new_name = json.loads(report.to_json())["claims"][0]["evidence"]
+    assert old_name == {
+        "source": "read_code",
+        "observation": f"lines holding the text: 2 before, {len(still_there)} after",
+        "text": "UserManager",
+        "change": "removed",
+        "path": None,
+        "before_lines": [
+            "accounts.txt:1:class UserManager:",
+            "accounts.txt:5:manager = UserManager()",
+        ],
+        "after_lines": still_there,
+    }
+    assert (new_name["path"], new_name["before_lines"]) == ("accounts.txt", [])
+    assert new_name["after_lines"][0] == "accounts.txt:1:class AccountManager:"
+
+
+def test_each_claim_is_worked_on_in_its_turn_as_its_kind_calls_for_and_only_a_reproduction_is_run(
+    tmp_path: Path,
+) -> None:
+    accounts = renaming(tmp_path / "repository")
+    sandboxes = Sandboxes(accounts)
+    model = WritesFor({RENAMES: NAMES_BOTH, "Adds tax": writes("fixed"), "Drops": NAMES_BOTH})
+
+    report = report_of(
+        accounts,
+        model,
+        a_pipeline(tmp_path / "state", sandboxes),
+        "structural",
+        "behavioural",
+        "structural",
+    )
+
+    assert [(claim.verdict, claim.reason) for claim in report.claims] == [
+        (Verdict.CONFIRMED, verdict.STRUCTURAL_CONFIRMED),
+        (Verdict.CONFIRMED, verdict.CONFIRMED),
+        (Verdict.CONFIRMED, verdict.STRUCTURAL_CONFIRMED),
+    ]
+    renamed, taxed, dropped = (claim.evidence for claim in report.claims)
+    assert all(isinstance(evidence, SearchEvidence) for evidence in (*renamed, *dropped))
+    assert [len(renamed), len(taxed), len(dropped)] == [2, 1, 2]
+    assert isinstance(taxed[0], AcceptedReproduction)
+    asked = [json.loads(request.data)["task"] for request in model.requests[1:]]
+    assert asked == [
+        {"claim": RENAMES},
+        {"claim": "Adds tax", "attempts": []},
+        {"claim": "Adds tax", "reproduction": "fixed"},
+        {"claim": "Drops"},
+    ]
+    (sandbox,) = sandboxes.opened
+    # The first three runs prepare the two commits.
+    assert [command for command, *_ in sandbox.runs[3:]] == [
+        ("write", "fixed"),
+        ("write", "fixed"),
+        ("run-reproduction",),
+        ("run-reproduction",),
+    ]
+    assert isinstance(report.budget_spend, PullRequestSpend)
+    assert [spend.steps for spend in report.budget_spend.claims] == [1, 2, 1]
+
+
+@pytest.mark.parametrize(
+    ("found", "prepared", "reason"),
+    [
+        (Unsupported(NOT_FOUND), {}, NOT_FOUND),
+        (
+            commands(),
+            {(FETCH, "before"): SandboxFailed("no container runtime")},
+            COULD_NOT_PREPARE.format(commit="before", failure="no container runtime"),
+        ),
+    ],
+    ids=["no Ecosystem", "a commit that cannot be prepared"],
+)
+def test_structural_claim_is_still_verified_when_no_reproduction_can_be_run(
+    tmp_path: Path, found: Commands | Unsupported, prepared: Prepared, reason: str
+) -> None:
+    accounts = renaming(tmp_path / "repository")
+    pipeline = a_pipeline(tmp_path / "state", Sandboxes(accounts, prepared), Discovery(found))
+    model = WritesFor({"Adds tax": writes("fixed"), RENAMES: NAMES_BOTH})
+
+    report = report_of(accounts, model, pipeline, "behavioural", "structural")
+
+    assert [(claim.verdict, claim.reason) for claim in report.claims] == [
+        (Verdict.INCONCLUSIVE, reason),
+        (Verdict.CONFIRMED, verdict.STRUCTURAL_CONFIRMED),
+    ]
+    assert model.tasks("Adds tax") == []
+
+
+@pytest.mark.parametrize(
+    ("response", "reason"),
+    [
+        (
+            ModelFailed("the model could not be reached"),
+            VERIFIER_COULD_NOT_FINISH.format(failure="the model could not be reached"),
+        ),
+        (
+            asks("after_list_files"),
+            VERIFIER_STEP_CAP_REACHED.format(steps=VERIFIER_STEP_CAP),
+        ),
+    ],
+    ids=["the model fails", "the verifier never finishes"],
+)
+def test_structural_claim_the_verifier_did_not_finish_is_inconclusive_and_the_next_is_verified(
+    tmp_path: Path, response: str | Exception, reason: str
+) -> None:
+    accounts = renaming(tmp_path / "repository")
+    model = WritesFor({"Moves the manager": response, RENAMES: NAMES_BOTH})
+
+    report = report_of(
+        accounts,
+        model,
+        a_pipeline(tmp_path / "state", Sandboxes(accounts)),
+        "structural",
+        "structural",
+    )
+
+    assert [(claim.verdict, claim.reason, len(claim.evidence)) for claim in report.claims] == [
+        (Verdict.INCONCLUSIVE, reason, 0),
+        (Verdict.CONFIRMED, verdict.STRUCTURAL_CONFIRMED, 2),
+    ]
+
+
+class NeverFinishes(WritesFor):
+    """A stand-in model whose roles ask for a different file at every step and never finish, so
+    that none is given the response prepared for its Claim."""
+
+    def complete(self, request: ModelRequest) -> str:
+        if "task" not in json.loads(request.data):
+            return super().complete(request)
+        self.requests.append(request)
+        return asks("after_read_file", path=f"notes/{len(self.requests)}.txt")
+
+
+def test_progress_guard_of_the_pipeline_watches_the_structural_verifier_and_the_writer(
+    tmp_path: Path,
+) -> None:
+    accounts = renaming(tmp_path / "repository")
+    guard = ScriptedDecider([YES] * 99)
+    pipeline = replace(a_pipeline(tmp_path / "state", Sandboxes(accounts)), progress_guard=guard)
+    model = NeverFinishes({RENAMES: NAMES_BOTH, "Adds tax": writes("fixed")})
+
+    report_of(accounts, model, pipeline, "structural", "behavioural")
+
+    watched = [json.loads(state)["task"] for state, _ in guard.asked]
+    # The verifier's task holds its Claim alone, and the writer's holds its attempts as well.
+    assert watched[0] == {"claim": RENAMES}
+    assert watched[-1]["claim"] == "Adds tax" and "attempts" in watched[-1]
+
+
+@pytest.mark.parametrize(
+    "kinds",
+    [(), (ClaimKind.STRUCTURAL,), (ClaimKind.STRUCTURAL, None, ClaimKind.BEHAVIOURAL)],
+    ids=["none", "too few", "too many"],
+)
+def test_kinds_that_do_not_hold_one_for_each_claim_are_refused_before_anything_else_is_done(
+    tmp_path: Path, kinds: tuple[ClaimKind | None, ...]
+) -> None:
+    accounts = renaming(tmp_path / "repository")
+    sandboxes, discovery = Sandboxes(accounts), Discovery(commands())
+    model = WritesFor({RENAMES: NAMES_BOTH, "Adds tax": writes("fixed")})
+    ledger = Ledger()
+
+    with pytest.raises(ValueError):
+        a_pipeline(tmp_path / "state", sandboxes, discovery).gather_within(
+            ledger,
+            model.claims,
+            repository=accounts.path,
+            before=accounts.before,
+            after=accounts.after,
+            model=model,
+            kinds=kinds,
+        )
+
+    assert (model.requests, sandboxes.opened, discovery.asked) == ([], [], [])
+
+
 # The report, through the core's entry point
 
 
@@ -646,7 +987,7 @@ def test_pull_request_is_verified_end_to_end_and_each_verdict_comes_from_what_wa
 
 class LastClaimFirst:
     """Another orchestration: no Repo Profile, and the Claims worked on from the last to the
-    first, by the same Reproduction writer the fixed pipeline runs."""
+    first, by the same Reproduction writer and Reproduction judge the fixed pipeline runs."""
 
     def __init__(self, repository: FixtureRepository) -> None:
         self._sandbox = Sandboxes(repository)(repository.path, IMAGE)
@@ -655,7 +996,7 @@ class LastClaimFirst:
         self, claims: tuple[str, ...], *, repository: Path, before: str, after: str, model: Model
     ) -> tuple[Gathered, ...]:
         written = {
-            claim: write_reproduction(
+            claim: write_judged_reproduction(
                 claim,
                 model=model,
                 sandbox=self._sandbox,
@@ -688,7 +1029,7 @@ def test_another_orchestration_takes_the_place_of_the_pipeline_with_the_roles_un
     verdicts = [Verdict.CONFIRMED, Verdict.REFUTED, Verdict.INCONCLUSIVE]
     assert [claim.verdict for claim in another.claims] == verdicts
     asked = [json.loads(request.data)["task"]["claim"] for request in by_another.requests[1:]]
-    assert asked == [*["Rounds"] * ATTEMPT_CAP, "Keeps", "Adds tax"]
+    assert asked == [*["Rounds"] * ATTEMPT_CAP, *["Keeps"] * 2, *["Adds tax"] * 2]
 
 
 @pytest.mark.parametrize(

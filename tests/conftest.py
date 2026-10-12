@@ -13,7 +13,13 @@ import pytest
 from pr_verification.ecosystem import Results, Unreadable
 from pr_verification.model import Model, ModelFailed, ModelRequest, ScriptedModel
 from pr_verification.orchestration import Gathered
-from pr_verification.report import EvidenceSource, ReproductionEvidence
+from pr_verification.report import (
+    AcceptedReproduction,
+    EvidenceSource,
+    ReproductionEvidence,
+    SearchEvidence,
+    TextChange,
+)
 from pr_verification.sandbox import RunResult
 
 
@@ -142,11 +148,14 @@ def a_reproduction(
     output: str = "",
     exit_status: int = 0,
     observation: str = "before: exit status 0; after: exit status 0",
+    accepted: bool = True,
 ) -> ReproductionEvidence:
-    """Evidence from a Reproduction whose tests ended on the two commits as given. What both
-    runs printed and how they exited is the same, and says nothing of how the tests ended."""
+    """Evidence from a Reproduction whose tests ended on the two commits as given, and that the
+    Reproduction judge accepted unless `accepted` is false. What both runs printed and how they
+    exited is the same, and says nothing of how the tests ended."""
     ran = RunResult(output=output, exit_status=exit_status, limit_hit=None)
-    return ReproductionEvidence(
+    made = AcceptedReproduction if accepted else ReproductionEvidence
+    return made(
         source=EvidenceSource.RAN_CODE,
         observation=observation,
         command=("run-reproduction",),
@@ -156,6 +165,28 @@ def a_reproduction(
         reproduction=text,
         before_results=before,
         after_results=after,
+    )
+
+
+def a_search(
+    change: TextChange,
+    before: int,
+    after: int,
+    *,
+    text: str = "UserManager",
+    path: str | None = None,
+    line: str = "class UserManager:",
+    observation: str | None = None,
+) -> SearchEvidence:
+    """Evidence from a search that found the text on this many lines of each commit."""
+
+    def lines(found: int) -> tuple[str, ...]:
+        return tuple(f"accounts.py:{number}:{line}" for number in range(1, found + 1))
+
+    if observation is None:
+        observation = f"lines holding the text: {before} before, {after} after"
+    return SearchEvidence(
+        EvidenceSource.READ_CODE, observation, text, change, path, lines(before), lines(after)
     )
 
 
