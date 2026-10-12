@@ -8,6 +8,7 @@ limit or what has been recorded (ADR 0003).
 """
 
 import math
+import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
@@ -178,9 +179,14 @@ class Ledger:
         self._budget = budget
         self._clock = clock
         self._spent = _NOTHING
-        # Every share is the same, so one is kept, with what was recorded against each Claim.
-        self._share: Budget | None = None
+        # The limit of the Budget that was reached first. It stays so whatever is recorded
+        # later for work that was under way.
+        self._stopped: BudgetLimit | None = None
+        # The share of each Claim, with what was recorded against it. They start the same.
+        self._shares: list[Budget] = []
         self._claims: list[BudgetSpend] = []
+        # Held while a spend is recorded or a move is made, so that each is made whole.
+        self._lock = threading.Lock()
 
     def share_out(self, claims: int) -> None:
         """Set aside a share of the Budget for each of `claims` Claims.
@@ -206,14 +212,15 @@ class Ledger:
         """
         if claims < 1:
             raise ValueError(f"shares cannot be set aside for {claims} Claims")
-        if self._share is not None:
+        if self._shares:
             raise ValueError("the shares of the Budget have already been set aside")
         self._refuse_once_spent(None)
-        self._share = Budget(
+        share = Budget(
             seconds=(self._budget.seconds - self._spent.seconds) / claims,
             dollars=(self._budget.dollars - self._spent.dollars) / claims,
             steps=max(1, (self._budget.steps - self._spent.steps) // claims),
         )
+        self._shares = [share] * claims
         self._claims = [_NOTHING] * claims
 
     def record(self, spend: BudgetSpend, *, claim: int | None = None) -> None:
@@ -228,13 +235,11 @@ class Ledger:
         more, and when `claim` names no Claim a share was set aside for. This is looked at
         first: a spend that could never be recorded is a `ValueError` whatever has been spent.
         """
-        if not (spend.seconds >= 0 and spend.dollars >= 0 and spend.steps >= 0):
-            raise ValueError(f"an amount of a spend is not 0 or more: {spend}")
+        _require_amounts(spend)
         self._require_share(claim)
-        self._refuse_once_spent(claim)
-        self._spent = _sum(self._spent, spend)
-        if claim is not None:
-            self._claims[claim] = _sum(self._claims[claim], spend)
+        with self._lock:
+            self._refuse_once_spent(claim)
+            self._add(spend, claim)
 
     def spent(self, *, claim: int | None = None) -> BudgetSpend:
         """What has been recorded so far: for the whole pull request when `claim` is None, and
@@ -253,10 +258,10 @@ class Ledger:
         share is not, this is None for that Claim.
         """
         if claim is None:
-            return _reached(self._spent, self._budget)
-        if self._share is None or not self._has_share(claim):
+            return self._stopped
+        if not self._has_share(claim):
             return None
-        return _reached(self._claims[claim], self._share)
+        return _reached(self._claims[claim], self._shares[claim])
 
     def left(self, *, claim: int | None = None) -> BudgetSpend:
         """What is left to spend: of the Budget when `claim` is None, and of the share of
@@ -270,7 +275,17 @@ class Ledger:
         What is left of a Claim's share says nothing of the Budget, and can be more than is
         left of the Budget.
         """
-        raise NotImplementedError
+        if claim is None:
+            limits, spent = self._budget, self._spent
+        elif self._has_share(claim):
+            limits, spent = self._shares[claim], self._claims[claim]
+        else:
+            return _NOTHING
+        return BudgetSpend(
+            seconds=max(0.0, limits.seconds - spent.seconds),
+            dollars=max(0.0, limits.dollars - spent.dollars),
+            steps=max(0, limits.steps - spent.steps),
+        )
 
     def move_share(self, amount: BudgetSpend, *, source: int, destination: int) -> None:
         """Move `amount` from the share of Claim `source` to the share of Claim `destination`.
@@ -305,7 +320,34 @@ class Ledger:
         This is looked at first. Otherwise raises `BudgetSpent`, having moved nothing, when
         the Budget is spent.
         """
-        raise NotImplementedError
+        if source == destination or not (self._has_share(source) and self._has_share(destination)):
+            raise ValueError(f"no share can be moved from Claim {source} to Claim {destination}")
+        amounts = (amount.seconds, amount.dollars, amount.steps)
+        # Compared, since `math.isfinite` raises for a whole number larger than any float.
+        if not all(0 <= moved < math.inf for moved in amounts) or not any(amounts):
+            raise ValueError(
+                f"an amount to move is not a finite number, or none is over 0: {amount}"
+            )
+        with self._lock:
+            left = self.left(claim=source)
+            if (
+                amount.seconds > left.seconds
+                or amount.dollars > left.dollars
+                or amount.steps > left.steps
+            ):
+                raise ValueError(f"{amount} is more than Claim {source} has left: {left}")
+            self._refuse_once_spent(None)
+            taken_from, given_to = self._shares[source], self._shares[destination]
+            self._shares[source] = Budget(
+                seconds=taken_from.seconds - amount.seconds,
+                dollars=taken_from.dollars - amount.dollars,
+                steps=taken_from.steps - amount.steps,
+            )
+            self._shares[destination] = Budget(
+                seconds=given_to.seconds + amount.seconds,
+                dollars=given_to.dollars + amount.dollars,
+                steps=given_to.steps + amount.steps,
+            )
 
     def model(self, model: Model, *, claim: int | None = None) -> Model:
         """A model that asks `model` through the ledger: each request is counted, and none is
@@ -388,19 +430,33 @@ class Ledger:
                 cost = dollars(done)
             return done
         finally:
-            self.record(BudgetSpend(self._clock() - started, cost, steps), claim=claim)
+            # Work that was started is recorded whole, whatever limit was reached meanwhile.
+            spend = BudgetSpend(self._clock() - started, cost, steps)
+            _require_amounts(spend)
+            with self._lock:
+                self._add(spend, claim)
 
     def _no_longer_than_is_left(self, limits: Limits, claim: int | None) -> Limits:
         """The limits of a run for `claim`, as `sandbox` says: as given for no Claim, and for
         a Claim with `seconds` lowered to what is left of the time limit of its share, or of
         the Budget's when less is left of that."""
-        if claim is None or self._share is None:
+        if claim is None:
             return limits
         left = min(
-            self._share.seconds - self._claims[claim].seconds,
+            self._shares[claim].seconds - self._claims[claim].seconds,
             self._budget.seconds - self._spent.seconds,
         )
-        return replace(limits, seconds=min(limits.seconds, left))
+        # Other work done at the same time may have taken the last of it since the run was
+        # let go ahead. The run is then given no time, and never less than none.
+        return replace(limits, seconds=min(limits.seconds, max(0.0, left)))
+
+    def _add(self, spend: BudgetSpend, claim: int | None) -> None:
+        """Add one spend to what is recorded, as `record` says. The lock is held."""
+        self._spent = _sum(self._spent, spend)
+        if self._stopped is None:
+            self._stopped = _reached(self._spent, self._budget)
+        if claim is not None:
+            self._claims[claim] = _sum(self._claims[claim], spend)
 
     def _has_share(self, claim: int) -> bool:
         return 0 <= claim < len(self._claims)
@@ -419,6 +475,12 @@ class Ledger:
             limit = self.stopped_by(claim=claim)
             if limit is not None:
                 raise BudgetSpent(limit, claim)
+
+
+def _require_amounts(spend: BudgetSpend) -> None:
+    """Raise `ValueError` when an amount in `spend` is not 0 or more."""
+    if not (spend.seconds >= 0 and spend.dollars >= 0 and spend.steps >= 0):
+        raise ValueError(f"an amount of a spend is not 0 or more: {spend}")
 
 
 def _sum(one: BudgetSpend, other: BudgetSpend) -> BudgetSpend:

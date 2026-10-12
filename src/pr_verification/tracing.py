@@ -81,6 +81,7 @@ import sys
 import time
 from collections.abc import Collection, Iterator, Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import StrEnum
 from urllib.parse import unquote
@@ -181,7 +182,6 @@ class Recording:
     def __init__(self) -> None:
         self._trace_id = _new_id(16)
         self._ended: list[Span] = []
-        self._open: list[_OpenSpan] = []
         self._span_ids: set[str] = set()
         # The machine's clock is read once and counted on from there: it can be set back while
         # a run lasts, and a span must not end before it starts.
@@ -200,6 +200,11 @@ class Recording:
 
 _recording: Recording | None = None
 """The recording that is open, if one is."""
+
+_open: ContextVar[tuple[_OpenSpan, ...]] = ContextVar("open spans", default=())
+"""The spans that are open on this thread, outermost first. It is a context variable, so a
+thread run in a copy of the context it was started from begins with the spans open there, and
+what it opens is open on that thread alone."""
 
 _PASSED_ON = frozenset({SpanKind.MODEL_CALL, SpanKind.SANDBOX_RUN})
 """The kinds of work that one model or Sandbox passes on to another. Work of one of these kinds
@@ -231,13 +236,14 @@ def span(kind: SpanKind, name: str) -> Iterator[dict[str, Attribute]]:
     if recording is None:
         yield {}
         return
-    innermost = recording._open[-1] if recording._open else None
+    open_here = _open.get()
+    innermost = open_here[-1] if open_here else None
     if innermost is not None and kind in _PASSED_ON and innermost.kind is kind:
         yield innermost.attributes
         return
     opened = _OpenSpan(kind, _new_id(8, recording._span_ids), {})
     recording._span_ids.add(opened.span_id)
-    recording._open.append(opened)
+    here = _open.set((*open_here, opened))
     started = recording._now()
     failed = False
     try:
@@ -246,7 +252,7 @@ def span(kind: SpanKind, name: str) -> Iterator[dict[str, Attribute]]:
         failed = True
         raise
     finally:
-        recording._open.pop()
+        _open.reset(here)
         recording._ended.append(
             Span(
                 kind,
@@ -276,9 +282,12 @@ def record() -> Iterator[Recording]:
         raise RuntimeError("a recording is already open")
     recording = Recording()
     _recording = recording
+    # A span left open by work outside the recording is no parent of anything inside it.
+    outside = _open.set(())
     try:
         yield recording
     finally:
+        _open.reset(outside)
         _recording = None
 
 

@@ -7,8 +7,10 @@ code is the Gate's: 1 when, and only when, at least one Claim is Refuted.
 import argparse
 import os
 import sys
+import tempfile
 import traceback
 from collections.abc import Sequence
+from contextlib import ExitStack
 from pathlib import Path
 
 from pr_verification.budget import Budget, InvalidBudget, budget_from_environment
@@ -23,11 +25,14 @@ from pr_verification.decision import (
 from pr_verification.model import Model, ModelFailed
 from pr_verification.openai_compatible import model_from_environment
 from pr_verification.orchestration import (
-    ORCHESTRATION_VARIABLE,
+    InvalidOrchestration,
     Orchestration,
+    OrchestrationChoice,
     fixed_pipeline,
+    orchestration_choice,
 )
 from pr_verification.report import Gate, GateDecision
+from pr_verification.supervisor import supervisor
 from pr_verification.tracing import traced
 
 EXIT_PASS = 0
@@ -116,8 +121,6 @@ def _main(
 ) -> int:
     """The run that `main` traces."""
     arguments = _parser().parse_args(argv)
-    if orchestration is None and os.environ.get(ORCHESTRATION_VARIABLE):
-        raise NotImplementedError
     try:
         if model is None:
             model = model_from_environment(os.environ)
@@ -133,28 +136,30 @@ def _main(
             decider = configured_decider(decision_configuration(os.environ), model)
         if budget is None:
             budget = budget_from_environment(os.environ)
-        if orchestration is None and arguments.state_dir is not None:
-            orchestration = fixed_pipeline(arguments.state_dir, progress_guard=decider)
-        report = run(
-            PullRequest(
-                repository=arguments.repo,
-                before=arguments.before,
-                after=arguments.after,
-                title=arguments.title,
-                description=_read(arguments.description_file),
-                linked_issue=_read(arguments.linked_issue_file),
-            ),
-            model,
-            decider,
-            orchestration=orchestration,
-            budget=budget,
-            review=arguments.review,
-        )
+        with ExitStack() as kept:
+            if orchestration is None:
+                orchestration = _configured_orchestration(arguments.state_dir, decider, kept)
+            report = run(
+                PullRequest(
+                    repository=arguments.repo,
+                    before=arguments.before,
+                    after=arguments.after,
+                    title=arguments.title,
+                    description=_read(arguments.description_file),
+                    linked_issue=_read(arguments.linked_issue_file),
+                ),
+                model,
+                decider,
+                orchestration=orchestration,
+                budget=budget,
+                review=arguments.review,
+            )
         print(report.to_json(), flush=True)
     except (
         InvalidPullRequest,
         InvalidBudget,
         InvalidDecisionConfiguration,
+        InvalidOrchestration,
         ModelFailed,
         ClaimExtractionFailed,
         OSError,
@@ -167,6 +172,18 @@ def _main(
         traceback.print_exc()
         return EXIT_NO_REPORT
     return exit_code(report.gate)
+
+
+def _configured_orchestration(
+    state_dir: Path | None, decider: Decider, kept: ExitStack
+) -> Orchestration | None:
+    """The orchestration the environment names, as `main` says, or None for `run` to bring
+    its own. A temporary directory made for it is left for `kept` to remove."""
+    if orchestration_choice(os.environ) is OrchestrationChoice.SUPERVISOR:
+        if state_dir is None:
+            state_dir = Path(kept.enter_context(tempfile.TemporaryDirectory()))
+        return supervisor(state_dir, progress_guard=decider)
+    return None if state_dir is None else fixed_pipeline(state_dir, progress_guard=decider)
 
 
 def _read(file: Path | None) -> str:

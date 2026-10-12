@@ -511,6 +511,17 @@ class FixedPipeline:
             return found.reason
         if not isinstance(found.ecosystem, ReproductionEcosystem):
             return NO_REPRODUCTION_ECOSYSTEM
+        made_ready = self._prepare_commits(repository, before, after, sandbox_for)
+        if isinstance(made_ready, str):
+            return made_ready
+        return _Ready(made_ready, found.ecosystem)
+
+    def _prepare_commits(
+        self, repository: Path, before: str, after: str, sandbox_for: SandboxFor
+    ) -> SandboxWithHomes | str:
+        """Steps 2 and 3 of `gather`: the Sandbox in which both commits are prepared, or why
+        they could not be. Each Sandbox is the one `sandbox_for` gives for its image, and
+        closing it is left to the caller."""
         try:
             target = prepare_target(
                 repository,
@@ -540,7 +551,7 @@ class FixedPipeline:
             return COULD_NOT_PREPARE.format(commit="after", failure=failure)
         if failed is not None:
             return COULD_NOT_PREPARE.format(commit="after", failure=_failure(failed))
-        return _Ready(target.sandbox, found.ecosystem)
+        return target.sandbox
 
 
 def _failure(failed: CommandFailed) -> str:
@@ -595,4 +606,13 @@ def orchestration_choice(environment: Mapping[str, str]) -> OrchestrationChoice:
     The command line reads it. The GitHub Action does not yet: it uses the fixed pipeline
     whatever the variable says.
     """
-    raise NotImplementedError
+    written = environment.get(ORCHESTRATION_VARIABLE, "")
+    if not written:
+        return OrchestrationChoice.PIPELINE
+    try:
+        return OrchestrationChoice(written)
+    except ValueError:
+        allowed = " or ".join(choice.value for choice in OrchestrationChoice)
+        raise InvalidOrchestration(
+            f"{ORCHESTRATION_VARIABLE} is set to {written!r}, and must be {allowed}"
+        ) from None
