@@ -14,3 +14,7 @@ To keep ADR 0002 intact, the supervisor's power is limited to effort. It chooses
 
 - Runs are slower, cost more tokens, and are not deterministic, so evaluation must tolerate variation between runs.
 - A manipulated supervisor can waste a bounded Budget or under-investigate a Claim, which yields Inconclusive. It cannot forge a Verdict.
+
+## Strategies the supervisor may choose
+
+Decided on 2026-10-12, before the supervisor was built. A Reproduction stays a test written by the system, and nothing else decides a Behavioural Claim. So the first reason given above does not hold for the supervisor as built: existing tests on both commits for a refactor, and a benchmark for a performance change, are not strategies, and each kind of Claim has one. Such a Claim goes on to a Reproduction like any other Behavioural Claim and is Inconclusive unless one decides it. The other reasons stand. The supervisor chooses which Claim is worked on, in what order, how many at once, with how much of the Budget, and whether to try again. `compute_verdict` is not changed by this. A strategy can be added later, with its own rule for the Verdict and its own measurements; `strategies_for` in `pr_verification.supervisor` is where the rule is stated.
