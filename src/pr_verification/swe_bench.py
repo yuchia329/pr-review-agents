@@ -24,7 +24,7 @@ from pr_verification.ecosystem import Unreadable, Unsupported, find_commands
 from pr_verification.evaluation import Case, Part
 from pr_verification.report import Verdict
 from pr_verification.repository import commit_staged, git, repository_at, resolve_commit
-from pr_verification.sandbox import ContainerSandbox, Limits, Phase
+from pr_verification.sandbox import ContainerSandbox, Limits, Phase, run_in
 
 SWE_BENCH_TITLE = "Fix the issue described below"
 """The title of every pull request made from an instance. The issue text only reports a
@@ -299,7 +299,9 @@ def run_answer_key(imported: ImportedCase, limits: Limits) -> AnswerKeyRun:
             return AnswerKeyRun(AnswerKeyResult.CANNOT_INSTALL, commands.reason)
         with ContainerSandbox(copy, commands.image) as sandbox:
             for install in commands.install:
-                installed = sandbox.run(install, commit=tested, phase=Phase.INSTALL, limits=limits)
+                installed = run_in(
+                    sandbox, install, commit=tested, phase=Phase.INSTALL, limits=limits
+                )
                 if installed.exit_status != 0:
                     ending = (
                         f"exited with status {installed.exit_status}"
@@ -310,7 +312,7 @@ def run_answer_key(imported: ImportedCase, limits: Limits) -> AnswerKeyRun:
                         AnswerKeyResult.CANNOT_INSTALL,
                         f"The install command `{shlex.join(install)}` {ending}.",
                     )
-            tests = sandbox.run(commands.test, commit=tested, phase=Phase.TEST, limits=limits)
+            tests = run_in(sandbox, commands.test, commit=tested, phase=Phase.TEST, limits=limits)
     results = commands.ecosystem.read_results(tests)
     if isinstance(results, Unreadable):
         return AnswerKeyRun(AnswerKeyResult.UNREADABLE, results.reason)

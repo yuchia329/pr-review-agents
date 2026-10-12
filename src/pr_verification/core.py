@@ -30,6 +30,7 @@ from pr_verification.report import (
 )
 from pr_verification.repository import resolve_commit
 from pr_verification.review import review_pull_request
+from pr_verification.tracing import SpanKind, span
 from pr_verification.verdict import compute_verdict
 
 
@@ -205,6 +206,20 @@ def run(
     Raises `ValueError` when `review` is true and there is no `decider`, and whatever
     `review_pull_request` raises: a fault in the system, and never a failing model.
     """
+    with span(SpanKind.RUN, "pr-verification"):
+        return _run(pull_request, model, decider, orchestration, budget, clock, review)
+
+
+def _run(
+    pull_request: PullRequest,
+    model: Model,
+    decider: Decider | None,
+    orchestration: Orchestration | None,
+    budget: Budget | None,
+    clock: Clock,
+    review: bool,
+) -> Report:
+    """The call that `run` records."""
     if review and decider is None:
         raise ValueError("a Review asks the decision layer, and no decider was given")
     ledger = Ledger(budget, clock=clock)

@@ -21,6 +21,7 @@ from types import TracebackType
 from typing import IO, Any, Protocol, Self
 
 from pr_verification.repository import git, git_environment, resolve_commit
+from pr_verification.tracing import SpanKind, span
 
 Command = tuple[str, ...]
 """A program and its arguments. It is started directly, never through a shell."""
@@ -141,6 +142,22 @@ class Sandbox(Protocol):
         Raises `SandboxFailed` when the Sandbox itself cannot do the run.
         """
         ...
+
+
+def run_in(
+    sandbox: Sandbox, command: Command, *, commit: str, phase: Phase, limits: Limits
+) -> RunResult:
+    """Ask `sandbox` for one run, as `Sandbox.run` does it, recorded as one run in the Sandbox
+    (`pr_verification.tracing`). Every run the system asks for is asked for through this."""
+    with span(SpanKind.SANDBOX_RUN, "sandbox") as known:
+        known["pr_verification.phase"] = phase.value
+        known["pr_verification.commit"] = commit
+        result = sandbox.run(command, commit=commit, phase=phase, limits=limits)
+        if result.exit_status is not None:
+            known["pr_verification.exit_status"] = result.exit_status
+        if result.limit_hit is not None:
+            known["pr_verification.limit_hit"] = result.limit_hit.value
+        return result
 
 
 class SandboxWithHomes(Sandbox, Protocol):

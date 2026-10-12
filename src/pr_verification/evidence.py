@@ -1,7 +1,7 @@
 """Gathering Evidence by running code in the Sandbox."""
 
 from pr_verification.report import EvidenceSource, RunEvidence
-from pr_verification.sandbox import Command, Limits, Phase, RunResult, Sandbox
+from pr_verification.sandbox import Command, Limits, Phase, RunResult, Sandbox, run_in
 
 
 def run_on_both_commits(
@@ -25,7 +25,7 @@ def run_on_both_commits(
     Sandbox itself cannot do a run.
     """
     results = [
-        sandbox.run(command, commit=commit, phase=phase, limits=limits)
+        run_in(sandbox, command, commit=commit, phase=phase, limits=limits)
         for commit in (before, after)
     ]
     return RunEvidence(

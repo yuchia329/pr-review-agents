@@ -28,6 +28,7 @@ from pr_verification.sandbox import (
     RunResult,
     SandboxFailed,
     SandboxWithHomes,
+    run_in,
 )
 
 Discover = Callable[[Path, str], Commands | Unsupported]
@@ -364,7 +365,7 @@ def prepare_target(
     if failed is not None:
         return failed
     sandbox.save_home(target, archive)
-    tested = sandbox.run(commands.test, commit=target, phase=Phase.TEST, limits=limits)
+    tested = run_in(sandbox, commands.test, commit=target, phase=Phase.TEST, limits=limits)
     if not isinstance(commands.ecosystem.read_results(tested), Results):
         return CommandFailed(commands.test, tested)
     profile = RepoProfile(
@@ -416,7 +417,7 @@ def _install(
     """Run install commands against a commit in order, up to the first that does not work.
     None when each exited with status 0."""
     for command in install:
-        run = sandbox.run(command, commit=commit, phase=Phase.INSTALL, limits=limits)
+        run = run_in(sandbox, command, commit=commit, phase=Phase.INSTALL, limits=limits)
         if run.exit_status != 0:
             return CommandFailed(command, run)
     return None

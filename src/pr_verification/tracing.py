@@ -69,10 +69,15 @@ Secrets
 Where traces are sent is configuration, and with none tracing is off: see `traced`.
 """
 
-from collections.abc import Mapping
-from contextlib import AbstractContextManager
+import json
+import secrets
+import sys
+import time
+from collections.abc import Collection, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
+from urllib.parse import unquote
 
 import httpx
 
@@ -155,17 +160,103 @@ class Trace:
     """Every span that has ended, in the order they ended: a span comes after its children."""
 
 
+@dataclass(frozen=True)
+class _OpenSpan:
+    """One piece of work that has not ended yet."""
+
+    kind: SpanKind
+    span_id: str
+    attributes: dict[str, Attribute]
+
+
 class Recording:
     """A recording that `record` opened."""
+
+    def __init__(self) -> None:
+        self._trace_id = _new_id(16)
+        self._ended: list[Span] = []
+        self._open: list[_OpenSpan] = []
+        self._span_ids: set[str] = set()
+        # The machine's clock is read once and counted on from there: it can be set back while
+        # a run lasts, and a span must not end before it starts.
+        self._opened_unix_nano = time.time_ns()
+        self._opened = time.monotonic_ns()
 
     def trace(self) -> Trace:
         """The trace so far: every span that had ended when this was called. It can be asked
         for while the recording is open and after it has closed, and always has the same
         `trace_id`."""
-        raise NotImplementedError
+        return Trace(self._trace_id, tuple(self._ended))
+
+    def _now(self) -> int:
+        return self._opened_unix_nano + time.monotonic_ns() - self._opened
 
 
-def record() -> AbstractContextManager[Recording]:
+_recording: Recording | None = None
+"""The recording that is open, if one is."""
+
+_PASSED_ON = frozenset({SpanKind.MODEL_CALL, SpanKind.SANDBOX_RUN})
+"""The kinds of work that one model or Sandbox passes on to another. Work of one of these kinds
+that starts inside a span of the same kind is that span's own work, and not more of it."""
+
+
+def _new_id(size: int, taken: Collection[str] = ()) -> str:
+    """`size` bytes chosen at random, as lowercase hexadecimal digits: not all zero, and none
+    of `taken`."""
+    while True:
+        made = secrets.token_hex(size)
+        if made.strip("0") and made not in taken:
+            return made
+
+
+@contextmanager
+def span(kind: SpanKind, name: str) -> Iterator[dict[str, Attribute]]:
+    """Record the work done inside the `with` as one span. For the package's own modules: it is
+    how each of them records what the module's own text says is recorded.
+
+    Gives the span's attributes, which the work adds to as each becomes known. With no
+    recording open nothing is recorded, and what is added is dropped.
+
+    A request to a model made while one is being made, and a run in a Sandbox asked for while
+    one is being done, is the same work passed on. It opens no span of its own, and is given
+    the attributes of the span that is open.
+    """
+    recording = _recording
+    if recording is None:
+        yield {}
+        return
+    innermost = recording._open[-1] if recording._open else None
+    if innermost is not None and kind in _PASSED_ON and innermost.kind is kind:
+        yield innermost.attributes
+        return
+    opened = _OpenSpan(kind, _new_id(8, recording._span_ids), {})
+    recording._span_ids.add(opened.span_id)
+    recording._open.append(opened)
+    started = recording._now()
+    failed = False
+    try:
+        yield opened.attributes
+    except BaseException:
+        failed = True
+        raise
+    finally:
+        recording._open.pop()
+        recording._ended.append(
+            Span(
+                kind,
+                name,
+                span_id=opened.span_id,
+                parent_id=None if innermost is None else innermost.span_id,
+                start_unix_nano=started,
+                end_unix_nano=recording._now(),
+                attributes=dict(opened.attributes),
+                failed=failed,
+            )
+        )
+
+
+@contextmanager
+def record() -> Iterator[Recording]:
     """Open a recording for as long as the `with` lasts.
 
     Work done inside the `with` is recorded as the module's own text says. Work done outside
@@ -174,7 +265,15 @@ def record() -> AbstractContextManager[Recording]:
 
     Raises `RuntimeError` when a recording is already open.
     """
-    raise NotImplementedError
+    global _recording
+    if _recording is not None:
+        raise RuntimeError("a recording is already open")
+    recording = Recording()
+    _recording = recording
+    try:
+        yield recording
+    finally:
+        _recording = None
 
 
 def to_otlp(trace: Trace) -> dict[str, object]:
@@ -207,12 +306,50 @@ def to_otlp(trace: Trace) -> dict[str, object]:
 
     A pure function of `trace`.
     """
-    raise NotImplementedError
+    spans = [_otlp_span(trace.trace_id, span) for span in trace.spans]
+    service = {"key": "service.name", "value": _otlp_value(SERVICE_NAME)}
+    return {
+        "resourceSpans": [
+            {
+                "resource": {"attributes": [service]},
+                "scopeSpans": [{"scope": {"name": "pr_verification"}, "spans": spans}],
+            }
+        ]
+    }
 
 
+def _otlp_span(trace_id: str, span: Span) -> dict[str, object]:
+    """One span of a trace, as `to_otlp` writes it."""
+    attributes = {**span.attributes, "pr_verification.kind": span.kind.value}
+    written: dict[str, object] = {"traceId": trace_id, "spanId": span.span_id}
+    if span.parent_id is not None:
+        written["parentSpanId"] = span.parent_id
+    return {
+        **written,
+        "name": span.name,
+        "kind": 1,
+        "startTimeUnixNano": str(span.start_unix_nano),
+        "endTimeUnixNano": str(span.end_unix_nano),
+        "attributes": [
+            {"key": name, "value": _otlp_value(value)} for name, value in attributes.items()
+        ],
+        "status": {"code": 2} if span.failed else {},
+    }
+
+
+def _otlp_value(value: Attribute) -> dict[str, object]:
+    """The value of one attribute, as `to_otlp` writes it."""
+    if isinstance(value, str):
+        return {"stringValue": value}
+    if isinstance(value, int):
+        return {"intValue": str(value)}
+    return {"doubleValue": value}
+
+
+@contextmanager
 def traced(
     environment: Mapping[str, str], transport: httpx.BaseTransport | None = None
-) -> AbstractContextManager[None]:
+) -> Iterator[None]:
     """Record the work done inside the `with` and send its trace, when `environment` says to.
 
     Tracing is on when `ENDPOINT_VARIABLE` is set in `environment` to other than the empty
@@ -233,4 +370,48 @@ def traced(
 
     `transport` is for a caller that brings its own in place of the network.
     """
-    raise NotImplementedError
+    endpoint = environment.get(ENDPOINT_VARIABLE, "")
+    if not endpoint:
+        yield
+        return
+    with record() as recording:
+        try:
+            yield
+        finally:
+            _send(recording.trace(), endpoint, environment.get(HEADERS_VARIABLE, ""), transport)
+
+
+_SEND_WITHIN_SECONDS = 10.0
+"""How long sending a trace may take. A collector that does not answer must not hold a run up."""
+
+
+def _send(trace: Trace, endpoint: str, headers: str, transport: httpx.BaseTransport | None) -> None:
+    """Send `trace` as `traced` says, and say so on standard error when it cannot be sent."""
+    if not trace.spans:
+        return
+    try:
+        with httpx.Client(transport=transport, timeout=_SEND_WITHIN_SECONDS) as client:
+            response = client.post(
+                endpoint.rstrip("/") + "/v1/traces",
+                content=json.dumps(to_otlp(trace)),
+                headers={**_headers(headers), "Content-Type": "application/json"},
+            )
+    except (httpx.HTTPError, httpx.InvalidURL) as error:
+        # Only the kind of error is said: what it says may quote the endpoint or a header.
+        failure = f"the collector could not be reached ({type(error).__name__})"
+    else:
+        if response.is_success:
+            return
+        # What the collector answered is not said either: it may repeat a header back.
+        failure = f"the collector answered with HTTP {response.status_code}"
+    print(f"pr-verification: the trace was not sent: {failure}", file=sys.stderr)
+
+
+def _headers(written: str) -> dict[str, str]:
+    """The headers that `HEADERS_VARIABLE` holds, as `traced` reads them."""
+    headers = {}
+    for pair in written.split(","):
+        name, separator, value = pair.partition("=")
+        if separator and name.strip():
+            headers[name.strip()] = unquote(value.strip())
+    return headers

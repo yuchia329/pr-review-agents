@@ -13,9 +13,23 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from pr_verification.model import Model, ModelRequest, PricedModel, PricedResponse
+from pr_verification.model import (
+    Model,
+    ModelRequest,
+    PricedModel,
+    PricedResponse,
+    ask,
+    ask_priced,
+)
 from pr_verification.report import BudgetLimit, BudgetSpend
-from pr_verification.sandbox import Command, Limits, Phase, RunResult, SandboxWithHomes
+from pr_verification.sandbox import (
+    Command,
+    Limits,
+    Phase,
+    RunResult,
+    SandboxWithHomes,
+    run_in,
+)
 
 DEFAULT_SECONDS = 900.0
 """The time limit when none is configured: fifteen minutes."""
@@ -354,15 +368,15 @@ class _ModelThroughLedger:
         self._ledger, self._model, self._claim = ledger, model, claim
 
     def complete(self, request: ModelRequest) -> str:
-        def ask() -> PricedResponse:
+        def priced() -> PricedResponse:
             if isinstance(self._model, PricedModel):
-                return self._model.complete_priced(request)
-            return PricedResponse(self._model.complete(request), dollars=0.0)
+                return ask_priced(self._model, request)
+            return PricedResponse(ask(self._model, request), dollars=0.0)
 
-        priced = self._ledger._do(
-            ask, claim=self._claim, steps=1, dollars=lambda priced: priced.dollars
+        answered = self._ledger._do(
+            priced, claim=self._claim, steps=1, dollars=lambda answered: answered.dollars
         )
-        return priced.response
+        return answered.response
 
 
 class _SandboxThroughLedger:
@@ -375,7 +389,7 @@ class _SandboxThroughLedger:
         def within_what_is_left() -> RunResult:
             # Worked out once the run is known to go ahead, so there is time left to give it.
             within = self._ledger._no_longer_than_is_left(limits, self._claim)
-            return self._sandbox.run(command, commit=commit, phase=phase, limits=within)
+            return run_in(self._sandbox, command, commit=commit, phase=phase, limits=within)
 
         return self._timed(within_what_is_left)
 

@@ -17,8 +17,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 from itertools import pairwise
 
-from pr_verification.decision import NO, Decider, YesOrNo
-from pr_verification.model import Model, ModelRequest
+from pr_verification.decision import NO, Decider, YesOrNo, ask_decider
+from pr_verification.model import Model, ModelRequest, ask
+from pr_verification.tracing import SpanKind, span
 
 NO_SUCH_TOOL = "This role has no tool of that name, so nothing was run."
 """What a role is told when it asks for a tool it was not given."""
@@ -343,6 +344,17 @@ def run_role(
     run as a failing model does. `progress_guard` is expected to take an input of any size,
     as a configured decider does: an `InputTooLong` is not caught either.
     """
+    with span(SpanKind.ROLE, role.name) as known:
+        run = _run_role(role, task, model, progress_guard)
+        known["pr_verification.steps"] = len(run.steps)
+        known["pr_verification.stopped"] = run.stopped.value
+        return run
+
+
+def _run_role(
+    role: Role, task: Mapping[str, object], model: Model, progress_guard: Decider | None
+) -> RoleRun:
+    """The run that `run_role` records."""
     if role.step_cap < 1:
         raise ValueError(f"the step cap of the role {role.name!r} is {role.step_cap}: under 1")
     tools = {tool.name: tool for tool in role.tools}
@@ -360,7 +372,7 @@ def run_role(
         # something else. Left in ASCII, so that text which has no UTF-8, as a model's response
         # can be, does not stop the request from being sent.
         data = json.dumps({"task": dict(task), "steps": taken}, indent=2)
-        response = model.complete(ModelRequest(instructions=instructions, data=data))
+        response = ask(model, ModelRequest(instructions=instructions, data=data))
         asked = _read(response)
         if isinstance(asked, _Finish):
             steps.append(Step(response, StepOutcome.FINISHED, tool=None, result=""))
@@ -372,7 +384,9 @@ def run_role(
         elif asked.tool not in tools:
             step = Step(response, StepOutcome.REFUSED, tool=None, result=NO_SUCH_TOOL)
         else:
-            returned = tools[asked.tool].run(asked.arguments)
+            tool = tools[asked.tool]
+            with span(SpanKind.TOOL_CALL, tool.name):
+                returned = tool.run(asked.arguments)
             step = Step(response, StepOutcome.RAN_TOOL, tool=asked.tool, result=returned)
         steps.append(step)
         if len(steps) < role.step_cap:
@@ -397,7 +411,7 @@ def _loop_found(
         return found
     latest = [_shown(step) for step in steps[-PROGRESS_INTERVAL:]]
     state = json.dumps({"task": dict(task), "steps": latest})
-    decision = progress_guard.decide(state, PROGRESS)
+    decision = ask_decider(progress_guard, state, PROGRESS)
     return LoopKind.NO_PROGRESS if decision.top == NO else None
 
 

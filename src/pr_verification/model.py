@@ -4,6 +4,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+from pr_verification.tracing import SpanKind, span
+
 
 @dataclass(frozen=True)
 class ModelRequest:
@@ -58,6 +60,23 @@ class PricedModel(Model, Protocol):
         cost is not known, and nothing is said of it.
         """
         ...
+
+
+def ask(model: Model, request: ModelRequest) -> str:
+    """Ask `model` through `complete`, recorded as one request to a model
+    (`pr_verification.tracing`). Every request the system makes is made through this or
+    through `ask_priced`."""
+    with span(SpanKind.MODEL_CALL, "model"):
+        return model.complete(request)
+
+
+def ask_priced(model: PricedModel, request: ModelRequest) -> PricedResponse:
+    """Ask `model` through `complete_priced`, recorded as `ask` records a request, and with
+    what the request cost once the model has answered."""
+    with span(SpanKind.MODEL_CALL, "model") as known:
+        priced = model.complete_priced(request)
+        known["pr_verification.dollars"] = priced.dollars
+        return priced
 
 
 class ScriptExhausted(Exception):

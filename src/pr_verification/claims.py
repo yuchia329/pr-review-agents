@@ -3,9 +3,10 @@ Claim classifier, which labels each one Behavioural or Structural."""
 
 import json
 
-from pr_verification.decision import Choice, Decider
-from pr_verification.model import Model, ModelRequest
+from pr_verification.decision import Choice, Decider, ask_decider
+from pr_verification.model import Model, ModelRequest, ask
 from pr_verification.report import ClaimKind
+from pr_verification.tracing import SpanKind, span
 
 INSTRUCTIONS = """\
 You list the Claims a pull request makes about its own changes.
@@ -41,8 +42,9 @@ def extract_claims(
         ensure_ascii=False,
         indent=2,
     )
-    response = model.complete(ModelRequest(instructions=INSTRUCTIONS, data=data))
-    return _read_claims(response)
+    with span(SpanKind.ROLE, "claim-extractor"):
+        response = ask(model, ModelRequest(instructions=INSTRUCTIONS, data=data))
+        return _read_claims(response)
 
 
 def _read_claims(response: str) -> tuple[str, ...]:
@@ -76,4 +78,4 @@ def classify_claim(decider: Decider, claim: str) -> ClaimKind:
     `claim` is Untrusted Content, and the decider reads it only as data. Nothing the
     decider raises is caught.
     """
-    return ClaimKind(decider.decide(claim, CLAIM_KIND).top)
+    return ClaimKind(ask_decider(decider, claim, CLAIM_KIND).top)

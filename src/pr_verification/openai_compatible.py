@@ -3,10 +3,12 @@
 import math
 import re
 from collections.abc import Mapping
+from typing import TypeGuard
 
 import httpx
 
 from pr_verification.model import ModelFailed, ModelRequest, PricedResponse, TokenPrice
+from pr_verification.tracing import SpanKind, span
 
 DEFAULT_ENDPOINT = "https://api.minimax.io/v1"
 DEFAULT_MODEL = "MiniMax-M3"
@@ -70,7 +72,22 @@ class OpenAICompatibleModel:
         return PricedResponse(answer, dollars)
 
     def _ask(self, request: ModelRequest) -> tuple[str, object]:
-        """Make one request. The answer's text, and its `usage` when it has one."""
+        """Make one request. The answer's text, and its `usage` when it has one.
+
+        The request is recorded with the model's name, and with the tokens when `usage` holds
+        both counts as integers (`pr_verification.tracing`)."""
+        with span(SpanKind.MODEL_CALL, "model") as known:
+            known["gen_ai.request.model"] = self._model
+            answer, usage = self._post(request)
+            if isinstance(usage, dict):
+                sent, returned = usage.get("prompt_tokens"), usage.get("completion_tokens")
+                if _is_integer(sent) and _is_integer(returned):
+                    known["gen_ai.usage.input_tokens"] = sent
+                    known["gen_ai.usage.output_tokens"] = returned
+            return answer, usage
+
+    def _post(self, request: ModelRequest) -> tuple[str, object]:
+        """Send one request to the endpoint, and read its answer as `_ask` gives it."""
         # Instructions and data travel as separate messages, so Untrusted Content stays data.
         body = {
             "model": self._model,
@@ -155,7 +172,10 @@ def _price(environment: Mapping[str, str], variable: str) -> float | None:
 
 def _tokens(count: object) -> int | None:
     """A count of tokens as `usage` gives one, or None when it is no whole number of 0 or more."""
+    return count if _is_integer(count) and count >= 0 else None
+
+
+def _is_integer(count: object) -> TypeGuard[int]:
+    """Whether `count` is an integer as JSON has one."""
     # In Python a truth value is a whole number too, and in JSON it is not.
-    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
-        return None
-    return count
+    return isinstance(count, int) and not isinstance(count, bool)

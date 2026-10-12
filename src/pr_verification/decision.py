@@ -20,7 +20,8 @@ from typing import Any, Protocol
 
 import httpx
 
-from pr_verification.model import Model, ModelFailed, ModelRequest, ScriptExhausted
+from pr_verification.model import Model, ModelFailed, ModelRequest, ScriptExhausted, ask
+from pr_verification.tracing import SpanKind, span
 
 YES = "yes"
 NO = "no"
@@ -239,6 +240,19 @@ class Decider(Protocol):
         ...
 
 
+def ask_decider(decider: Decider, state: str, question: Question) -> Decision:
+    """Ask `decider` for one decision that verifying a pull request needs, recorded as one
+    decision (`pr_verification.tracing`), whatever the decider asks of others to make it."""
+    with span(SpanKind.DECISION, "decision") as known:
+        decision = decider.decide(state, question)
+        known["pr_verification.made_by"] = decision.made_by.value
+        known["pr_verification.confidence"] = decision.confidence
+        known["pr_verification.dollars"] = decision.dollars
+        if decision.passed_on is not None:
+            known["pr_verification.passed_on"] = decision.passed_on.value
+        return decision
+
+
 class ScriptedDecider:
     """The stand-in for tests: replays prepared answers in order and records what was asked.
 
@@ -352,7 +366,7 @@ class SmallLLMDecider:
             ensure_ascii=False,
             indent=2,
         )
-        response = self._model.complete(ModelRequest(instructions=INSTRUCTIONS, data=data))
+        response = ask(self._model, ModelRequest(instructions=INSTRUCTIONS, data=data))
         try:
             numbers = json.loads(response)["probabilities"]
         except (ValueError, KeyError, TypeError, RecursionError):

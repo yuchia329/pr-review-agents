@@ -24,6 +24,7 @@ from pr_verification.model import Model, ModelFailed
 from pr_verification.openai_compatible import model_from_environment
 from pr_verification.orchestration import Orchestration, fixed_pipeline
 from pr_verification.report import Gate, GateDecision
+from pr_verification.tracing import traced
 
 EXIT_PASS = 0
 EXIT_BLOCK = 1
@@ -84,6 +85,18 @@ def main(
     configured, the run's trace is sent before `main` returns, and what is printed and
     returned is the same as with tracing off.
     """
+    with traced(os.environ):
+        return _main(argv, model, decider, orchestration, budget)
+
+
+def _main(
+    argv: Sequence[str] | None,
+    model: Model | None,
+    decider: Decider | None,
+    orchestration: Orchestration | None,
+    budget: Budget | None,
+) -> int:
+    """The run that `main` traces."""
     arguments = _parser().parse_args(argv)
     try:
         if model is None:
