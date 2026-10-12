@@ -14,6 +14,7 @@ name: PR Verification
 
 on:
   pull_request:
+  pull_request_target:
   push:
     branches: [main]
 
@@ -25,19 +26,39 @@ permissions:
 
 jobs:
   verify:
+    # A push, and a pull request from this repository.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     env:
       PR_VERIFICATION_API_KEY: ${{ secrets.PR_VERIFICATION_API_KEY }}
     steps:
       - uses: yuchia329/pr-review-agents@main
+
+  verify-fork:
+    # A pull request from a fork, once a maintainer has approved the run.
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    environment: pr-verification-forks
+    env:
+      # A secret of the environment only: see "Pull requests from forks".
+      PR_VERIFICATION_API_KEY: ${{ secrets.PR_VERIFICATION_FORK_API_KEY }}
+    steps:
+      - uses: yuchia329/pr-review-agents@main
 ```
 
-Then add the key for the model's endpoint as the repository secret `PR_VERIFICATION_API_KEY`.
+Then add the key for the model's endpoint as the repository secret `PR_VERIFICATION_API_KEY`,
+and set up the environment for forks as "Pull requests from forks" below says.
 
 What each part is for:
 
-- `pull_request` starts a run that verifies the pull request. Do not use
-  `pull_request_target`: it would hand the repository's secrets to a run for a fork.
+- `pull_request` starts a run that verifies a pull request from the repository itself.
+- `pull_request_target` starts a run that verifies a pull request from a fork. See "Pull
+  requests from forks" below before changing anything about it.
 - `push` starts a run that prepares the branch pushed to: it learns the Repo Profile and
   installs the dependencies, and only such a run saves them for later runs (ADR 0004). List
   under `branches` every branch that pull requests target.
@@ -83,8 +104,46 @@ itself.
   blocks, and neutral when the run produced no report.
 - **The report**, as JSON, in the job's log.
 
-A pull request from a fork is skipped, with a notice on the run's page, until the handling of
-forks is built.
+### Pull requests from forks
+
+GitHub gives a run for `pull_request` no secrets when the pull request comes from a fork, so
+such a run has no key for the model. A fork is verified by a run for `pull_request_target`
+instead, which GitHub starts from the workflow file on the default branch and does give the
+secrets. ADR 0005 records why this is safe here, and it rests on four things:
+
+- The workflow file and this Action come from the repository. Nothing in a fork changes them.
+- The run checks out the default branch. The Action fetches the pull request's commit by its
+  ID and never checks it out, so no file of the fork is written to the runner's working copy.
+- The fork's code is run only in the Sandbox, which is given no secret (`docs/running-code.md`).
+- A maintainer approves each run before it starts.
+
+The last of these is yours to set up. Under Settings, Environments, make an environment named
+`pr-verification-forks`. Add yourself and the other maintainers as its required reviewers, and
+add a key as its secret `PR_VERIFICATION_FORK_API_KEY`. Give forks a key of their own, with a
+low spending limit. GitHub hands an environment's secret to a job only after a reviewer
+approves that run.
+
+Keep that secret in the environment and nowhere else, and never give the `verify-fork` job
+the repository's own secret. GitHub makes an environment that a workflow names and that does
+not exist, with no reviewers, and lets the job start at once. With the key held only by the
+environment you set up, such a run finds no key and verifies nothing. With the key also held
+by the repository, it would verify a fork that no one had looked at.
+
+Look at the pull request before approving its run. An approval covers the commit the run was
+started for and no later one: a push to the fork starts a new run that waits again. When a
+pull request has several runs waiting, approve the newest and reject the others, which are
+for commits the fork has since replaced. The report gives the commit a run verified as
+`after`.
+
+Do not add a step to the `verify-fork` job that checks out the pull request, such as
+`actions/checkout` with `ref` set to the pull request's head, or that runs anything a pull
+request can change. Either would run the fork's code beside the key.
+
+Every pull request starts two runs, one for each trigger, and the jobs' `if` leaves one of
+them with nothing to do. For a fork that is the run for `pull_request`, and for a pull
+request from the repository itself it is the run for `pull_request_target`. The Action keeps
+the two kinds apart as well: in a workflow without the `if`, a run started for the other kind
+prints a notice on its page and does nothing else.
 
 ### Traces
 
@@ -106,6 +165,13 @@ that cannot be sent is one line in the job's log and changes nothing else.
   state learns the Repo Profile and installs the dependencies from nothing.
 - `uses: yuchia329/pr-review-agents@main` follows this repository's `main` branch. Name a
   commit there instead to keep to one version.
+- Required reviewers are offered on public repositories, and on private ones only with GitHub
+  Enterprise. An environment without them lets a fork's run start at once, with no one
+  having looked at the pull request.
+- The container is all that stands between a fork's code and the key
+  (`docs/running-code.md`, "Known limits"). Approval limits who gets to try it.
+- GitHub takes the workflow file for a fork's run from the default branch, whichever branch
+  the pull request targets.
 
 ## What the automated tests cannot see
 
@@ -119,16 +185,23 @@ repository can see it:
 - which branches' pushes start a run;
 - the Gate is shown as a check run of its own, and the job that ran the wrapper ends the same
   way whether the Gate passes or blocks;
-- GitHub shows the notice of a skipped fork on the run's page, and acts on nothing printed
-  between the two lines that stop commands;
+- a fork's run waits for a maintainer's approval, is given the key only then, and starts from
+  the workflow file and the checkout of the default branch;
+- GitHub hands over a fork's commit asked for by its ID, and takes the token the wrapper
+  sends with the request;
+- GitHub acts on nothing printed between the two lines that stop commands, and, in a
+  workflow without the jobs' `if`, shows the notice of a skipped pull request on the run's
+  page;
 - a real collector takes the trace.
 
 ## Manual check of the workflow
 
 Run this by hand after changing `action.yml`, the workflow file above, `GitHubAPI`, or what
 `main` prints. It needs a scratch repository on GitHub with the workflow installed and a model
-configured, and a second account that can fork it. Make the repository private: a public one
-lets any token read its issues, and so cannot show that the permissions above are enough.
+configured, and a second account that can fork it. Make the repository private for steps 1
+to 5 and step 8: a public one lets any token read its issues, and so cannot show that the
+permissions above are enough. Make it public for steps 6 and 7, with the environment for forks
+set up as above: required reviewers need a public repository.
 
 1. Push a commit to the target branch. Expect a run, the job to end green, and one new entry
    under Actions, Caches, saved by that run. Push a commit to another branch that has no pull
@@ -147,13 +220,36 @@ lets any token read its issues, and so cannot show that the permissions above ar
    input`. Expect the report in the job's log to list that line as a Claim, and the run's page
    to show no error annotation for it. If the report does not list it, the step has shown
    nothing: word the line again until it is listed.
-6. From the second account, open a pull request from a fork. Expect the run's page to show the
-   notice that pull requests from forks are not verified yet, and no comment and no
-   `PR Verification Gate` on the pull request.
-7. Set `OTEL_EXPORTER_OTLP_ENDPOINT` in the workflow to a collector, and run step 2 again.
+6. From the second account, open a pull request from a fork whose description makes one Claim
+   that is true. Expect two runs. In the one for `pull_request`, both jobs are skipped, once
+   GitHub's own approval for a first contribution, if it asks for one, is given. The one for
+   `pull_request_target` waits for review, and until it is approved the pull request
+   has no comment and no `PR Verification Gate`. Approve it. Expect the job to end green, the
+   log of its checkout to name the default branch, the report in its log to give the pull
+   request's commit as `after`, and the pull request to show one comment and a
+   `PR Verification Gate` that succeeds.
+7. This step shows that no secret reaches the fork's code. In the fork, change the code the
+   Claim is about so that it raises an error whose message is `sorted(os.environ)`, and
+   change `.github/workflows/pr-verification.yml` so that the `verify-fork` job has a step
+   that runs `env`. Push both to the pull request. Expect a new run that waits for review
+   again. Approve it. Expect the job's log to show no step that runs `env`: the workflow file
+   is the default branch's. Expect the comment to show a Reproduction whose output on the code
+   after lists the names the fork's code found in its environment, with no
+   `PR_VERIFICATION_API_KEY`, no `GITHUB_TOKEN`, and no name that starts with `ACTIONS_`
+   among them. If no Reproduction shows the list, the step has shown nothing: word the Claim
+   again until one does. Revoke the key afterwards if the list holds anything unexpected.
+   Last, rename the environment in the workflow file on the default branch to one that does
+   not exist, and push a commit to the fork. Expect the run to start with no approval, to
+   end red with `no model is configured`, and a `PR Verification Gate` that is neutral.
+8. Set `OTEL_EXPORTER_OTLP_ENDPOINT` in the workflow to a collector, and run step 2 again.
    Expect one trace in the collector, with one span named `pr-verification` and the others
    under it. Unset it and run again. Expect no trace, and the same check run and comment.
 
 Not run yet. `action.yml` and the workflow file above were written by the implementation
-ticket, #44, and have been read but never run on GitHub, so every step above is still to be
-seen.
+ticket, #44, and the handling of forks by #50. They have been read but never run on GitHub, so
+every step above is still to be seen.
+
+What the automated tests do show of a fork, with a stand-in for GitHub and a real Sandbox
+(`tests/test_github_action.py`): the wrapper fetches the commit the event names and checks
+nothing out, and code in that commit, run as part of verifying it, finds neither the key nor
+the token in its environment. `tests/test_sandbox.py` shows the same boundary directly.

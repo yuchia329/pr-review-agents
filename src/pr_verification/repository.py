@@ -3,6 +3,7 @@
 import os
 import subprocess
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 
 # Who a commit made here is by, whatever the machine it is made on is set up to say.
@@ -21,15 +22,23 @@ def git_environment(repository: Path) -> dict[str, str]:
     return environment
 
 
-def git(repository: Path, *arguments: str, stdin: bytes | None = None) -> bytes:
+def git(
+    repository: Path,
+    *arguments: str,
+    stdin: bytes | None = None,
+    environment: Mapping[str, str] | None = None,
+) -> bytes:
     """What one git command printed when run in `repository`, given `stdin` to read if any.
+
+    `environment` is added to the environment git is run in. It is where to put what must not
+    be among the arguments, which the error git's refusal raises repeats.
 
     Raises `subprocess.CalledProcessError` when git refuses, and `OSError` when it cannot be run.
     """
     done = subprocess.run(
         ["git", *arguments],
         cwd=repository,
-        env=git_environment(repository),
+        env={**git_environment(repository), **(environment or {})},
         input=stdin,
         check=True,
         capture_output=True,
@@ -41,6 +50,21 @@ def resolve_commit(repository: Path, commit: str) -> str:
     """The full ID of the commit that `commit` names in `repository`. Raises as `git` does."""
     name = f"{commit}^{{commit}}"
     return git(repository, "rev-parse", "--verify", "--end-of-options", name).decode().strip()
+
+
+def fetch_commit(
+    repository: Path, source: str, commit: str, *, environment: Mapping[str, str] | None = None
+) -> None:
+    """Fetch the commit with the full ID `commit`, and its ancestors, into `repository` from
+    `source`, which is a remote of the repository, a URL, or a path.
+
+    Nothing is checked out and no ref is made or moved. git's own record of a fetch names
+    `source`, so none is written. `environment` is as `git` takes it. Raises as `git` does.
+    """
+    # Protocol 2 hands over a commit asked for by its ID whether or not a ref points at it.
+    asking = ("-c", "protocol.version=2", "fetch", "--quiet", "--no-tags", "--no-write-fetch-head")
+    naming = ("--no-recurse-submodules", "--end-of-options", source, commit)
+    git(repository, *asking, *naming, environment=environment)
 
 
 def new_repository(directory: Path) -> Path:
@@ -66,10 +90,7 @@ def repository_at(source: Path, commit: str, directory: Path) -> Path:
     """
     commit = resolve_commit(source, commit)
     repository = new_repository(directory)
-    # Protocol 2 hands over a commit asked for by its ID whether or not a ref points at it.
-    # git's own record of a fetch names `source`, so none is written.
-    asking = ("-c", "protocol.version=2", "fetch", "--quiet", "--no-tags", "--no-write-fetch-head")
-    git(repository, *asking, str(source.resolve()), commit)
+    fetch_commit(repository, str(source.resolve()), commit)
     git(repository, "read-tree", commit)
     return repository
 

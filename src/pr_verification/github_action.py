@@ -21,10 +21,21 @@ What is kept between runs
     it learns itself stays in its own copy of the directory and is never saved to the cache,
     so no pull request can write where a later run reads (ADR 0004). Restoring and saving are
     workflow configuration, and so is which branches' pushes start a run.
+
+Pull requests from forks
+    A pull request from a fork is verified by a run for `pull_request_target`, which GitHub
+    starts from the workflow file on the default branch and gives the secrets (ADR 0005). The
+    checkout such a run starts with holds nothing of the pull request. The wrapper fetches the
+    pull request's commit into it and never checks it out: the commit is read through git, as
+    the Sandbox reads it, and nothing of it is run but in the Sandbox, which is given no
+    secret (ADR 0001). That a maintainer approves each such run before it starts is workflow
+    configuration.
 """
 
+import base64
 import json
 import os
+import re
 import secrets
 import subprocess
 import traceback
@@ -50,7 +61,7 @@ from pr_verification.model import Model, ModelFailed
 from pr_verification.openai_compatible import model_from_environment
 from pr_verification.orchestration import FixedPipeline, Orchestration, fixed_pipeline
 from pr_verification.report import Gate, GateDecision
-from pr_verification.repository import git
+from pr_verification.repository import fetch_commit, git
 from pr_verification.tracing import traced
 
 EXIT_DONE = 0
@@ -72,10 +83,16 @@ REVIEW_VARIABLE = "PR_VERIFICATION_REVIEW"
 this is set to `true`, and is not for any other value or none."""
 
 FORK_SKIPPED = (
-    "PR Verification skipped this pull request: it comes from a fork, and pull requests from "
-    "forks are not verified yet."
+    "PR Verification did nothing in this run: the pull request comes from a fork, and a fork "
+    "is verified by a run for `pull_request_target`."
 )
-"""What a run for a pull request from a fork says."""
+"""What a run for `pull_request` says of a pull request from a fork."""
+
+SAME_REPOSITORY_SKIPPED = (
+    "PR Verification did nothing in this run: the pull request comes from the repository "
+    "itself, and is verified by a run for `pull_request`."
+)
+"""What a run for `pull_request_target` says of a pull request that is not from a fork."""
 
 
 class Conclusion(StrEnum):
@@ -121,6 +138,9 @@ API_URL = "https://api.github.com"
 
 GRAPHQL_URL = "https://api.github.com/graphql"
 """Where GitHub's GraphQL API is, unless a run is told otherwise."""
+
+SERVER_URL = "https://github.com"
+"""Where GitHub serves repositories to git, unless a run is told otherwise."""
 
 
 def gate_check_run(gate: Gate) -> CheckRun:
@@ -369,20 +389,36 @@ def main(
     resolved, is a failure, found before anything else is done: a pull request's files are
     checked out there, so a pull request could write to it.
 
-    A pull request: `GITHUB_EVENT_NAME` is `pull_request`
+    A pull request: `GITHUB_EVENT_NAME` is `pull_request` or `pull_request_target`
         The event is the JSON object in the file `GITHUB_EVENT_PATH` names, and the pull
-        request is its `pull_request`.
+        request is its `pull_request`. Its `head.sha` is a commit's full ID, of 40 or of 64
+        hexadecimal digits in lower case: an event that names the commit any other way cannot
+        be read.
 
         A pull request comes from a fork when its `head.repo.full_name` is not its
-        `base.repo.full_name`, which includes its having no `head.repo`. It is skipped until
-        the handling of forks is built: the one line `::notice::` followed by `FORK_SKIPPED`
-        is printed on standard output, which GitHub shows on the run's page, and the answer
-        is `EXIT_DONE`. Nothing else is done. No model is configured or asked, nothing of
-        the pull request is read or run, and `github` is not called, so the skip needs
-        neither a model nor a token. No check run is set: the token GitHub gives a run for a
-        fork cannot set one.
+        `base.repo.full_name`, which includes its having no `head.repo`. A run for
+        `pull_request` verifies a pull request that does not come from a fork, and a run for
+        `pull_request_target` verifies one that does, so each is verified once however the
+        workflow starts its runs.
 
-        Any other pull request is verified, in this order:
+        The other kind is skipped: the one line `::notice::` followed by `FORK_SKIPPED`, in
+        a run for `pull_request`, or by `SAME_REPOSITORY_SKIPPED`, in a run for
+        `pull_request_target`, is printed on standard output, which GitHub shows on the
+        run's page, and the answer is `EXIT_DONE`. Nothing else is done. No model is
+        configured or asked, nothing of the pull request is read, fetched, or run, and
+        `github` is not called, so the skip needs neither a model nor a token. No check run
+        is set: the run that verifies the pull request sets it, and the token GitHub gives
+        a run for `pull_request` from a fork could not.
+
+        A run for `pull_request_target` starts from a checkout of the default branch, so it
+        first fetches the `head.sha` from the checkout's remote `origin`, asking for it by
+        its ID: the commit verified is the one the event names, whatever the fork has pushed
+        since. Nothing is checked out. When `GITHUB_TOKEN` is set, the request carries it as
+        the header `Authorization: basic`, as the password of the user `x-access-token`, and
+        only when `origin` is under `GITHUB_SERVER_URL`, or under `SERVER_URL` when that is
+        unset or empty. A commit that cannot be fetched is a failure.
+
+        The pull request is then verified, in this order:
 
         1. Gathers the pull request. `after` is its `head.sha`. `before` is the merge base
            of its `base.sha` and its `head.sha` in the repository: the commit of the target
@@ -423,7 +459,7 @@ def main(
         `pr-verification: `, or the traceback of an exception that nothing here expects, and
         the answer is `EXIT_FAILED`.
 
-        When a pull request that is not from a fork ends with no report, no comment is
+        When a pull request that is not skipped ends with no report, no comment is
         posted, and `github.set_check_run(after, NO_REPORT_CHECK_RUN)` is called once the
         `head.sha` has been read, so that a failure of the system is never shown as a block
         and the check run is not left waiting. A `GitHubFailed` from that call is one more
@@ -515,9 +551,18 @@ def _run(
     repository = Path(_variable(environment, "GITHUB_WORKSPACE"))
     state = _state_directory(environment, repository)
     event = _variable(environment, "GITHUB_EVENT_NAME")
-    if event == "pull_request":
+    if event in ("pull_request", "pull_request_target"):
         return _verify(
-            environment, log, repository, state, github, model, decider, orchestration, budget
+            environment,
+            log,
+            repository,
+            state,
+            github,
+            model,
+            decider,
+            orchestration,
+            budget,
+            verifies_forks=event == "pull_request_target",
         )
     if event != "push":
         raise _CannotRun(f"the event {event!r} is neither a pull request nor a push")
@@ -539,17 +584,25 @@ def _verify(
     decider: Decider | None,
     orchestration: Orchestration | None,
     budget: Budget | None,
+    *,
+    verifies_forks: bool,
 ) -> int:
     """A run for a pull request, as `main` describes it. `state` is the directory that what is
-    kept between runs is kept in, if there is one."""
+    kept between runs is kept in, if there is one, and `verifies_forks` is whether the run is
+    one for `pull_request_target`, which verifies pull requests from forks and no others."""
     pull_request = _member(_event(environment), dict, "pull_request")
-    if _from_fork(pull_request):
-        print(f"::notice::{FORK_SKIPPED}", flush=True)
-        return EXIT_DONE
     after = _member(pull_request, str, "head", "sha")
+    if not _COMMIT_ID.fullmatch(after):
+        raise _CannotRun("the event's pull_request.head.sha is not a commit's full ID")
+    if _from_fork(pull_request) != verifies_forks:
+        skipped = SAME_REPOSITORY_SKIPPED if verifies_forks else FORK_SKIPPED
+        print(f"::notice::{skipped}", flush=True)
+        return EXIT_DONE
     if github is None:
         github = _github(environment)
     try:
+        if verifies_forks:
+            _fetch(environment, repository, after)
         if model is None:
             model = model_from_environment(environment)
         if model is None:
@@ -653,6 +706,31 @@ def _github(environment: Mapping[str, str]) -> GitHubAPI:
         api_url=environment.get("GITHUB_API_URL") or API_URL,
         graphql_url=environment.get("GITHUB_GRAPHQL_URL") or GRAPHQL_URL,
     )
+
+
+_COMMIT_ID = re.compile("[0-9a-f]{40}|[0-9a-f]{64}")
+"""A commit's full ID, by either of the two ways git has of hashing."""
+
+
+def _fetch(environment: Mapping[str, str], repository: Path, commit: str) -> None:
+    """Fetch `commit` into `repository` from its `origin`, as `main` says a fork's is."""
+    authorization = {}
+    if environment.get("GITHUB_TOKEN"):
+        server = (environment.get("GITHUB_SERVER_URL") or SERVER_URL).rstrip("/")
+        credentials = f"x-access-token:{environment['GITHUB_TOKEN']}".encode()
+        # In git's environment and not among its arguments, which a refusal would print.
+        authorization = {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": f"http.{server}/.extraheader",
+            "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {base64.b64encode(credentials).decode()}",
+        }
+    try:
+        fetch_commit(repository, "origin", commit, environment=authorization)
+    except subprocess.CalledProcessError as error:
+        refusal = error.stderr.decode(errors="replace")
+        raise InvalidPullRequest(
+            f"cannot fetch the pull request's commit {commit} from origin: {refusal}"
+        ) from error
 
 
 def _gathered(
