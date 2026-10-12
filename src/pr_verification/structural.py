@@ -118,10 +118,12 @@ def verify_structural_claim(
     - `text` and `change` are the entry's, and `path` is the entry's, or None when it was
       left out;
     - `before_lines` is every line of `before` that holds the text, and `after_lines` every
-      line of `after` that does. A line holds a text, and is written and ordered, as the
-      `search` tool of `reading_tools` has it: `<path>:<line number>:<line>`, by path and
-      then by line number. With a `path`, only the lines of the file at that path are
-      searched, and a commit with no file there has no line that holds the text;
+      line of `after` that does, each as `lines_holding` of `pr_verification.reading` gives
+      them for the commit, the text, and the `path`. A line holds a text, and is written
+      and ordered, as the `search` tool of `reading_tools` has it:
+      `<path>:<line number>:<line>`, by path and then by line number. With a `path`, only
+      the lines of the file at that path are searched, and a commit with no file there has
+      no line that holds the text;
     - `observation` is `lines holding the text: <number> before, <number> after`, written by
       code.
 

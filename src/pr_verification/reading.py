@@ -1,5 +1,5 @@
-"""Reading the code of a commit: the read-only tools, and the role that locates what a Claim
-concerns.
+"""Reading the code of a commit: the read-only tools, the search that code makes of a commit,
+and the role that locates what a Claim concerns.
 
 Nothing here runs code or changes anything. The files are read from the repository as the
 commit holds them, outside the Sandbox, whatever the state of the working tree.
@@ -92,11 +92,25 @@ def reading_tools(repository: Path, commit: str) -> tuple[Tool, ...]:
 def lines_holding(
     repository: Path, commit: str, text: str, path: str | None = None
 ) -> tuple[str, ...]:
-    """Every line of the files of `commit` that holds `text`, as the `search` tool of
-    `reading_tools` finds, writes, and orders them, and none when no line holds it.
+    """Every line of the files of `commit` in `repository` that holds `text`, found by code.
 
-    With `path`, only the lines of the file at that path, named as `reading_tools` names a
-    file. A commit with no file there has no line that holds the text.
+    It is the search that code makes of a commit, where the `search` tool of `reading_tools`
+    is the one a role asks for, and the two agree: a line holds a text here when, and only
+    when, that tool finds it. No model is asked and nothing is run.
+
+    A line holds `text` when `text` is in it exactly as written: `text` is not a pattern,
+    letter case matters, and a text that holds a line feed is held by no line. Files, their
+    text, and their lines are as `reading_tools` has them. Each line found is given as
+    `<path>:<line number>:<line>`, by path and then by line number, and the answer is empty
+    when no line holds the text. What the lines hold is Untrusted Content.
+
+    With `path`, only the lines of the file at that path are searched, a file being named as
+    `reading_tools` names one. A commit with no file there has no line that holds the text,
+    so the answer is empty: for a path the commit does not have, for a directory, and for a
+    path that leads anywhere else, such as `../secrets` or an absolute path.
+
+    `text` is expected not to be empty. The `search` tool refuses an empty text, and here
+    every line holds one, so a caller that takes its text from a model checks it first.
     """
     files = _Files(repository, commit)
     if path is None:
