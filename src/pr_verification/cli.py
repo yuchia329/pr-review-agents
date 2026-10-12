@@ -86,8 +86,6 @@ def main(
     """
     arguments = _parser().parse_args(argv)
     try:
-        if orchestration is None and arguments.state_dir is not None:
-            orchestration = fixed_pipeline(arguments.state_dir)
         if model is None:
             model = model_from_environment(os.environ)
         if model is None:
@@ -102,6 +100,8 @@ def main(
             decider = configured_decider(decision_configuration(os.environ), model)
         if budget is None:
             budget = budget_from_environment(os.environ)
+        if orchestration is None and arguments.state_dir is not None:
+            orchestration = fixed_pipeline(arguments.state_dir, progress_guard=decider)
         report = run(
             PullRequest(
                 repository=arguments.repo,

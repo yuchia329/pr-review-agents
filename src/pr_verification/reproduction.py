@@ -218,8 +218,6 @@ def write_reproduction(
     Raises `ValueError` before any request when `attempt_cap` or `step_cap` is less than 1.
     Any other exception is a fault in the system and is raised.
     """
-    if progress_guard is not None:
-        raise NotImplementedError
     if attempt_cap < 1 or step_cap < 1:
         raise ValueError(f"a cap is under 1: {attempt_cap} attempts of {step_cap} steps")
     role = Role(
@@ -239,7 +237,7 @@ def write_reproduction(
     try:
         while len(attempts) < attempt_cap:
             task = {"claim": claim, "attempts": [_shown(attempt) for attempt in attempts]}
-            run = run_role(role, task, model)
+            run = run_role(role, task, model, progress_guard=progress_guard)
             text = _reproduction_given(run)
             if text is None:
                 attempts.append(Attempt(run, None, None, None, AttemptResult.NO_REPRODUCTION))

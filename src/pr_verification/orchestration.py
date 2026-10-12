@@ -235,8 +235,6 @@ class FixedPipeline:
         system and is raised, as `write_judged_reproduction` raises it: it is not turned into
         an Inconclusive Verdict.
         """
-        if self.progress_guard is not None:
-            raise NotImplementedError
         if not claims:
             return ()
         with ExitStack() as opened:
@@ -336,7 +334,7 @@ class FixedPipeline:
         Every Sandbox opened is closed before the answer is given or an exception goes on.
         Raises what `gather` raises. `BudgetSpent` is never raised from here.
         """
-        if self.progress_guard is not None or kinds is not None:
+        if kinds is not None:
             raise NotImplementedError
         if not claims:
             return ()
@@ -443,6 +441,7 @@ class FixedPipeline:
         `model` and every run made in `sandbox`."""
         written = write_reproduction(
             claim,
+            self.progress_guard,
             model=model,
             sandbox=sandbox,
             ecosystem=ecosystem,
@@ -510,8 +509,8 @@ def fixed_pipeline(state: Path, *, progress_guard: Decider | None = None) -> Fix
     `state / "dependencies"`. Its `progress_guard` is the one given. Everything else is as
     `FixedPipeline` has it unless given.
     """
-    if progress_guard is not None:
-        raise NotImplementedError
     return FixedPipeline(
-        store=DirectoryStore(state / "profiles"), cache=DependencyCache(state / "dependencies")
+        store=DirectoryStore(state / "profiles"),
+        cache=DependencyCache(state / "dependencies"),
+        progress_guard=progress_guard,
     )

@@ -217,7 +217,9 @@ def run(
         pull_request.linked_issue,
     )
     kinds = _classify(decider, claims, ledger, clock)
-    gathered = _gather(orchestration, ledger, claims, pull_request.repository, before, after, model)
+    gathered = _gather(
+        orchestration, ledger, claims, pull_request.repository, before, after, model, decider
+    )
     verified = tuple(
         _verified(text, kind, answer)
         for text, kind, answer in zip(claims, kinds, gathered, strict=True)
@@ -303,17 +305,18 @@ def _gather(
     before: str,
     after: str,
     model: Model,
+    decider: Decider | None,
 ) -> tuple[Gathered, ...]:
     """What the orchestration gathered for each Claim, with the fixed pipeline when none is
-    given. One that keeps to a Budget is asked within `ledger`. Raises `ValueError` when it
-    does not answer for each Claim."""
+    given, whose progress guard `decider` then answers. One that keeps to a Budget is asked
+    within `ledger`. Raises `ValueError` when it does not answer for each Claim."""
     if not claims:
         return ()
     with ExitStack() as kept:
         if orchestration is None:
             # Nothing is kept between runs: what the pipeline remembers goes with the directory.
             state = kept.enter_context(tempfile.TemporaryDirectory())
-            orchestration = fixed_pipeline(Path(state))
+            orchestration = fixed_pipeline(Path(state), progress_guard=decider)
         if isinstance(orchestration, BudgetedOrchestration):
             gathered = orchestration.gather_within(
                 ledger, claims, repository=repository, before=before, after=after, model=model
