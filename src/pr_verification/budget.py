@@ -136,17 +136,34 @@ class Ledger:
         the limits of a Claim's share against what was recorded against that Claim.
 
         The Budget is spent once one of its limits is reached, and a share likewise. The limit
-        that stopped the work is the first one reached, and it stays so. When one spend
-        reaches more than one limit at once, the first of them in the order time, money, steps
-        is taken.
+        that stopped the work is the first one reached, and it stays so, unless shares are
+        moved, as `move_share` says. When one spend reaches more than one limit at once,
+        the first of them in the order time, money, steps is taken.
 
         A spend is recorded whole, even when it passes a limit: what was spent was spent. So
-        what is recorded can pass a limit by no more than the one piece of work that reached it.
+        what is recorded can pass a limit by no more than the one piece of work that reached
+        it, and by the other pieces of work under way at that moment when several are done at
+        the same time.
 
     What stops
         Once the Budget is spent, nothing more is recorded and no further work is done through
-        the ledger, for any Claim or for none. Once a Claim's share is spent, the same holds
-        for that Claim alone: work for the other Claims, and for no one Claim, goes on.
+        the ledger, for any Claim or for none, but for work under way, as said below. Once a
+        Claim's share is spent, the same holds for that Claim alone: work for the other Claims,
+        and for no one Claim, goes on.
+
+    At the same time
+        One ledger may be used from several threads at once, as it is when several roles work
+        at the same time. Each spend is recorded whole and each move is made whole, one after
+        another, so the sums hold whatever the threads do. Each piece of work is timed on its
+        own, so two pieces of work done at the same time both count in full: the seconds
+        recorded are seconds of work, and can come to more than the time that passed.
+
+        Work is refused when it is asked for, and never when it ends. A piece of work that
+        `model` or `sandbox` had started before a limit was reached is let end, though other
+        work reached the limit meanwhile: it is recorded whole, and what it gave is returned,
+        or what it raised is raised. That is the one case in which something is recorded
+        after a limit is reached, and it cannot arise while one piece of work is done at a
+        time. `record` itself refuses as it says.
     """
 
     def __init__(self, budget: Budget | None = None, *, clock: Clock = time.monotonic) -> None:
@@ -241,6 +258,55 @@ class Ledger:
             return None
         return _reached(self._claims[claim], self._share)
 
+    def left(self, *, claim: int | None = None) -> BudgetSpend:
+        """What is left to spend: of the Budget when `claim` is None, and of the share of
+        Claim `claim` otherwise.
+
+        Each amount is the limit in that unit less what has been recorded against it, and 0
+        when what was recorded is past the limit. So an amount is never less than 0, and one
+        that is 0 means that limit has been reached. For a Claim no share was set aside for,
+        nothing is left: 0.0 seconds, 0.0 dollars, and 0 steps.
+
+        What is left of a Claim's share says nothing of the Budget, and can be more than is
+        left of the Budget.
+        """
+        raise NotImplementedError
+
+    def move_share(self, amount: BudgetSpend, *, source: int, destination: int) -> None:
+        """Move `amount` from the share of Claim `source` to the share of Claim `destination`.
+
+        `amount` holds how much to move in each unit, and is no spend: nothing is recorded.
+
+        Each limit of the share of `source` is lowered by the amount in its unit, and the same
+        limit of the share of `destination` is raised by it. Nothing recorded changes, and nor
+        does any limit of the Budget or of any other share. So for any moves made in any
+        order, the limits of all the shares together come to what they came to when the
+        shares were set aside, exactly in steps and to within the rounding of a floating-point
+        sum in seconds and dollars: moving shares never makes more to spend, and the Budget's
+        own limits hold whatever is moved.
+
+        Only what is left can be moved, so no limit of a share is ever lowered below what has
+        been recorded against it. A share that everything left in one unit is moved out of
+        has reached that limit and is spent. A share that was spent and is given more is
+        spent no longer, once what has been recorded against it is under every one of its
+        limits again: `stopped_by(claim=destination)` is then None, and work for that Claim
+        can go on. After a move, `stopped_by` for either Claim is the first, in the order
+        time, money, steps, of the limits its share has reached as the share now is.
+
+        Raises `ValueError`, having moved nothing, when:
+
+        - `source` and `destination` are the same Claim, or either names no Claim a share
+          was set aside for;
+        - an amount in `amount` is not a finite number that is 0 or more, or every one of
+          them is 0;
+        - an amount is more than `left(claim=source)` has in its unit, so that more would be
+          moved than is there.
+
+        This is looked at first. Otherwise raises `BudgetSpent`, having moved nothing, when
+        the Budget is spent.
+        """
+        raise NotImplementedError
+
     def model(self, model: Model, *, claim: int | None = None) -> Model:
         """A model that asks `model` through the ledger: each request is counted, and none is
         made once nothing is left to spend.
@@ -251,7 +317,8 @@ class Ledger:
            when the share of Claim `claim` is.
         2. Otherwise asks `model` once, with the request exactly as given: through
            `complete_priced` when `model` is a `PricedModel`, and through `complete` when not.
-        3. Records one spend against `claim`, as `record` does. Its `seconds` are the time
+        3. Records one spend against `claim`, as `record` does, though it is recorded
+           whatever limit other work reached meanwhile. Its `seconds` are the time
            between a reading of the clock just before `model` is asked and one just after. Its
            `dollars` are those of the `PricedResponse`, and 0.0 for a model that is no
            `PricedModel`: it has no price, so it costs time and no money, as a local model
@@ -286,7 +353,8 @@ class Ledger:
            So one run cannot take a Claim far past its share. A `run` for no Claim is given
            its `limits` as they are: an install cut short would leave nothing for a later run
            to use.
-        3. Records one spend against `claim`, as `record` does: the seconds between a reading
+        3. Records one spend against `claim`, as `record` does, though it is recorded
+           whatever limit other work reached meanwhile: the seconds between a reading
            of the clock just before `sandbox` is asked and one just after, with no dollars and
            no steps. Running code costs time only.
         4. Returns what `sandbox` returned.

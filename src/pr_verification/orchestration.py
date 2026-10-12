@@ -4,15 +4,17 @@ An orchestration chooses which roles run and in what order. It gathers Evidence 
 nothing: each Verdict is computed from what it gathered by `compute_verdict`, and the Gate from
 the Verdicts, by the core's entry point (ADR 0003). The fixed pipeline is the first
 implementation and is kept as a baseline. Another can take its place without any change to the
-roles, which know nothing of what runs them.
+roles, which know nothing of what runs them: the LLM supervisor, in
+`pr_verification.supervisor`, is the second.
 
 An orchestration that is told the kind of each Claim routes by it: a Behavioural Claim goes on
 to a Reproduction, and a Structural Claim is verified by reading and is not sent to a Sandbox.
 """
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, ExitStack
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -559,3 +561,38 @@ def fixed_pipeline(state: Path, *, progress_guard: Decider | None = None) -> Fix
         cache=DependencyCache(state / "dependencies"),
         progress_guard=progress_guard,
     )
+
+
+class OrchestrationChoice(StrEnum):
+    """Which implementation of the orchestration boundary a run uses."""
+
+    PIPELINE = "pipeline"
+    """The fixed pipeline."""
+
+    SUPERVISOR = "supervisor"
+    """The LLM supervisor, of `pr_verification.supervisor`."""
+
+
+ORCHESTRATION_VARIABLE = "PR_VERIFICATION_ORCHESTRATION"
+
+
+class InvalidOrchestration(Exception):
+    """The orchestration is configured as something it cannot be. Its message is safe to
+    print: it names the variable at fault."""
+
+
+def orchestration_choice(environment: Mapping[str, str]) -> OrchestrationChoice:
+    """Read which orchestration a run uses from `PR_VERIFICATION_ORCHESTRATION`.
+
+    `pipeline` is the fixed pipeline and `supervisor` is the LLM supervisor. Unset, or set to
+    the empty string, it is the fixed pipeline: the supervisor is chosen by configuration,
+    and the fixed pipeline stays the default until the supervisor has been measured against
+    it.
+
+    Raises `InvalidOrchestration`, with a message that names the variable, when it is set to
+    anything else. The two values are matched exactly as written.
+
+    The command line reads it. The GitHub Action does not yet: it uses the fixed pipeline
+    whatever the variable says.
+    """
+    raise NotImplementedError

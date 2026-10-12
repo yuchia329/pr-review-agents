@@ -22,7 +22,11 @@ from pr_verification.decision import (
 )
 from pr_verification.model import Model, ModelFailed
 from pr_verification.openai_compatible import model_from_environment
-from pr_verification.orchestration import Orchestration, fixed_pipeline
+from pr_verification.orchestration import (
+    ORCHESTRATION_VARIABLE,
+    Orchestration,
+    fixed_pipeline,
+)
 from pr_verification.report import Gate, GateDecision
 from pr_verification.tracing import traced
 
@@ -64,14 +68,28 @@ def main(
     An `InvalidDecisionConfiguration` is handled as a model that is not configured is: one
     line on standard error starting `pr-verification: `, no report, and exit code 2.
 
-    Without `orchestration`:
+    Without `orchestration`, the environment says which is used:
+    `orchestration_choice(os.environ)`, which is the fixed pipeline unless
+    `PR_VERIFICATION_ORCHESTRATION` says otherwise.
+
+    With the fixed pipeline:
 
     - with `--state-dir DIRECTORY`, the orchestration is
       `fixed_pipeline(DIRECTORY, progress_guard=decider)`, with the decider that `run` is
       given, so the Repo Profile and installed dependencies are kept there between runs;
     - without it, `run` is given none, and nothing is kept between runs.
 
-    Either way the decider answers the progress guard of the roles the fixed pipeline runs.
+    With the supervisor, the orchestration is `supervisor(DIRECTORY, progress_guard=decider)`
+    (`pr_verification.supervisor`), with that decider. `DIRECTORY` is the one `--state-dir`
+    names. Without `--state-dir` it is a temporary directory, removed before `main` returns,
+    so nothing is kept between runs. The model that does the roles' work supervises as well.
+
+    Either way the decider answers the progress guard of the roles that are run, and the
+    report is printed and the exit code given as for the fixed pipeline: the Verdicts and the
+    Gate are computed by the same code whichever orchestration gathered the Evidence.
+
+    An `InvalidOrchestration` is handled as a model that is not configured is: one line on
+    standard error starting `pr-verification: `, no report, and exit code 2.
 
     With `--review` the pull request is also reviewed: `run` is given `review=True`, so the
     report's `findings` are the Review's. Without it nothing is reviewed and `findings` is
@@ -98,6 +116,8 @@ def _main(
 ) -> int:
     """The run that `main` traces."""
     arguments = _parser().parse_args(argv)
+    if orchestration is None and os.environ.get(ORCHESTRATION_VARIABLE):
+        raise NotImplementedError
     try:
         if model is None:
             model = model_from_environment(os.environ)

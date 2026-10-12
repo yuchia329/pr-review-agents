@@ -31,6 +31,12 @@ What is recorded
     LLM for a decision is a child of that decision's span. A decision of a role's progress
     guard is a child of that role's span.
 
+    Which spans are open is kept for each thread. A thread started for a dispatch of the
+    supervisor (`pr_verification.supervisor`) begins with the spans that were open where it
+    was started, and what it opens is open on that thread alone. So what a dispatch records
+    is under the `RUN` span, and never under a span of another dispatch at work at the same
+    time.
+
     One recording is one trace. `traced` opens one recording around one run of the command
     line or of the Action, and such a run calls `run` at most once, so a run produces one
     trace. The Action's run for a push calls `run` not at all: its trace holds the spans of
