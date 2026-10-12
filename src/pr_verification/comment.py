@@ -8,9 +8,16 @@ quote.
 This is delivery, not core: of the package, only the GitHub wrapper imports this module.
 """
 
-from collections.abc import Mapping
+import string
+from collections.abc import Iterator, Mapping
 
-from pr_verification.report import EvidenceSource, Report
+from pr_verification.report import (
+    Claim,
+    EvidenceSource,
+    Report,
+    ReproductionEvidence,
+    Verdict,
+)
 
 MARKER = "<!-- pr-verification -->"
 """The first line of every comment. GitHub does not show it. The comment is found again by it,
@@ -108,7 +115,18 @@ def quote(text: str) -> str:
     the two that end a line there. `html.unescape` of the result is `text` with each
     character of the second kind replaced by U+FFFD.
     """
-    raise NotImplementedError
+    return text.translate(_QUOTED)
+
+
+_ASCII_CONTROLS = (*range(0x20), 0x7F)
+_SURROGATES = range(0xD800, 0xE000)
+_DIRECTION_CONTROLS = (0x061C, 0x200E, 0x200F, *range(0x202A, 0x202F), *range(0x2066, 0x206A))
+
+_QUOTED: Mapping[int, str] = {
+    **dict.fromkeys((*_ASCII_CONTROLS, *_SURROGATES, *_DIRECTION_CONTROLS), chr(0xFFFD)),
+    **{ord(mark): f"&#{ord(mark)};" for mark in string.punctuation + "\t\n\f\r"},
+}
+"""What `quote` writes for each character that it does not write as itself, by code point."""
 
 
 def render_comment(report: Report) -> str:
@@ -181,4 +199,99 @@ def render_comment(report: Report) -> str:
         it is the number of Claims, Evidence, and Findings that brings the short form about,
         and not what a Reproduction holds or prints.
     """
-    raise NotImplementedError
+    whole = _comment(report, [*_claims(report), *_findings(report)])
+    if len(whole) <= LONGEST_COMMENT:
+        return whole
+    return _comment(report, [_paragraph(TOO_LONG_LINE)])
+
+
+def _comment(report: Report, middle: list[str]) -> str:
+    """A comment for `report` whose lines between the count of Inconclusive Verdicts and the
+    spend are `middle`."""
+    gate, spend = report.gate, report.budget_spend
+    inconclusive = sum(claim.verdict is Verdict.INCONCLUSIVE for claim in report.claims)
+    lines = [
+        MARKER,
+        f"<h2>{HEADING}</h2>",
+        _paragraph(
+            f"<strong>{GATE_LINE.format(decision=gate.decision.value, note=gate.note)}</strong>"
+        ),
+        _paragraph(INCONCLUSIVE_LINE.format(count=inconclusive)),
+        *middle,
+        _paragraph(
+            SPEND_LINE.format(seconds=spend.seconds, dollars=spend.dollars, steps=spend.steps)
+        ),
+    ]
+    return "".join(line + "\n" for line in lines)
+
+
+def _claims(report: Report) -> Iterator[str]:
+    """The lines of part 3: each Claim with its Verdict, its reason, and its Evidence."""
+    blocks = 3 * sum(
+        isinstance(evidence, ReproductionEvidence)
+        for claim in report.claims
+        for evidence in claim.evidence
+    )
+    share = BLOCK_BUDGET // blocks if blocks else 0
+    if report.claims:
+        yield "<ul>"
+    for claim in report.claims:
+        yield "<li>"
+        yield from _claim(claim, share)
+        yield "</li>"
+    if report.claims:
+        yield "</ul>"
+
+
+def _claim(claim: Claim, share: int) -> Iterator[str]:
+    """The lines of one Claim. `share` is how many characters are quoted of each block."""
+    stated = CLAIM_LINE.format(verdict=claim.verdict.capitalize(), claim=_inline(claim.text))
+    yield _paragraph(f"<strong>{stated}</strong>")
+    yield _paragraph(REASON_LINE.format(reason=_inline(claim.reason)))
+    if not claim.evidence:
+        yield _paragraph(NO_EVIDENCE_LINE)
+    for evidence in claim.evidence:
+        source = SOURCE_WORDING[evidence.source]
+        observation = _inline(evidence.observation)
+        yield _paragraph(EVIDENCE_LINE.format(source=source, observation=observation))
+        if isinstance(evidence, ReproductionEvidence):
+            reproduction = evidence.reproduction
+            yield _paragraph(REPRODUCTION_LINE.format(path=_inline(evidence.path)))
+            yield _block(reproduction[:share], cut=len(reproduction) > share)
+            yield _paragraph(BEFORE_LINE)
+            yield _end_of(evidence.before.output, share)
+            yield _paragraph(AFTER_LINE)
+            yield _end_of(evidence.after.output, share)
+
+
+def _findings(report: Report) -> Iterator[str]:
+    """The lines of part 4: the Findings, marked as advisory."""
+    yield _paragraph(FINDINGS_LINE)
+    if not report.findings:
+        yield _paragraph(NO_FINDINGS_LINE)
+        return
+    yield "<ul>"
+    for finding in report.findings:
+        yield f"<li>{_inline(finding.concern)}</li>"
+    yield "</ul>"
+
+
+def _paragraph(line: str) -> str:
+    return f"<p>{line}</p>"
+
+
+def _inline(text: str) -> str:
+    """A quote within a line, of no more than the first `LONGEST_QUOTE` characters of `text`."""
+    quoted = f"<code>{quote(text[:LONGEST_QUOTE])}</code>"
+    return quoted + CUT_SHORT if len(text) > LONGEST_QUOTE else quoted
+
+
+def _end_of(output: str, share: int) -> str:
+    """A block that quotes the last `share` characters of `output`."""
+    return _block(output[max(len(output) - share, 0) :], cut=len(output) > share)
+
+
+def _block(text: str, *, cut: bool) -> str:
+    """A block that quotes `text`, which is all of a text or the part of it that is quoted."""
+    quoted = f"<pre>{quote(text)}</pre>"
+    return quoted + CUT_SHORT if cut else quoted
