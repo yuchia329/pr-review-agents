@@ -85,8 +85,6 @@ def main(
     returned is the same as with tracing off.
     """
     arguments = _parser().parse_args(argv)
-    if arguments.review:
-        raise NotImplementedError
     try:
         if orchestration is None and arguments.state_dir is not None:
             orchestration = fixed_pipeline(arguments.state_dir)
@@ -117,6 +115,7 @@ def main(
             decider,
             orchestration=orchestration,
             budget=budget,
+            review=arguments.review,
         )
         print(report.to_json(), flush=True)
     except (

@@ -221,7 +221,7 @@ def _tools(files: _Files) -> tuple[Tool, ...]:
     """The three read-only tools over these files."""
 
     def list_files(arguments: Mapping[str, object]) -> str:
-        given = _usable(arguments, optional=("directory",))
+        given = usable_arguments(arguments, optional=("directory",))
         if given is None:
             return BAD_ARGUMENTS
         paths = sorted(files.paths)
@@ -231,7 +231,7 @@ def _tools(files: _Files) -> tuple[Tool, ...]:
         return "\n".join(paths) if paths else NOTHING_FOUND
 
     def search(arguments: Mapping[str, object]) -> str:
-        given = _usable(arguments, needed=("text",))
+        given = usable_arguments(arguments, needed=("text",))
         if given is None:
             return BAD_ARGUMENTS
         found = [
@@ -243,7 +243,7 @@ def _tools(files: _Files) -> tuple[Tool, ...]:
         return "\n".join(found) if found else NOTHING_FOUND
 
     def read_file(arguments: Mapping[str, object]) -> str:
-        given = _usable(arguments, needed=("path",))
+        given = usable_arguments(arguments, needed=("path",))
         if given is None:
             return BAD_ARGUMENTS
         if given["path"] not in files.paths:
@@ -258,7 +258,7 @@ def _tools(files: _Files) -> tuple[Tool, ...]:
     )
 
 
-def _usable(
+def usable_arguments(
     arguments: Mapping[str, object], needed: Sequence[str] = (), optional: Sequence[str] = ()
 ) -> dict[str, str] | None:
     """The arguments a model gave, when they are ones a tool can use: all it needs, none it

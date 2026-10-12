@@ -11,13 +11,23 @@ Verdicts and the Gate are computed by code (ADR 0002). No Claim is made here: a 
 Claim covers is reported as a Finding, and the system never invents a Claim to cover it.
 """
 
+import os
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from pr_verification.agent import RoleRun
-from pr_verification.decision import Decider, YesOrNo
-from pr_verification.model import Model
-from pr_verification.report import Evidence, ReviewFinding
+from pr_verification.agent import Role, RoleRun, Stopped, Tool, run_role
+from pr_verification.decision import YES, Decider, Decision, Question, YesOrNo
+from pr_verification.model import Model, ModelFailed
+from pr_verification.reading import BAD_ARGUMENTS, reading_tools, usable_arguments
+from pr_verification.report import (
+    Evidence,
+    FindingKind,
+    PullRequestPart,
+    ReviewFinding,
+    RunEvidence,
+)
+from pr_verification.repository import git
 
 FINDING_CAP = 10
 """The most Findings one Review reports, so that a report holds only what is worth a person's
@@ -76,6 +86,43 @@ STEP_CAP_REACHED = "the Reviewer took {steps} steps without finishing"
 NOT_CHANGED = "The pull request does not change a file at that path."
 """What `read_change` answers for a path that is not a file the pull request changes."""
 
+_READ_CHANGE = """\
+Shows what the pull request changes in one of its changed files, named by its "path", as in \
+{"path": "billing/tax.py"}. The change is given as a unified diff: each line added follows a +, \
+and each line removed follows a -."""
+
+_REVIEWER_INSTRUCTIONS = f"""\
+You review the quality of the changes a pull request makes. Your task holds its "claims", the
+Claims it makes: the checkable statements a pull request makes about its own changes. It also
+holds its "changed_files", the path of every file it changes.
+
+Your tools only read. read_change shows what the pull request changes in one file, and the others
+read the files of the repository as they are after the pull request. Read a change before you say
+anything about it.
+
+Report two kinds of Finding:
+
+- "quality": a concern about the quality of a change, such as a likely bug, a case left
+  unhandled, or code that will be hard to maintain.
+- "undeclared_change": a change that none of the Claims covers. Say what the change is. Do not
+  write a Claim for it. When "claims" is empty, report none of these: that no Claim covers the
+  changes is reported already.
+
+Do not judge whether a Claim is true. Report only what is worth a person's attention: at most
+{FINDING_CAP} Findings, the most important first. Each names one of the changed files by its
+"path" and states its "concern" in at most {LONGEST_CONCERN} characters.
+
+Finish with your Findings in this form:
+{{"findings": [{{"kind": "undeclared_change", "path": "auth/session.py", "concern": "The session \
+timeout is raised, and no Claim says so."}}]}}
+When you have none, finish with {{"findings": []}}."""
+
+# The difference is settled by the two commits alone, whatever git is set up to do on this
+# machine and whatever attributes the working copy gives a file: no colour, no program of the
+# repository's choosing, and every file as text, so that none can be marked as one whose lines
+# are not shown.
+_DIFFERENCE = ("diff", "--no-renames", "--no-color", "--no-ext-diff", "--no-textconv", "--text")
+
 
 def pieces(
     text: str, longest: int = LONGEST_PIECE, overlap: int = PIECE_OVERLAP
@@ -98,7 +145,18 @@ def pieces(
 
     Raises `ValueError` unless `0 <= overlap < longest`.
     """
-    raise NotImplementedError
+    if not 0 <= overlap < longest:
+        raise ValueError(
+            f"pieces of {longest} characters that repeat {overlap} do not move through a text"
+        )
+    cut = []
+    start = 0
+    while start < len(text):
+        cut.append(text[start : start + longest])
+        if start + longest >= len(text):
+            break
+        start += longest - overlap
+    return tuple(cut)
 
 
 def detect_injection(decider: Decider, text: str) -> bool:
@@ -120,7 +178,7 @@ def detect_injection(decider: Decider, text: str) -> bool:
 
     Nothing the decider raises is caught.
     """
-    raise NotImplementedError
+    return any(decider.decide(piece, INJECTION).top == YES for piece in _asked_about(text))
 
 
 @dataclass(frozen=True)
@@ -263,4 +321,187 @@ def review_pull_request(
     less than 1. An `InputTooLong` from the decider is not caught, as in `detect_injection`:
     it is a fault in the caller. Any other exception is a fault in the system and is raised.
     """
-    raise NotImplementedError
+    if step_cap < 1 or decision_cap < 1:
+        raise ValueError(
+            f"the step cap is {step_cap} and the cap on decisions is {decision_cap}: "
+            "neither may be under 1"
+        )
+    change = _Change(repository, before, after)
+    outputs = (
+        output
+        for ran in evidence
+        if isinstance(ran, RunEvidence)
+        for output in (ran.before.output, ran.after.output)
+    )
+    made = _detections(
+        decider,
+        decision_cap,
+        (
+            (PullRequestPart.TITLE, [(None, title)]),
+            (PullRequestPart.DESCRIPTION, [(None, description)]),
+            (PullRequestPart.LINKED_ISSUE, [(None, linked_issue)]),
+            (PullRequestPart.FILE, ((path, change.added(path)) for path in change.paths)),
+            (PullRequestPart.SANDBOX_OUTPUT, ((None, output) for output in outputs)),
+        ),
+    )
+    if not change.paths:
+        return Reviewed(findings=tuple(made), run=None)
+    reportable = [FindingKind.QUALITY, FindingKind.UNDECLARED_CHANGE]
+    if not claims:
+        # One Finding stands for every change, so the Reviewer's own are not wanted.
+        reportable.remove(FindingKind.UNDECLARED_CHANGE)
+        concern = NOTHING_DECLARED.format(files=len(change.paths))
+        whole = PullRequestPart.WHOLE
+        made.append(ReviewFinding(concern, kind=FindingKind.UNDECLARED_CHANGE, part=whole))
+
+    tools = (*reading_tools(repository, after), Tool("read_change", _READ_CHANGE, change.read))
+    role = Role("reviewer", _REVIEWER_INSTRUCTIONS, tools, step_cap)
+    task = {"claims": list(claims), "changed_files": list(change.paths)}
+    try:
+        run = run_role(role, task, model)
+    except ModelFailed as error:
+        return Reviewed(findings=(*made, _unfinished(str(error))), run=None)
+    if run.stopped is Stopped.STEP_CAP:
+        made.append(_unfinished(STEP_CAP_REACHED.format(steps=step_cap)))
+    named = _named(run.answer, change.paths, reportable)
+    # Enforced here, whatever the Reviewer was told: what code made is kept whole.
+    room = max(FINDING_CAP - len(made), 0)
+    return Reviewed(findings=(*made, *named[:room]), run=run)
+
+
+def _asked_about(text: str) -> tuple[str, ...]:
+    """The pieces of `text` the injection detector asks about: none when the text is blank."""
+    return pieces(text) if text.strip() else ()
+
+
+def _unfinished(failure: str) -> ReviewFinding:
+    """The Finding that says a Review could not be finished, and why."""
+    return ReviewFinding(
+        REVIEW_UNFINISHED.format(failure=failure),
+        kind=FindingKind.UNFINISHED_REVIEW,
+        part=PullRequestPart.WHOLE,
+    )
+
+
+class _Counted:
+    """Asks a decider, and keeps count of the decisions asked for."""
+
+    def __init__(self, decider: Decider) -> None:
+        self._decider = decider
+        self.asked = 0
+
+    def decide(self, state: str, question: Question) -> Decision:
+        self.asked += 1
+        return self._decider.decide(state, question)
+
+
+def _detections(
+    decider: Decider,
+    decision_cap: int,
+    parts: Iterable[tuple[PullRequestPart, Iterable[tuple[str | None, str]]]],
+) -> list[ReviewFinding]:
+    """Part 1 of a Review: the Findings of the injection detector, and the one that says it
+    could not finish when it could not.
+
+    Each of `parts` has its texts in the order to ask about them, each with the path of its
+    file if it is from one. A text is taken only when the ones before it have been asked about.
+    """
+    counted = _Counted(decider)
+    findings: list[ReviewFinding] = []
+    for part, texts in parts:
+        for path, text in texts:
+            if len(_asked_about(text)) > decision_cap - counted.asked:
+                failure = DECISION_CAP_REACHED.format(decisions=decision_cap)
+                return [*findings, _unfinished(failure)]
+            try:
+                detected = detect_injection(counted, text)
+            except ModelFailed as error:
+                return [*findings, _unfinished(str(error))]
+            if detected:
+                kind = FindingKind.SUSPECTED_INJECTION
+                findings.append(
+                    ReviewFinding(READS_AS_INSTRUCTIONS, kind=kind, part=part, path=path)
+                )
+                break
+    return findings
+
+
+class _Change:
+    """What a pull request changes: git's difference between the commits before and after it.
+
+    `paths` holds the path of every file it changes, in sorted order. A file is reached only
+    by finding its path among them, so nothing a model wrote is handed to git as a path.
+    """
+
+    def __init__(self, repository: Path, before: str, after: str) -> None:
+        self._repository = repository
+        self._commits = (before, after)
+        listing = os.fsdecode(self._difference("--name-only", "-z"))
+        self.paths = tuple(sorted(path for path in listing.split("\0") if path))
+
+    def _difference(self, *options: str, only: Sequence[str] = ()) -> bytes:
+        """What git writes of the difference between the two commits: in every file, or in the
+        files `only` names when it names any."""
+        asked = (*_DIFFERENCE, *options, "--end-of-options", *self._commits, "--", *only)
+        return git(self._repository, *asked)
+
+    def difference(self, path: str) -> str:
+        """The difference in the file at `path`, which is one of `paths`, in unified form and
+        read as text as `reading_tools` reads a file."""
+        # A path alone also names every file under a directory of that name, and there is one
+        # when the pull request puts a directory where a file was.
+        only = (f":(literal){path}", f":(exclude,literal){path}/")
+        return self._difference(only=only).decode(errors="replace")
+
+    def added(self, path: str) -> str:
+        """The lines the pull request adds to the file at `path`, which is one of `paths`."""
+        added = []
+        in_hunk = False
+        # Only a line feed ends a line here. Within a hunk every line starts with a mark, so a
+        # line added is never taken for a header, nor a header for a line added.
+        for line in self.difference(path).split("\n"):
+            if line.startswith("diff --git "):
+                in_hunk = False
+            elif line.startswith("@@"):
+                in_hunk = True
+            elif in_hunk and line.startswith("+"):
+                added.append(line[1:])
+        return "\n".join(added)
+
+    def read(self, arguments: Mapping[str, object]) -> str:
+        """The tool `read_change`."""
+        given = usable_arguments(arguments, needed=("path",))
+        if given is None:
+            return BAD_ARGUMENTS
+        return self.difference(given["path"]) if given["path"] in self.paths else NOT_CHANGED
+
+
+def _named(
+    answer: Mapping[str, object] | None, paths: Collection[str], kinds: Collection[FindingKind]
+) -> list[ReviewFinding]:
+    """The Findings the Reviewer named in its answer, in its order: those of `kinds` that point
+    at one of `paths`. None when it gave no answer."""
+    findings = answer.get("findings") if answer is not None else None
+    if not isinstance(findings, list):
+        return []
+    read = (_read_finding(finding, paths, kinds) for finding in findings)
+    return [finding for finding in read if finding is not None]
+
+
+def _read_finding(
+    said: object, paths: Collection[str], kinds: Collection[FindingKind]
+) -> ReviewFinding | None:
+    """The Finding made of one the Reviewer named, or None when it is to be left out."""
+    if not (isinstance(said, dict) and said.keys() == {"kind", "path", "concern"}):
+        return None
+    kind, path, concern = said["kind"], said["path"], said["concern"]
+    if not (isinstance(kind, str) and kind in kinds):
+        return None
+    if not (isinstance(path, str) and path in paths):
+        return None
+    if not isinstance(concern, str):
+        return None
+    concern = concern.strip()
+    if not 0 < len(concern) <= LONGEST_CONCERN:
+        return None
+    return ReviewFinding(concern, kind=FindingKind(kind), part=PullRequestPart.FILE, path=path)

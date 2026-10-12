@@ -23,11 +23,13 @@ from pr_verification.report import (
     ClaimKind,
     ClaimSpend,
     ClassifiedClaim,
+    Finding,
     PullRequestSpend,
     Report,
     Verdict,
 )
 from pr_verification.repository import resolve_commit
+from pr_verification.review import review_pull_request
 from pr_verification.verdict import compute_verdict
 
 
@@ -203,8 +205,8 @@ def run(
     Raises `ValueError` when `review` is true and there is no `decider`, and whatever
     `review_pull_request` raises: a fault in the system, and never a failing model.
     """
-    if review:
-        raise NotImplementedError
+    if review and decider is None:
+        raise ValueError("a Review asks the decision layer, and no decider was given")
     ledger = Ledger(budget, clock=clock)
     before = _resolve_commit(pull_request.repository, "before", pull_request.before)
     after = _resolve_commit(pull_request.repository, "after", pull_request.after)
@@ -216,14 +218,31 @@ def run(
     )
     kinds = _classify(decider, claims, ledger, clock)
     gathered = _gather(orchestration, ledger, claims, pull_request.repository, before, after, model)
+    verified = tuple(
+        _verified(text, kind, answer)
+        for text, kind, answer in zip(claims, kinds, gathered, strict=True)
+    )
+    # Every Verdict is computed by now, and nothing below is read to compute one or the Gate.
+    # The Review asks `model` itself, so nothing it spends is recorded in the ledger.
+    findings: tuple[Finding, ...] = ()
+    if review and decider is not None:
+        findings = review_pull_request(
+            claims,
+            title=pull_request.title,
+            description=pull_request.description,
+            linked_issue=pull_request.linked_issue,
+            evidence=tuple(evidence for claim in verified for evidence in claim.evidence),
+            repository=pull_request.repository,
+            before=before,
+            after=after,
+            model=model,
+            decider=decider,
+        ).findings
     return Report(
         before=before,
         after=after,
-        claims=tuple(
-            _verified(text, kind, answer)
-            for text, kind, answer in zip(claims, kinds, gathered, strict=True)
-        ),
-        findings=(),
+        claims=verified,
+        findings=findings,
         budget_spend=_spend(ledger, len(claims)),
     )
 
