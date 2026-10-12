@@ -224,7 +224,7 @@ class GitHubAPI:
         try:
             pull = answer.json()["data"]["repository"]["pullRequest"]
             issues = [
-                (issue["title"], issue["body"] or "")
+                (issue["title"], "" if issue["body"] is None else issue["body"])
                 for issue in pull["closingIssuesReferences"]["nodes"]
             ]
         except (ValueError, LookupError, TypeError, RecursionError):

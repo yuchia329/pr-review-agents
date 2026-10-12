@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: read
+  issues: read
   checks: write
   pull-requests: write
 
@@ -41,13 +42,14 @@ What each part is for:
   installs the dependencies, and only such a run saves them for later runs (ADR 0004). List
   under `branches` every branch that pull requests target.
 - `checks: write` lets the run report the Gate, and `pull-requests: write` lets it post the
-  comment. `contents: read` is all it needs of the code.
+  comment. `contents: read` is all it needs of the code, and `issues: read` lets it read the
+  issues the pull request closes.
 - `runs-on` names a runner that has Docker, which the Sandbox needs. GitHub's own Linux
   runners have it.
 - The Action checks the repository out itself, with its whole history, so the workflow needs
   no other step.
 
-To have the Gate hold a pull request back, require the check `PR Verification Gate` in the
+To have the Gate hold a pull request back, require the check run `PR Verification Gate` in the
 target branch's protection rules. Without that the Gate is shown and nothing waits on it. The
 job itself ends green whichever way the Gate goes, and red only when the run could not do its
 work.
@@ -125,7 +127,8 @@ repository can see it:
 
 Run this by hand after changing `action.yml`, the workflow file above, `GitHubAPI`, or what
 `main` prints. It needs a scratch repository on GitHub with the workflow installed and a model
-configured, and a second account that can fork it.
+configured, and a second account that can fork it. Make the repository private: a public one
+lets any token read its issues, and so cannot show that the permissions above are enough.
 
 1. Push a commit to the target branch. Expect a run, the job to end green, and one new entry
    under Actions, Caches, saved by that run. Push a commit to another branch that has no pull

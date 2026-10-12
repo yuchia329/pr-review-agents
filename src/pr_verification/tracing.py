@@ -396,9 +396,10 @@ def _send(trace: Trace, endpoint: str, headers: str, transport: httpx.BaseTransp
                 content=json.dumps(to_otlp(trace)),
                 headers={**_headers(headers), "Content-Type": "application/json"},
             )
-    except (httpx.HTTPError, httpx.InvalidURL) as error:
-        # Only the kind of error is said: what it says may quote the endpoint or a header.
-        failure = f"the collector could not be reached ({type(error).__name__})"
+    except (httpx.HTTPError, httpx.InvalidURL, UnicodeError) as error:
+        # A header that cannot be written in ASCII is a `UnicodeError`. Only the kind of error
+        # is said: what it says may quote the endpoint or a header.
+        failure = f"the request to the collector could not be made ({type(error).__name__})"
     else:
         if response.is_success:
             return

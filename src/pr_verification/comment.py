@@ -227,11 +227,13 @@ def _comment(report: Report, middle: list[str]) -> str:
 
 def _claims(report: Report) -> Iterator[str]:
     """The lines of part 3: each Claim with its Verdict, its reason, and its Evidence."""
-    blocks = 3 * sum(
+    reproductions = sum(
         isinstance(evidence, ReproductionEvidence)
         for claim in report.claims
         for evidence in claim.evidence
     )
+    # Each is shown as three blocks: its text, and its output on each of the two commits.
+    blocks = 3 * reproductions
     share = BLOCK_BUDGET // blocks if blocks else 0
     if report.claims:
         yield "<ul>"
