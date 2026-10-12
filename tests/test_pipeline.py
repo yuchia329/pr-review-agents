@@ -47,7 +47,12 @@ from pr_verification.orchestration import (
     fixed_pipeline,
 )
 from pr_verification.python_ecosystem import REPRODUCTION_PATH
-from pr_verification.repo_profile import DependencyCache, DirectoryStore, RepoProfile
+from pr_verification.repo_profile import (
+    CommandFailed,
+    DependencyCache,
+    DirectoryStore,
+    RepoProfile,
+)
 from pr_verification.report import (
     BudgetLimit,
     BudgetSpend,
@@ -515,6 +520,62 @@ def test_fixed_pipeline_has_the_progress_guard_it_is_given_and_none_unless_given
 
     assert fixed_pipeline(tmp_path / "state", progress_guard=guard).progress_guard is guard
     assert fixed_pipeline(tmp_path / "state").progress_guard is None
+
+
+# A commit of the target branch, prepared with no pull request to verify
+
+
+def test_target_commit_is_prepared_and_its_repo_profile_and_dependencies_are_kept(
+    shop: FixtureRepository, tmp_path: Path
+) -> None:
+    sandboxes = Sandboxes(shop)
+    pipeline = a_pipeline(tmp_path / "state", sandboxes)
+
+    profile = pipeline.prepare_target_commit(shop.path, shop.before)
+
+    assert isinstance(profile, RepoProfile)
+    assert profile == DirectoryStore(tmp_path / "state" / "profiles").load(shop.path)
+    (sandbox,) = sandboxes.opened
+    assert (sandbox.repository, sandbox.image, sandbox.closed) == (shop.path, IMAGE, True)
+    assert sandbox.runs == [
+        (FETCH, shop.before, Phase.INSTALL, WITHIN),
+        (TEST, shop.before, Phase.TEST, WITHIN),
+    ]
+    assert pipeline.cache.archive(shop.path, IMAGE, profile.lock_digest).exists()
+
+
+def test_target_commit_that_no_ecosystem_can_run_is_answered_for_with_no_sandbox_opened(
+    shop: FixtureRepository, tmp_path: Path
+) -> None:
+    sandboxes = Sandboxes(shop)
+    pipeline = a_pipeline(tmp_path / "state", sandboxes, Discovery(Unsupported(NOT_FOUND)))
+
+    assert pipeline.prepare_target_commit(shop.path, shop.before) == Unsupported(NOT_FOUND)
+    assert sandboxes.opened == []
+
+
+def test_target_commit_whose_install_fails_is_answered_for_with_the_command_and_nothing_is_kept(
+    shop: FixtureRepository, tmp_path: Path
+) -> None:
+    sandboxes = Sandboxes(shop, {(FETCH, "before"): FAILED})
+    pipeline = a_pipeline(tmp_path / "state", sandboxes)
+
+    answer = pipeline.prepare_target_commit(shop.path, shop.before)
+
+    assert answer == CommandFailed(FETCH, FAILED)
+    assert pipeline.store.load(shop.path) is None
+    assert sandboxes.opened and all(sandbox.closed for sandbox in sandboxes.opened)
+
+
+def test_sandbox_is_closed_before_a_failure_to_prepare_a_target_commit_goes_on(
+    shop: FixtureRepository, tmp_path: Path
+) -> None:
+    sandboxes = Sandboxes(shop, {(FETCH, "before"): NO_RUNTIME})
+
+    with pytest.raises(SandboxFailed, match="no container runtime"):
+        a_pipeline(tmp_path / "state", sandboxes).prepare_target_commit(shop.path, shop.before)
+
+    assert sandboxes.opened and all(sandbox.closed for sandbox in sandboxes.opened)
 
 
 # The report, through the core's entry point
