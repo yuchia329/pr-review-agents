@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from conftest import (
+    Clock,
     FixtureRepository,
     GathersNothing,
     a_reproduction,
@@ -13,19 +14,24 @@ from conftest import (
 )
 
 from pr_verification import verdict
+from pr_verification.budget import DEFAULT_SECONDS, Budget, Ledger
 from pr_verification.core import InvalidPullRequest, PullRequest, run
-from pr_verification.decision import ScriptedDecider
+from pr_verification.decision import Decision, Implementation, Question, ScriptedDecider, options_of
 from pr_verification.ecosystem import Unreadable
-from pr_verification.model import Model
+from pr_verification.model import Model, ScriptedModel
 from pr_verification.orchestration import Gathered, Orchestration
 from pr_verification.python_ecosystem import NOT_A_PYTHON_PROJECT
 from pr_verification.report import (
+    BudgetLimit,
+    BudgetSpend,
     Claim,
     ClaimKind,
+    ClaimSpend,
     ClassifiedClaim,
     Evidence,
     EvidenceSource,
     GateDecision,
+    PullRequestSpend,
     Report,
     RunEvidence,
     Verdict,
@@ -65,7 +71,7 @@ def test_report_names_the_two_commits_it_compared_in_full(
     assert report.after == fixture_repository.after
 
 
-def test_report_for_no_claims_has_no_findings_and_no_model_spend(
+def test_report_for_no_claims_has_no_findings_and_spends_only_the_step_that_lists_the_claims(
     fixture_repository: FixtureRepository,
 ) -> None:
     report = run(
@@ -80,7 +86,7 @@ def test_report_for_no_claims_has_no_findings_and_no_model_spend(
 
     assert report.findings == ()
     assert report.budget_spend.dollars == 0
-    assert report.budget_spend.steps == 0
+    assert report.budget_spend.steps == 1
     assert report.budget_spend.seconds >= 0
 
 
@@ -216,7 +222,7 @@ def test_every_claim_receives_a_verdict_in_the_order_extracted_with_all_its_evid
     ]
     assert report.gate.decision is GateDecision.BLOCK
     assert report.findings == ()
-    assert (report.budget_spend.dollars, report.budget_spend.steps) == (0, 0)
+    assert (report.budget_spend.dollars, report.budget_spend.steps) == (0, 1)
     assert report.budget_spend.seconds >= 0
 
 
@@ -383,3 +389,253 @@ def test_without_an_orchestration_the_fixed_pipeline_is_used_and_nothing_is_kept
     )
     assert len(model.requests) == 1
     assert list(temporary.iterdir()) == []
+
+
+# The Budget
+
+
+class KeepsToABudget:
+    """A stand-in orchestration that keeps to a Budget. For each Claim it records the spend
+    prepared against that Claim, and gives what was prepared. It records each call."""
+
+    def __init__(self, *prepared: tuple[BudgetSpend, Gathered]) -> None:
+        self._prepared = prepared
+        self.calls: list[tuple[Ledger, tuple[str, ...], Path, str, str, Model]] = []
+
+    def gather(
+        self, claims: tuple[str, ...], *, repository: Path, before: str, after: str, model: Model
+    ) -> tuple[Gathered, ...]:
+        raise AssertionError("an orchestration that keeps to a Budget is asked within one")
+
+    def gather_within(
+        self,
+        ledger: Ledger,
+        claims: tuple[str, ...],
+        *,
+        repository: Path,
+        before: str,
+        after: str,
+        model: Model,
+        kinds: tuple[ClaimKind | None, ...] | None = None,
+    ) -> tuple[Gathered, ...]:
+        self.calls.append((ledger, claims, repository, before, after, model))
+        ledger.share_out(len(claims))
+        for place, (spend, _) in enumerate(self._prepared):
+            ledger.record(spend, claim=place)
+        return tuple(gathered for _, gathered in self._prepared)
+
+
+class TakesAMinute(GathersNothing):
+    """A stand-in orchestration that keeps to no Budget: gathering takes a minute on the clock."""
+
+    def __init__(self, clock: Clock) -> None:
+        super().__init__()
+        self._clock = clock
+
+    def gather(
+        self, claims: tuple[str, ...], *, repository: Path, before: str, after: str, model: Model
+    ) -> tuple[Gathered, ...]:
+        self._clock.now += 60.0
+        return super().gather(
+            claims, repository=repository, before=before, after=after, model=model
+        )
+
+
+class Charges:
+    """A stand-in decider that takes the first option of every question. Each decision takes
+    `seconds` on the clock and costs `dollars`."""
+
+    def __init__(self, clock: Clock, seconds: float, dollars: float) -> None:
+        self._clock, self._seconds, self._dollars = clock, seconds, dollars
+        self.asked: list[str] = []
+
+    def decide(self, state: str, question: Question) -> Decision:
+        self.asked.append(state)
+        self._clock.now += self._seconds
+        first, *others = options_of(question)
+        probabilities = {first: 1.0, **dict.fromkeys(others, 0.0)}
+        return Decision(question, probabilities, Implementation.STAND_IN, dollars=self._dollars)
+
+
+def steps(number: int) -> BudgetSpend:
+    return BudgetSpend(seconds=0.0, dollars=0.0, steps=number)
+
+
+def a_pull_request(repository: FixtureRepository) -> PullRequest:
+    return PullRequest(repository.path, repository.before, repository.after, "Add tax")
+
+
+def spend_of(report: Report) -> PullRequestSpend:
+    assert isinstance(report.budget_spend, PullRequestSpend)
+    return report.budget_spend
+
+
+def test_orchestration_that_keeps_to_a_budget_is_asked_once_within_the_ledger_of_the_call(
+    fixture_repository: FixtureRepository,
+) -> None:
+    orchestration = KeepsToABudget((steps(2), Gathered(())), (steps(1), Gathered(())))
+    model = model_listing("Adds tax", "Rounds")
+    pull_request = PullRequest(fixture_repository.path, "HEAD~1", "HEAD", "Add tax")
+
+    report = run(pull_request, model, orchestration=orchestration, clock=Clock())
+
+    ((ledger, claims, repository, before, after, given),) = orchestration.calls
+    assert (claims, repository) == (("Adds tax", "Rounds"), fixture_repository.path)
+    assert (before, after) == (fixture_repository.before, fixture_repository.after)
+    assert given is model
+    # The ledger already held the step that listed the Claims, and the report is read from it.
+    assert (ledger.spent().steps, report.budget_spend.steps) == (4, 4)
+
+
+def test_report_shows_the_spend_in_each_unit_for_the_pull_request_and_for_each_claim(
+    fixture_repository: FixtureRepository,
+) -> None:
+    clock = Clock()
+    listing = json.dumps({"claims": ["Adds tax", "Rounds"]})
+    orchestration = KeepsToABudget(
+        (BudgetSpend(seconds=10.0, dollars=1.0, steps=3), Gathered(())),
+        (BudgetSpend(seconds=5.0, dollars=0.0, steps=2), Gathered(())),
+    )
+
+    report = run(
+        a_pull_request(fixture_repository),
+        ScriptedModel([listing], dollars_per_request=0.25),
+        Charges(clock, seconds=2.0, dollars=0.5),
+        orchestration=orchestration,
+        budget=Budget(seconds=100.0, dollars=10.0, steps=50),
+        clock=clock,
+    )
+
+    # Listing the Claims is one step at the model's price. Each of the two decisions costs its
+    # time and its dollars, and no step. Neither is for any one Claim.
+    assert report.budget_spend == PullRequestSpend(
+        seconds=19.0,
+        dollars=2.25,
+        steps=6,
+        stopped_by=None,
+        claims=(
+            ClaimSpend(seconds=10.0, dollars=1.0, steps=3, stopped_by=None),
+            ClaimSpend(seconds=5.0, dollars=0.0, steps=2, stopped_by=None),
+        ),
+    )
+
+
+def test_report_shows_the_limit_that_stopped_the_run_and_it_says_nothing_of_a_verdict(
+    fixture_repository: FixtureRepository,
+) -> None:
+    # 5 steps are left once the Claims are listed, so the share of each Claim is 2.
+    orchestration = KeepsToABudget((steps(3), Gathered((FIXED,))), (steps(2), Gathered((), WHY)))
+
+    report = run(
+        a_pull_request(fixture_repository),
+        model_listing("Adds tax", "Rounds"),
+        orchestration=orchestration,
+        budget=Budget(steps=6),
+        clock=Clock(),
+    )
+
+    spent = (
+        ClaimSpend(seconds=0.0, dollars=0.0, steps=3, stopped_by=BudgetLimit.STEPS),
+        ClaimSpend(seconds=0.0, dollars=0.0, steps=2, stopped_by=BudgetLimit.STEPS),
+    )
+    assert report.budget_spend == PullRequestSpend(0.0, 0.0, 6, BudgetLimit.STEPS, spent)
+    assert json.loads(report.to_json())["budget_spend"] == {
+        "seconds": 0.0,
+        "dollars": 0.0,
+        "steps": 6,
+        "stopped_by": "steps",
+        "claims": [
+            {"seconds": 0.0, "dollars": 0.0, "steps": 3, "stopped_by": "steps"},
+            {"seconds": 0.0, "dollars": 0.0, "steps": 2, "stopped_by": "steps"},
+        ],
+    }
+    # The Claim whose Evidence came of the very work that reached its share is still decided.
+    assert [(claim.verdict, claim.reason) for claim in report.claims] == [
+        (Verdict.CONFIRMED, verdict.CONFIRMED),
+        (Verdict.INCONCLUSIVE, WHY),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("budget", "decided", "limit"),
+    [(Budget(dollars=2.0), 2, BudgetLimit.MONEY), (Budget(steps=1), 0, BudgetLimit.STEPS)],
+    ids=["spent by a decision", "spent by listing the Claims"],
+)
+def test_once_the_budget_is_spent_no_further_decision_is_asked_for_and_the_rest_go_unclassified(
+    fixture_repository: FixtureRepository, budget: Budget, decided: int, limit: BudgetLimit
+) -> None:
+    claims = ["Adds tax", "Rounds", "Keeps prices"]
+    clock = Clock()
+    decider = Charges(clock, seconds=0.0, dollars=1.0)
+
+    report = run(
+        a_pull_request(fixture_repository),
+        model_listing(*claims),
+        decider,
+        orchestration=GathersNothing(),
+        budget=budget,
+        clock=clock,
+    )
+
+    # Reaching a limit is not a failure: the report is given, with every Claim in it.
+    assert decider.asked == claims[:decided]
+    assert [claim.text for claim in report.claims] == claims
+    assert [type(claim) for claim in report.claims] == [
+        *[ClassifiedClaim] * decided,
+        *[Claim] * (3 - decided),
+    ]
+    assert spend_of(report).stopped_by is limit
+
+
+def test_what_an_orchestration_that_keeps_to_no_budget_spends_is_not_recorded_and_no_limit_stops_it(
+    fixture_repository: FixtureRepository,
+) -> None:
+    clock = Clock()
+    orchestration = TakesAMinute(clock)
+    model = model_listing("Adds tax")
+
+    report = run(
+        a_pull_request(fixture_repository),
+        model,
+        orchestration=orchestration,
+        budget=Budget(seconds=10.0),
+        clock=clock,
+    )
+
+    ((_, _, _, _, given),) = orchestration.calls
+    assert given is model
+    nothing = ClaimSpend(seconds=0.0, dollars=0.0, steps=0, stopped_by=None)
+    assert report.budget_spend == PullRequestSpend(0.0, 0.0, 1, None, (nothing,))
+
+
+@pytest.mark.parametrize(
+    ("seconds", "limit"),
+    [(DEFAULT_SECONDS - 1, None), (DEFAULT_SECONDS, BudgetLimit.TIME)],
+    ids=["under fifteen minutes", "fifteen minutes"],
+)
+def test_with_no_budget_given_the_provisional_defaults_are_kept_to(
+    fixture_repository: FixtureRepository, seconds: float, limit: BudgetLimit | None
+) -> None:
+    spend = BudgetSpend(seconds=seconds, dollars=0.0, steps=0)
+    orchestration = KeepsToABudget((spend, Gathered(())))
+
+    report = run(
+        a_pull_request(fixture_repository),
+        model_listing("Adds tax"),
+        orchestration=orchestration,
+        clock=Clock(),
+    )
+
+    assert spend_of(report).stopped_by is limit
+
+
+def test_budget_with_a_limit_that_is_not_more_than_zero_is_refused_before_anything_else_is_done(
+    fixture_repository: FixtureRepository,
+) -> None:
+    model = model_listing()
+    pull_request = PullRequest(fixture_repository.path, "no-such-commit", "HEAD", "Tidy up")
+
+    with pytest.raises(ValueError):
+        run(pull_request, model, budget=Budget(steps=0))
+
+    assert model.requests == []

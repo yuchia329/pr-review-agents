@@ -7,14 +7,16 @@ The ones from there on verify a Python pull request in a real Sandbox.
 import json
 import tempfile
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from types import TracebackType
 from typing import Self
 
 import pytest
-from conftest import FixtureRepository, commit_snapshots, finishes
+from conftest import Clock, FixtureRepository, commit_snapshots, finishes
 
 from pr_verification import verdict
+from pr_verification.budget import BUDGET_SPENT, SHARE_SPENT, Budget, Ledger
 from pr_verification.cli import main
 from pr_verification.core import PullRequest, run
 from pr_verification.decision import ScriptedDecider
@@ -38,7 +40,14 @@ from pr_verification.orchestration import (
 )
 from pr_verification.python_ecosystem import REPRODUCTION_PATH
 from pr_verification.repo_profile import DependencyCache, DirectoryStore, RepoProfile
-from pr_verification.report import GateDecision, ReproductionEvidence, Verdict
+from pr_verification.report import (
+    BudgetLimit,
+    BudgetSpend,
+    GateDecision,
+    PullRequestSpend,
+    ReproductionEvidence,
+    Verdict,
+)
 from pr_verification.reproduction import (
     ATTEMPT_CAP,
     ATTEMPT_CAP_REACHED,
@@ -625,6 +634,271 @@ def test_command_line_prints_the_whole_report_and_its_exit_code_is_the_gates(
     )
     assert shown["after_results"] == {"passed": ["test_total"], "failed": [], "could_not_run": []}
     assert printed["claims"][1]["evidence"] == []
+
+
+# Within a Budget
+
+
+class SlowSandbox(LineSandbox):
+    """A `LineSandbox` in which time passes on a controlled clock: each run of a command that
+    `takes` names takes that many seconds, however it ends."""
+
+    def __init__(
+        self,
+        clock: Clock,
+        takes: Mapping[Command, float],
+        repository: Path,
+        image: str,
+        before: str,
+        prepared: Prepared,
+    ) -> None:
+        super().__init__(repository, image, before, prepared)
+        self._clock, self._takes = clock, takes
+
+    def run(self, command: Command, *, commit: str, phase: Phase, limits: Limits) -> RunResult:
+        self._clock.now += self._takes.get(command, 0.0)
+        return super().run(command, commit=commit, phase=phase, limits=limits)
+
+
+class SlowSandboxes(Sandboxes):
+    """A stand-in for opening Sandboxes that gives a `SlowSandbox` each time."""
+
+    def __init__(
+        self,
+        repository: FixtureRepository,
+        clock: Clock,
+        takes: Mapping[Command, float],
+        prepared: Prepared | None = None,
+    ) -> None:
+        super().__init__(repository, prepared)
+        self._clock, self._takes = clock, takes
+
+    def __call__(self, repository: Path, image: str) -> LineSandbox:
+        self.opened.append(
+            SlowSandbox(self._clock, self._takes, repository, image, self._before, self._prepared)
+        )
+        return self.opened[-1]
+
+
+class SlowFor(WritesFor):
+    """A `WritesFor` in which time passes on a controlled clock: each request made for a Claim
+    that `takes` names takes that many seconds."""
+
+    def __init__(
+        self, responses: Mapping[str, str | Exception], clock: Clock, takes: Mapping[str, float]
+    ) -> None:
+        super().__init__(responses)
+        self._clock, self._takes = clock, takes
+
+    def complete(self, request: ModelRequest) -> str:
+        task = json.loads(request.data).get("task")
+        if task is not None:
+            self._clock.now += self._takes.get(task["claim"], 0.0)
+        return super().complete(request)
+
+
+INSTALLING = {FETCH: 20.0}
+"""Installing dependencies takes twenty seconds for each of the two commits: forty in all."""
+
+THREE = {"Adds tax": writes("fixed"), "Rounds": writes("same"), "Keeps": writes("broken")}
+
+
+def gather_within(
+    pipeline: FixedPipeline, ledger: Ledger, repository: FixtureRepository, model: WritesFor
+) -> list[Gathered]:
+    """What the pipeline gathers within `ledger` for the Claims the model has a response for."""
+    return list(
+        pipeline.gather_within(
+            ledger,
+            model.claims,
+            repository=repository.path,
+            before=repository.before,
+            after=repository.after,
+            model=model,
+        )
+    )
+
+
+def test_within_a_budget_with_room_to_spare_each_claim_is_given_what_gather_gives_it(
+    shop: FixtureRepository, tmp_path: Path
+) -> None:
+    model, ledger = WritesFor(THREE), Ledger(clock=Clock())
+
+    within = gather_within(a_pipeline(tmp_path / "within", Sandboxes(shop)), ledger, shop, model)
+
+    pipeline = a_pipeline(tmp_path / "state", Sandboxes(shop))
+    assert within == gather(pipeline, shop, WritesFor(THREE))
+    # Every request made for a Claim is one step against that Claim.
+    assert [ledger.spent(claim=place).steps for place in range(3)] == [
+        len(model.tasks(claim)) for claim in model.claims
+    ]
+    assert (ledger.spent().steps, ledger.stopped_by()) == (len(model.requests), None)
+
+
+def test_within_a_budget_with_no_claims_nothing_is_done_and_the_ledger_is_not_used(
+    shop: FixtureRepository, tmp_path: Path
+) -> None:
+    sandboxes, discovery = Sandboxes(shop), Discovery(commands())
+    ledger = Ledger(clock=Clock())
+
+    gathered = gather_within(
+        a_pipeline(tmp_path / "state", sandboxes, discovery), ledger, shop, WritesFor({})
+    )
+
+    assert (gathered, discovery.asked, sandboxes.opened) == ([], [], [])
+    ledger.share_out(1)  # No share had been set aside.
+
+
+def test_preparing_is_timed_against_the_pull_request_alone_and_comes_out_of_no_claims_share(
+    shop: FixtureRepository, tmp_path: Path
+) -> None:
+    clock = Clock()
+    sandboxes = SlowSandboxes(shop, clock, INSTALLING)
+    ledger = Ledger(Budget(seconds=100.0), clock=clock)
+
+    gather_within(a_pipeline(tmp_path / "state", sandboxes), ledger, shop, WritesFor(THREE))
+
+    assert ledger.spent().seconds == 40.0
+    assert [ledger.spent(claim=place).seconds for place in range(3)] == [0.0, 0.0, 0.0]
+    # Preparing is given the pipeline's limits whole. Sixty seconds are left for three Claims,
+    # and a run for a Claim is given no longer than the twenty of its share.
+    (sandbox,) = sandboxes.opened
+    preparing = {limits for command, _, _, limits in sandbox.runs if command in (FETCH, TEST)}
+    for_a_claim = {limits for command, _, _, limits in sandbox.runs if command not in (FETCH, TEST)}
+    assert (preparing, for_a_claim) == ({WITHIN}, {replace(WITHIN, seconds=20.0)})
+
+
+def test_claim_that_spends_its_share_is_inconclusive_and_the_others_still_receive_their_verdicts(
+    shop: FixtureRepository, tmp_path: Path
+) -> None:
+    clock = Clock()
+    sandboxes = SlowSandboxes(shop, clock, {**INSTALLING, ("run-reproduction",): 1.0})
+    # The share of each Claim is twenty seconds, and one request made for `Rounds` takes longer.
+    model = SlowFor(THREE, clock, {"Rounds": 25.0})
+    pull_request = PullRequest(shop.path, shop.before, shop.after, "Add tax")
+
+    report = run(
+        pull_request,
+        model,
+        orchestration=a_pipeline(tmp_path / "state", sandboxes),
+        budget=Budget(seconds=100.0),
+        clock=clock,
+    )
+
+    assert [(claim.verdict, claim.reason) for claim in report.claims] == [
+        (Verdict.CONFIRMED, verdict.CONFIRMED),
+        (Verdict.INCONCLUSIVE, SHARE_SPENT.format(limit="time")),
+        (Verdict.REFUTED, verdict.REFUTED),
+    ]
+    spend = report.budget_spend
+    assert isinstance(spend, PullRequestSpend)
+    # Each of the other two ran its Reproduction once against each commit, a second a run, and
+    # no run is timed twice: 40 seconds of installing and 29 for the Claims.
+    # The stand-in model has no price, as a local one has none: it costs time and no money.
+    assert (spend.seconds, spend.dollars, spend.stopped_by) == (69.0, 0.0, None)
+    assert spend.steps == len(model.requests)
+    assert [(claim.seconds, claim.stopped_by) for claim in spend.claims] == [
+        (2.0, None),
+        (25.0, BudgetLimit.TIME),
+        (2.0, None),
+    ]
+    assert [claim.steps for claim in spend.claims] == [
+        len(model.tasks(claim)) for claim in model.claims
+    ]
+    # Once its share was spent, nothing more was asked or run for the Claim.
+    (sandbox,) = sandboxes.opened
+    assert len(model.tasks("Rounds")) == 1
+    assert ("write", "same") not in [command for command, *_ in sandbox.runs]
+
+
+def test_claims_still_unresolved_when_the_budget_is_spent_are_inconclusive_and_no_work_is_started(
+    shop: FixtureRepository, tmp_path: Path
+) -> None:
+    clock = Clock()
+    sandboxes = SlowSandboxes(shop, clock, INSTALLING)
+    # Sixty seconds are left once both commits are prepared, and one request takes them all.
+    model = SlowFor(THREE, clock, {"Rounds": 60.0})
+    pull_request = PullRequest(shop.path, shop.before, shop.after, "Add tax")
+
+    report = run(
+        pull_request,
+        model,
+        orchestration=a_pipeline(tmp_path / "state", sandboxes),
+        budget=Budget(seconds=100.0),
+        clock=clock,
+    )
+
+    # Reaching the limit is not a failure. The Claim answered for before then keeps its Verdict.
+    spent = BUDGET_SPENT.format(limit="time")
+    assert [(claim.verdict, claim.reason) for claim in report.claims] == [
+        (Verdict.CONFIRMED, verdict.CONFIRMED),
+        (Verdict.INCONCLUSIVE, spent),
+        (Verdict.INCONCLUSIVE, spent),
+    ]
+    assert report.gate.decision is GateDecision.PASS
+    spend = report.budget_spend
+    assert isinstance(spend, PullRequestSpend)
+    assert (spend.seconds, spend.stopped_by) == (100.0, BudgetLimit.TIME)
+    # The share of a Claim says nothing of the Budget: that of the Claim never worked on is whole.
+    assert [claim.stopped_by for claim in spend.claims] == [None, BudgetLimit.TIME, None]
+    (sandbox,) = sandboxes.opened
+    assert (len(model.tasks("Rounds")), model.tasks("Keeps")) == (1, [])
+    assert sandbox.closed
+    assert {"same", "broken"}.isdisjoint(command[-1] for command, *_ in sandbox.runs)
+
+
+def test_budget_already_spent_on_the_call_leaves_every_claim_unresolved_and_starts_nothing(
+    shop: FixtureRepository, tmp_path: Path
+) -> None:
+    sandboxes, discovery, model = Sandboxes(shop), Discovery(commands()), WritesFor(THREE)
+    ledger = Ledger(Budget(dollars=1.0), clock=Clock())
+    ledger.record(BudgetSpend(seconds=0.0, dollars=1.0, steps=0))
+
+    gathered = gather_within(
+        a_pipeline(tmp_path / "state", sandboxes, discovery), ledger, shop, model
+    )
+
+    assert gathered == [Gathered((), BUDGET_SPENT.format(limit="money"))] * 3
+    assert (discovery.asked, sandboxes.opened, model.requests) == ([], [], [])
+
+
+@pytest.mark.parametrize("seconds", [15.0, 40.0], ids=["by the first install", "by the last"])
+def test_budget_spent_while_preparing_leaves_every_claim_unresolved_and_asks_the_model_nothing(
+    shop: FixtureRepository, tmp_path: Path, seconds: float
+) -> None:
+    clock = Clock()
+    sandboxes, model = SlowSandboxes(shop, clock, INSTALLING), WritesFor(THREE)
+    ledger = Ledger(Budget(seconds=seconds), clock=clock)
+
+    gathered = gather_within(a_pipeline(tmp_path / "state", sandboxes), ledger, shop, model)
+
+    assert gathered == [Gathered((), BUDGET_SPENT.format(limit="time"))] * 3
+    assert model.requests == []
+    assert sandboxes.opened and all(sandbox.closed for sandbox in sandboxes.opened)
+
+
+@pytest.mark.parametrize(
+    ("how", "failure"),
+    [
+        (FAILED, "the command fetch --locked ended with exit status 1"),
+        (NO_RUNTIME, "no container runtime"),
+    ],
+    ids=["the install fails", "the Sandbox fails"],
+)
+def test_commit_that_cannot_be_prepared_is_answered_for_as_one_whatever_was_spent_by_then(
+    shop: FixtureRepository, tmp_path: Path, how: RunResult | SandboxFailed, failure: str
+) -> None:
+    clock = Clock()
+    sandboxes = SlowSandboxes(shop, clock, INSTALLING, {(FETCH, "before"): how})
+    ledger = Ledger(Budget(seconds=15.0), clock=clock)
+
+    gathered = gather_within(
+        a_pipeline(tmp_path / "state", sandboxes), ledger, shop, WritesFor(THREE)
+    )
+
+    reason = COULD_NOT_PREPARE.format(commit="before", failure=failure)
+    assert gathered == [Gathered((), reason)] * 3
+    assert ledger.stopped_by() is BudgetLimit.TIME
 
 
 # A Python pull request, in a real Sandbox

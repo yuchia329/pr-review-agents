@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 from conftest import FixtureRepository, GathersNothing, model_listing
 
+from pr_verification.budget import Budget
 from pr_verification.cli import exit_code, main
 from pr_verification.decision import DecisionFailed, ScriptedDecider
 from pr_verification.model import ModelFailed, ModelRequest, ScriptedModel
@@ -43,7 +44,7 @@ def test_command_line_prints_the_report_and_exits_zero_when_the_gate_passes(
         "after": fixture_repository.after,
         "claims": [],
         "findings": [],
-        "budget_spend": {"dollars": 0.0, "steps": 0},
+        "budget_spend": {"dollars": 0.0, "steps": 1, "stopped_by": None, "claims": []},
     }
     assert code == 0
 
@@ -212,6 +213,70 @@ def test_command_line_exits_two_without_a_report_when_no_model_is_configured(
     assert captured.out == ""
     assert "no model is configured" in captured.err
     assert "Traceback" not in captured.err
+
+
+@pytest.mark.parametrize(
+    ("configured", "budget"),
+    [("5", Budget(steps=1)), ("1", None)],
+    ids=["on the call", "in the environment"],
+)
+def test_command_line_keeps_to_the_budget_it_is_given_or_else_the_one_the_environment_configures(
+    fixture_repository: FixtureRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    configured: str,
+    budget: Budget | None,
+) -> None:
+    # The variable is set either way, so a Budget given on the call is seen to win over it.
+    monkeypatch.setenv("PR_VERIFICATION_BUDGET_STEPS", configured)
+
+    code = main(
+        [
+            "--repo", str(fixture_repository.path),
+            "--before", fixture_repository.before,
+            "--after", fixture_repository.after,
+            "--title", "Fix the crash on empty input",
+        ],
+        model_listing("Fixes the crash on empty input"),
+        ScriptedDecider(["behavioural"]),
+        orchestration=GathersNothing(),
+        budget=budget,
+    )  # fmt: skip
+
+    # One step is the whole Budget, and listing the Claims spends it: the printed report says
+    # so, and the Claim is in it, unclassified and Inconclusive.
+    printed = json.loads(capsys.readouterr().out)
+    nothing = {"seconds": 0.0, "dollars": 0.0, "steps": 0, "stopped_by": None}
+    assert (printed["budget_spend"]["steps"], printed["budget_spend"]["stopped_by"]) == (1, "steps")
+    assert printed["budget_spend"]["claims"] == [nothing]
+    assert [(claim["verdict"], "kind" in claim) for claim in printed["claims"]] == [
+        ("inconclusive", False)
+    ]
+    assert code == 0
+
+
+def test_command_line_exits_two_without_a_report_when_the_budget_is_misconfigured(
+    fixture_repository: FixtureRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("PR_VERIFICATION_BUDGET_SECONDS", "soon")
+
+    code = main(
+        [
+            "--repo", str(fixture_repository.path),
+            "--before", fixture_repository.before,
+            "--after", fixture_repository.after,
+            "--title", "Tidy up",
+        ],
+        model_listing(),
+    )  # fmt: skip
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert captured.out == ""
+    assert captured.err.startswith("pr-verification: ")
+    assert len(captured.err.splitlines()) == 1
 
 
 class FailingModel:

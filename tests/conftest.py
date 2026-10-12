@@ -21,6 +21,16 @@ class FixtureRepository:
     after: str
 
 
+class Clock:
+    """A controlled clock: it reads `now`, and time passes only when a stand-in moves it on."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
 def git(path: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", "-C", str(path), *args], check=True, capture_output=True, text=True
@@ -61,7 +71,8 @@ def commit_snapshots(path: Path, *snapshots: Mapping[str, str]) -> tuple[str, ..
 
 @pytest.fixture(autouse=True)
 def no_model_configured(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A model configured on the developer's machine must not be reached from a test."""
+    """A model configured on the developer's machine must not be reached from a test, and a
+    Budget or a price configured there must not change one."""
     for name in (
         "PR_VERIFICATION_ENDPOINT",
         "PR_VERIFICATION_MODEL",
@@ -69,6 +80,11 @@ def no_model_configured(monkeypatch: pytest.MonkeyPatch) -> None:
         "PR_VERIFICATION_DECISION",
         "PR_VERIFICATION_DECISION_THRESHOLD",
         "PR_VERIFICATION_JEV_API_KEY",
+        "PR_VERIFICATION_BUDGET_SECONDS",
+        "PR_VERIFICATION_BUDGET_DOLLARS",
+        "PR_VERIFICATION_BUDGET_STEPS",
+        "PR_VERIFICATION_INPUT_PRICE",
+        "PR_VERIFICATION_OUTPUT_PRICE",
     ):
         monkeypatch.delenv(name, raising=False)
 

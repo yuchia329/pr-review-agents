@@ -5,7 +5,7 @@ import pytest
 from conftest import FixtureRepository, GathersNothing
 
 from pr_verification.core import PullRequest, run
-from pr_verification.model import ModelFailed, ModelRequest
+from pr_verification.model import ModelFailed, ModelRequest, PricedResponse, TokenPrice
 from pr_verification.openai_compatible import OpenAICompatibleModel, model_from_environment
 
 REQUEST = ModelRequest(instructions="List the Claims.", data='{"title": "Tidy up"}')
@@ -26,17 +26,23 @@ class Provider:
         return self._response
 
 
-def _answer(content: object) -> httpx.Response:
+def _answer(content: object, usage: object = None) -> httpx.Response:
     message = {"role": "assistant", "content": content}
-    return httpx.Response(200, json={"choices": [{"message": message, "finish_reason": "stop"}]})
+    answer: dict[str, object] = {"choices": [{"message": message, "finish_reason": "stop"}]}
+    if usage is not None:
+        answer["usage"] = usage
+    return httpx.Response(200, json=answer)
 
 
-def _model(provider: Provider, key: str = "secret-key") -> OpenAICompatibleModel:
+def _model(
+    provider: Provider, key: str = "secret-key", price: TokenPrice | None = None
+) -> OpenAICompatibleModel:
     return OpenAICompatibleModel(
         endpoint="https://provider.example/v1",
         model="some-model",
         key=key,
         transport=provider.transport,
+        price=price,
     )
 
 
@@ -256,11 +262,102 @@ def test_endpoint_and_model_name_come_from_configuration_and_a_local_one_needs_n
         {},
         {"PR_VERIFICATION_API_KEY": "", "PR_VERIFICATION_ENDPOINT": ""},
         {"PR_VERIFICATION_MODEL": "some-model"},
+        {"PR_VERIFICATION_INPUT_PRICE": "2.0", "PR_VERIFICATION_OUTPUT_PRICE": "6.0"},
     ],
-    ids=["nothing set", "set but empty", "only a model name"],
+    ids=["nothing set", "set but empty", "only a model name", "only a price"],
 )
 def test_no_model_is_configured_without_a_key_or_an_endpoint(environment: dict[str, str]) -> None:
     assert model_from_environment(environment) is None
+
+
+# What a request cost
+
+USAGE = {"prompt_tokens": 1_000, "completion_tokens": 500, "total_tokens": 1_500}
+PRICE = TokenPrice(input=2.0, output=6.0)
+
+
+def test_priced_request_is_the_one_request_and_costs_its_tokens_at_the_models_price() -> None:
+    provider = Provider(_answer('{"claims": []}', USAGE))
+
+    priced = _model(provider, price=PRICE).complete_priced(REQUEST)
+
+    assert priced.response == '{"claims": []}'
+    assert priced.dollars == pytest.approx(0.005)
+    assert len(provider.requests) == 1
+
+
+def test_price_changes_nothing_about_a_request_that_is_not_priced() -> None:
+    provider = Provider(_answer('{"claims": []}', USAGE))
+
+    assert _model(provider, price=PRICE).complete(REQUEST) == '{"claims": []}'
+
+
+@pytest.mark.parametrize(
+    ("price", "usage"),
+    [
+        (None, USAGE),
+        (PRICE, None),
+        (PRICE, {"prompt_tokens": 1_000}),
+        (PRICE, {"prompt_tokens": "1000", "completion_tokens": 500}),
+        (PRICE, {"prompt_tokens": 1_000, "completion_tokens": 0.5}),
+        (PRICE, {"prompt_tokens": -1, "completion_tokens": 500}),
+        (PRICE, "1500 tokens"),
+    ],
+    ids=[
+        "no price",
+        "no usage",
+        "one count missing",
+        "a count that is text",
+        "a count that is not whole",
+        "a count under zero",
+        "usage that is no object",
+    ],
+)
+def test_request_whose_cost_is_not_known_is_not_charged_for(
+    price: TokenPrice | None, usage: object
+) -> None:
+    provider = Provider(_answer("{}", usage))
+
+    assert _model(provider, price=price).complete_priced(REQUEST) == PricedResponse("{}", 0.0)
+
+
+def test_priced_request_that_fails_raises_what_the_plain_request_raises() -> None:
+    provider = Provider(httpx.Response(429, text="Rate limit reached"))
+
+    with pytest.raises(ModelFailed, match="429"):
+        _model(provider, price=PRICE).complete_priced(REQUEST)
+
+
+@pytest.mark.parametrize(
+    ("prices", "dollars"),
+    [
+        ({"PR_VERIFICATION_INPUT_PRICE": "2.0", "PR_VERIFICATION_OUTPUT_PRICE": "6"}, 0.005),
+        ({"PR_VERIFICATION_INPUT_PRICE": "2.0"}, 0.002),
+        ({"PR_VERIFICATION_INPUT_PRICE": "", "PR_VERIFICATION_OUTPUT_PRICE": "6"}, 0.003),
+        ({}, 0.0),
+    ],
+    ids=["both prices", "input alone", "output alone", "no price, as for a local model"],
+)
+def test_configured_model_charges_the_prices_the_environment_gives_for_a_million_tokens(
+    prices: dict[str, str], dollars: float
+) -> None:
+    provider = Provider(_answer("{}", USAGE))
+    environment = {"PR_VERIFICATION_ENDPOINT": "http://localhost:11434/v1", **prices}
+    model = model_from_environment(environment, provider.transport)
+
+    assert model is not None
+    assert model.complete_priced(REQUEST).dollars == pytest.approx(dollars)
+
+
+@pytest.mark.parametrize(
+    "variable", ["PR_VERIFICATION_INPUT_PRICE", "PR_VERIFICATION_OUTPUT_PRICE"]
+)
+@pytest.mark.parametrize("value", ["cheap", "-1"], ids=["not a number", "under zero"])
+def test_price_that_is_not_a_number_of_zero_or_more_gives_a_failure_naming_its_variable(
+    variable: str, value: str
+) -> None:
+    with pytest.raises(ModelFailed, match=variable):
+        model_from_environment({"PR_VERIFICATION_API_KEY": "secret-key", variable: value})
 
 
 def test_core_lists_the_claims_the_model_behind_the_endpoint_extracts_and_never_the_key(
