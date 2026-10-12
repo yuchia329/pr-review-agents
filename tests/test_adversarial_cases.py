@@ -1,7 +1,7 @@
 """The adversarial cases: false Claims that come with an attempt to manipulate the system.
 
 Nothing here reaches a model or a Sandbox. Each case's code is read back out of its repository
-and, to check the case against its answer key, run in this process: it is this project's own.
+and, to hold the case to its answer key, run in this process: it is this project's own.
 """
 
 from collections import Counter
@@ -14,13 +14,17 @@ from conftest import git
 from pr_verification.adversarial_cases import (
     FALSE_PULL_REQUESTS,
     FalsePullRequest,
-    Placement,
+    PlacedIn,
     adversarial_cases,
 )
 from pr_verification.evaluation import Case, Part
 from pr_verification.report import Verdict
 
-MADE = [(made, placement) for made in FALSE_PULL_REQUESTS for placement in Placement]
+MADE = [(made, placement) for made in FALSE_PULL_REQUESTS for placement in PlacedIn]
+
+RAISED = (KeyError, ValueError)
+"""What the code of a case raises where its Claim says a value is returned. Anything else,
+such as a name the answer key spelt wrongly, is a fault in the case and fails the test."""
 
 
 @pytest.fixture(scope="module")
@@ -70,9 +74,9 @@ def test_manipulation_is_placed_where_the_case_says_and_nowhere_else(
             line.removeprefix("# ") for line in module.splitlines() if line.startswith("# ")
         )
 
-        assert (made.manipulation in text) == (placement is Placement.DESCRIPTION), case.name
-        assert (made.manipulation in comments) == (placement is Placement.CODE_COMMENT), case.name
-        assert (repr(made.manipulation) in module) == (placement is Placement.PRINTED_OUTPUT)
+        assert (made.manipulation in text) == (placement is PlacedIn.DESCRIPTION), case.name
+        assert (made.manipulation in comments) == (placement is PlacedIn.CODE_COMMENT), case.name
+        assert (repr(made.manipulation) in module) == (placement is PlacedIn.PRINTED_OUTPUT)
         assert made.claim in shown.description
         before = git(shown.repository, "show", f"{shown.before}:{made.module}")
         assert before == made.before.strip()
@@ -84,11 +88,11 @@ def test_printed_manipulation_is_printed_when_the_changed_code_is_called(
     for case, (made, placement) in zip(cases, MADE, strict=True):
         try:
             called(after_module(case, made), made.call)
-        except Exception:
-            pass  # Some of the code raises where the Claim says it returns.
+        except RAISED:
+            pass
 
         printed = capsys.readouterr().out
-        assert (made.manipulation in printed) == (placement is Placement.PRINTED_OUTPUT), case.name
+        assert (made.manipulation in printed) == (placement is PlacedIn.PRINTED_OUTPUT), case.name
 
 
 def test_some_cases_plant_a_trivial_test_and_only_in_the_pull_request(
@@ -119,7 +123,7 @@ def test_answer_key_bears_out_that_every_claim_is_false(cases: tuple[Case, ...])
     for case, (made, _) in zip(cases, MADE, strict=True):
         try:
             given = called(after_module(case, made), made.call)
-        except Exception:
+        except RAISED:
             continue  # The Claim says a value is returned, and none is.
         assert given != eval(made.claimed), case.name
 

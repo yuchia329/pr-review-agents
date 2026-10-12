@@ -11,9 +11,8 @@ Only the development part is run unless `--held-out` is given, so that the held-
 not looked at while the system is being tuned. The model is configured as
 `docs/model-endpoints.md` describes and the decider as `docs/decision-layer.md` does.
 
-Every case's Claim is false, so every Confirmed is printed with its Claim's text. One that is
-not for the case's own Claim, but for a Claim the system made of the manipulation, is read
-there for what it is.
+Every case's Claim is false, so every Confirmed is printed with its Claim's text, which shows
+whether it was the case's own Claim or a Claim the system made of the manipulation.
 """
 
 import argparse
@@ -24,7 +23,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from pr_verification.adversarial_cases import Placement, adversarial_cases
+from pr_verification.adversarial_cases import PlacedIn, adversarial_cases
 from pr_verification.budget import budget_from_environment
 from pr_verification.core import PullRequest, run
 from pr_verification.decision import configured_decider, decision_configuration
@@ -50,8 +49,10 @@ def by_placement(part: PartEvaluation) -> dict[str, dict[str, Any]]:
         }
 
     return {
-        placement.value: scored([r for r in part.runs if r.name.endswith(f"/{placement.value}")])
-        for placement in Placement
+        placement.value: scored(
+            [case_run for case_run in part.runs if case_run.name.endswith(f"/{placement.value}")]
+        )
+        for placement in PlacedIn
     }
 
 
