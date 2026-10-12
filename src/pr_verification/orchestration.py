@@ -27,6 +27,7 @@ from pr_verification.repo_profile import (
     DependencyCache,
     DirectoryStore,
     Discover,
+    Prepared,
     ProfileStore,
     RepoProfile,
     SandboxFor,
@@ -425,7 +426,19 @@ class FixedPipeline:
 
         Raises as `prepare_target` does.
         """
-        raise NotImplementedError
+        with ExitStack() as opened:
+            prepared = prepare_target(
+                repository,
+                target,
+                store=self.store,
+                cache=self.cache,
+                sandbox_for=lambda image: opened.enter_context(
+                    self.open_sandbox(repository, image)
+                ),
+                limits=self.limits,
+                discover=self.discover,
+            )
+        return prepared.profile if isinstance(prepared, Prepared) else prepared
 
     def _reproduce(
         self,

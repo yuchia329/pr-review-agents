@@ -23,18 +23,35 @@ What is kept between runs
     workflow configuration, and so is which branches' pushes start a run.
 """
 
-from collections.abc import Mapping
+import json
+import os
+import secrets
+import subprocess
+import traceback
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Protocol
 
 import httpx
 
-from pr_verification.budget import Budget
-from pr_verification.decision import Decider
-from pr_verification.model import Model
-from pr_verification.orchestration import Orchestration
-from pr_verification.report import Gate
+from pr_verification.budget import Budget, InvalidBudget, budget_from_environment
+from pr_verification.claims import ClaimExtractionFailed
+from pr_verification.comment import MARKER, render_comment
+from pr_verification.core import InvalidPullRequest, PullRequest, run
+from pr_verification.decision import (
+    Decider,
+    InvalidDecisionConfiguration,
+    configured_decider,
+    decision_configuration,
+)
+from pr_verification.model import Model, ModelFailed
+from pr_verification.openai_compatible import model_from_environment
+from pr_verification.orchestration import FixedPipeline, Orchestration, fixed_pipeline
+from pr_verification.report import Gate, GateDecision
+from pr_verification.repository import git
+from pr_verification.tracing import traced
 
 EXIT_DONE = 0
 """The run did its work, whichever way the Gate went."""
@@ -99,6 +116,13 @@ NO_REPORT_CHECK_RUN = CheckRun(
 which may be Untrusted Content: that is in the job's log."""
 
 
+API_URL = "https://api.github.com"
+"""Where GitHub's REST API is, unless a run is told otherwise."""
+
+GRAPHQL_URL = "https://api.github.com/graphql"
+"""Where GitHub's GraphQL API is, unless a run is told otherwise."""
+
+
 def gate_check_run(gate: Gate) -> CheckRun:
     """The check run that reports `gate`.
 
@@ -106,7 +130,9 @@ def gate_check_run(gate: Gate) -> CheckRun:
     is `Gate: pass` or `Gate: block`, and the summary is the Gate's note. A pure function of
     `gate`, so no model has a say in the check run.
     """
-    raise NotImplementedError
+    blocks = gate.decision is GateDecision.BLOCK
+    conclusion = Conclusion.FAILURE if blocks else Conclusion.SUCCESS
+    return CheckRun(conclusion, f"Gate: {gate.decision.value}", gate.note)
 
 
 class GitHubFailed(Exception):
@@ -161,8 +187,8 @@ class GitHubAPI:
         repository: str,
         token: str,
         *,
-        api_url: str = "https://api.github.com",
-        graphql_url: str = "https://api.github.com/graphql",
+        api_url: str = API_URL,
+        graphql_url: str = GRAPHQL_URL,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         """A client for `repository`, named as GitHub names it: `<owner>/<name>`.
@@ -170,7 +196,19 @@ class GitHubAPI:
         `api_url` and `graphql_url` are where GitHub's REST API and its GraphQL API are.
         `transport` is for a caller that brings its own in place of the network.
         """
-        raise NotImplementedError
+        self._repository = repository
+        self._token = token
+        self._repository_url = f"{api_url.rstrip('/')}/repos/{repository}"
+        self._graphql_url = graphql_url
+        self._client = httpx.Client(
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            timeout=_TIMEOUT,
+            transport=transport,
+        )
 
     def linked_issue(self, pull_request: int) -> str:
         """See `GitHub.linked_issue`.
@@ -180,7 +218,20 @@ class GitHubAPI:
         `data.repository.pullRequest.closingIssuesReferences.nodes`. A body that is null is
         the empty string.
         """
-        raise NotImplementedError
+        owner, _, name = self._repository.partition("/")
+        variables = {"owner": owner, "name": name, "number": pull_request}
+        answer = self._ask("POST", self._graphql_url, {"query": _CLOSING, "variables": variables})
+        try:
+            pull = answer.json()["data"]["repository"]["pullRequest"]
+            issues = [
+                (issue["title"], issue["body"] or "")
+                for issue in pull["closingIssuesReferences"]["nodes"]
+            ]
+        except (ValueError, LookupError, TypeError, RecursionError):
+            issues = None
+        if issues is None or not all(isinstance(text, str) for issue in issues for text in issue):
+            raise self._failed("POST", self._graphql_url, f"gave no issues: {answer.text}")
+        return "\n\n".join(f"{title}\n\n{body}" for title, body in issues)
 
     def post_comment(self, pull_request: int, body: str) -> None:
         """See `GitHub.post_comment`.
@@ -196,7 +247,33 @@ class GitHubAPI:
         one is added with `POST <api_url>/repos/<repository>/issues/<pull_request>/comments`.
         Either request sends the JSON object `{"body": body}`.
         """
-        raise NotImplementedError
+        comments = f"{self._repository_url}/issues/{pull_request}/comments"
+        posted = self._posted_before(comments)
+        if posted is None:
+            self._ask("POST", comments, {"body": body})
+        else:
+            self._ask("PATCH", f"{self._repository_url}/issues/comments/{posted}", {"body": body})
+
+    def _posted_before(self, comments: str) -> int | None:
+        """The id of the comment this system posted before, among those listed at `comments`,
+        or None when it posted none."""
+        url = f"{comments}?per_page=100"
+        answer = self._ask("GET", url)
+        try:
+            listed = answer.json()
+        except (ValueError, RecursionError):
+            listed = None
+        if not isinstance(listed, list) or not all(isinstance(each, dict) for each in listed):
+            raise self._failed("GET", url, f"gave no list of comments: {answer.text}")
+        for comment in listed:
+            body, user, number = comment.get("body"), comment.get("user"), comment.get("id")
+            # Only a comment a bot wrote: a person can start one with the marker too.
+            written_by_bot = isinstance(user, dict) and user.get("type") == "Bot"
+            if isinstance(body, str) and body.startswith(MARKER) and written_by_bot:
+                if not isinstance(number, int):
+                    raise self._failed("GET", url, f"gave a comment with no id: {answer.text}")
+                return number
+        return None
 
     def set_check_run(self, commit: str, check_run: CheckRun) -> None:
         """See `GitHub.set_check_run`.
@@ -206,7 +283,60 @@ class GitHubAPI:
         of the check run's `Conclusion`, and `output` an object with its `title` and
         `summary`.
         """
-        raise NotImplementedError
+        self._ask(
+            "POST",
+            f"{self._repository_url}/check-runs",
+            {
+                "name": CHECK_RUN_NAME,
+                "head_sha": commit,
+                "status": "completed",
+                "conclusion": check_run.conclusion.value,
+                "output": {"title": check_run.title, "summary": check_run.summary},
+            },
+        )
+
+    def _ask(self, method: str, url: str, body: object = None) -> httpx.Response:
+        """Make one request, sending `body` as JSON when there is one. Raises `GitHubFailed`
+        when it cannot be sent or is answered with a status of 400 or more."""
+        try:
+            answer = self._client.request(method, url, json=body)
+        except (httpx.HTTPError, httpx.InvalidURL) as error:
+            # Not chained: the cause would be printed with any traceback, unredacted.
+            raise self._failed(method, url, f"could not be sent: {error}") from None
+        if answer.status_code >= 400:
+            raise self._failed(
+                method, url, f"was answered with HTTP {answer.status_code}: {answer.text}"
+            )
+        return answer
+
+    def _failed(self, method: str, url: str, what: str) -> GitHubFailed:
+        """One line, without the token: GitHub, or the layer that sends, may repeat it back."""
+        message = " ".join(f"GitHub's {method} {url} {what}".split())
+        if self._token:
+            message = message.replace(self._token, "[token removed]")
+        if len(message) > _LONGEST_FAILURE:
+            message = message[:_LONGEST_FAILURE] + " [cut short]"
+        return GitHubFailed(message)
+
+
+_TIMEOUT = httpx.Timeout(30.0)
+_LONGEST_FAILURE = 500
+
+_CLOSING = """\
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      closingIssuesReferences(first: 10) {
+        nodes {
+          title
+          body
+        }
+      }
+    }
+  }
+}
+"""
+"""Asks GitHub's GraphQL API for the issues a pull request closes."""
 
 
 def main(
@@ -313,4 +443,238 @@ def main(
         run's trace is sent before `main` returns, and the answer is the same as with
         tracing off.
     """
-    raise NotImplementedError
+    if environment is None:
+        environment = os.environ
+    log = _Log()
+    with traced(environment):
+        try:
+            return _run(environment, log, github, model, decider, orchestration, budget)
+        except Exception as error:
+            log.failed(error)
+            return EXIT_FAILED
+        finally:
+            log.close()
+
+
+class _CannotRun(Exception):
+    """The run cannot do its work as it was started. Its message is one line."""
+
+
+_FAILURES = (
+    _CannotRun,
+    GitHubFailed,
+    InvalidPullRequest,
+    InvalidBudget,
+    InvalidDecisionConfiguration,
+    ModelFailed,
+    ClaimExtractionFailed,
+    OSError,
+    UnicodeDecodeError,
+)
+"""What a run that could not do its work raises when nothing is at fault in the system, as
+the command line has it. Anything else is a fault, and is printed as its traceback."""
+
+
+class _Log:
+    """Prints what may hold Untrusted Content, where GitHub's runner acts on nothing."""
+
+    def __init__(self) -> None:
+        self._token = secrets.token_hex(16)
+        self._stopped = False
+
+    def print(self, text: str) -> None:
+        if not self._stopped:
+            print(f"::stop-commands::{self._token}")
+            self._stopped = True
+        print(text, flush=True)
+
+    def failed(self, error: Exception) -> None:
+        """Print a failure: its one line, or the traceback of a fault."""
+        if isinstance(error, _FAILURES):
+            self.print(f"pr-verification: {' '.join(str(error).split())}")
+        else:
+            self.print("".join(traceback.format_exception(error)).rstrip("\n"))
+
+    def close(self) -> None:
+        """Let the runner act on commands again, when it was stopped."""
+        if self._stopped:
+            print(f"::{self._token}::", flush=True)
+
+
+def _run(
+    environment: Mapping[str, str],
+    log: _Log,
+    github: GitHub | None,
+    model: Model | None,
+    decider: Decider | None,
+    orchestration: Orchestration | None,
+    budget: Budget | None,
+) -> int:
+    """One run of the Action, as `main` describes it. Raises for a failure that leaves nothing
+    more to do."""
+    repository = Path(_variable(environment, "GITHUB_WORKSPACE"))
+    state = _state_directory(environment, repository)
+    event = _variable(environment, "GITHUB_EVENT_NAME")
+    if event == "pull_request":
+        return _verify(
+            environment, log, repository, state, github, model, decider, orchestration, budget
+        )
+    if event != "push":
+        raise _CannotRun(f"the event {event!r} is neither a pull request nor a push")
+    pipeline = orchestration if isinstance(orchestration, FixedPipeline) else None
+    if pipeline is None and state is not None:
+        pipeline = fixed_pipeline(state)
+    if pipeline is not None:
+        pipeline.prepare_target_commit(repository, _variable(environment, "GITHUB_SHA"))
+    return EXIT_DONE
+
+
+def _verify(
+    environment: Mapping[str, str],
+    log: _Log,
+    repository: Path,
+    state: Path | None,
+    github: GitHub | None,
+    model: Model | None,
+    decider: Decider | None,
+    orchestration: Orchestration | None,
+    budget: Budget | None,
+) -> int:
+    """A run for a pull request, as `main` describes it. `state` is the directory that what is
+    kept between runs is kept in, if there is one."""
+    pull_request = _member(_event(environment), dict, "pull_request")
+    if _from_fork(pull_request):
+        print(f"::notice::{FORK_SKIPPED}", flush=True)
+        return EXIT_DONE
+    after = _member(pull_request, str, "head", "sha")
+    if github is None:
+        github = _github(environment)
+    try:
+        if model is None:
+            model = model_from_environment(environment)
+        if model is None:
+            raise _CannotRun(
+                "no model is configured, so nothing can be verified: set "
+                "PR_VERIFICATION_API_KEY, or PR_VERIFICATION_ENDPOINT for a model that needs "
+                "no key"
+            )
+        if decider is None:
+            decider = configured_decider(decision_configuration(environment), model)
+        if budget is None:
+            budget = budget_from_environment(environment)
+        if orchestration is None and state is not None:
+            orchestration = fixed_pipeline(state, progress_guard=decider)
+        number = _member(pull_request, int, "number")
+        report = run(
+            _gathered(pull_request, repository, after, github.linked_issue(number)),
+            model,
+            decider,
+            orchestration=orchestration,
+            budget=budget,
+            review=environment.get(REVIEW_VARIABLE) == "true",
+        )
+    except Exception as error:
+        log.failed(error)
+        # A failure of the system is not shown as a block, and the check run is not left waiting.
+        _delivered(log, lambda: github.set_check_run(after, NO_REPORT_CHECK_RUN))
+        return EXIT_FAILED
+    log.print(report.to_json())
+    delivered = [
+        _delivered(log, lambda: github.set_check_run(after, gate_check_run(report.gate))),
+        _delivered(log, lambda: github.post_comment(number, render_comment(report))),
+    ]
+    return EXIT_DONE if all(delivered) else EXIT_FAILED
+
+
+def _delivered(log: _Log, deliver: Callable[[], None]) -> bool:
+    """Whether `deliver` did its work. A failure is printed and not raised, so that what is
+    delivered next is delivered whatever came of this."""
+    try:
+        deliver()
+    except Exception as error:
+        log.failed(error)
+        return False
+    return True
+
+
+def _variable(environment: Mapping[str, str], name: str) -> str:
+    if not environment.get(name):
+        raise _CannotRun(f"{name} is not set")
+    return environment[name]
+
+
+def _state_directory(environment: Mapping[str, str], repository: Path) -> Path | None:
+    """The directory `STATE_VARIABLE` names, or None when it names none. Raises `_CannotRun`
+    when a pull request could write to it."""
+    named = environment.get(STATE_VARIABLE, "")
+    if not named:
+        return None
+    if Path(named).resolve().is_relative_to(repository.resolve()):
+        raise _CannotRun(
+            f"{STATE_VARIABLE} names a directory inside the checkout, where a pull request "
+            "could write to it"
+        )
+    return Path(named)
+
+
+def _event(environment: Mapping[str, str]) -> object:
+    """The event of the run. Raises `_CannotRun` when it cannot be read."""
+    path = _variable(environment, "GITHUB_EVENT_PATH")
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError) as error:
+        raise _CannotRun(f"the event at {path} cannot be read: {error}") from error
+
+
+def _member[Kind](event: object, kind: type[Kind], *path: str) -> Kind:
+    """The member of `event` at `path`, which is a `kind`. Raises `_CannotRun` when the event
+    has no such member."""
+    for name in path:
+        if not isinstance(event, dict) or name not in event:
+            raise _CannotRun(f"the event has no {'.'.join(path)}")
+        event = event[name]
+    if not isinstance(event, kind):
+        raise _CannotRun(f"the event's {'.'.join(path)} is not what GitHub gives")
+    return event
+
+
+def _from_fork(pull_request: Mapping[str, object]) -> bool:
+    """Whether the pull request comes from a fork, as `main` says one does."""
+    base = _member(pull_request, str, "base", "repo", "full_name")
+    repository = _member(pull_request, dict, "head").get("repo")
+    return not isinstance(repository, dict) or repository.get("full_name") != base
+
+
+def _github(environment: Mapping[str, str]) -> GitHubAPI:
+    """GitHub's own API, as the environment configures it."""
+    return GitHubAPI(
+        _variable(environment, "GITHUB_REPOSITORY"),
+        _variable(environment, "GITHUB_TOKEN"),
+        api_url=environment.get("GITHUB_API_URL") or API_URL,
+        graphql_url=environment.get("GITHUB_GRAPHQL_URL") or GRAPHQL_URL,
+    )
+
+
+def _gathered(
+    pull_request: Mapping[str, object], repository: Path, after: str, linked_issue: str
+) -> PullRequest:
+    """The pull request as the core takes one, from the event's `pull_request`."""
+    base = _member(pull_request, str, "base", "sha")
+    description = pull_request.get("body")
+    if description is not None and not isinstance(description, str):
+        raise _CannotRun("the event's pull_request.body is not what GitHub gives")
+    try:
+        before = git(repository, "merge-base", "--end-of-options", base, after).decode().strip()
+    except subprocess.CalledProcessError as error:
+        refusal = error.stderr.decode(errors="replace")
+        raise InvalidPullRequest(
+            f"cannot find where the pull request starts from in {repository}: {refusal}"
+        ) from error
+    return PullRequest(
+        repository=repository,
+        before=before,
+        after=after,
+        title=_member(pull_request, str, "title"),
+        description=description or "",
+        linked_issue=linked_issue,
+    )

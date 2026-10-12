@@ -1,0 +1,43 @@
+name: PR Verification
+description: >-
+  Verifies the Claims a pull request makes about its own changes, posts the report as one
+  comment, and reports the Gate as a check run of its own.
+
+# The model, the Budget, the decision layer, the Review, and tracing are configured by the
+# environment of the job that uses this Action: see docs/delivery.md.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v7
+      with:
+        # The pull request is compared with the commit of the target branch it starts from.
+        fetch-depth: 0
+        persist-credentials: false
+
+    # Restored before every run. No key is ever matched whole, so the newest state that the
+    # target branch saved is the one restored.
+    - uses: actions/cache/restore@v6.1.0
+      with:
+        path: ${{ runner.temp }}/pr-verification-state
+        key: pr-verification-state-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: pr-verification-state-
+
+    - uses: astral-sh/setup-uv@v10.3.0
+
+    - name: PR Verification
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        PR_VERIFICATION_STATE_DIR: ${{ runner.temp }}/pr-verification-state
+        # Paths reach the shell only as environment.
+        ACTION_PATH: ${{ github.action_path }}
+      run: uv run --project "$ACTION_PATH" --locked --no-dev pr-verification-action
+
+    # Saved only after a run for a push to the target branch: what a run for a pull request
+    # learns is never saved, so no pull request can write where a later run reads (ADR 0004).
+    - if: github.event_name == 'push'
+      uses: actions/cache/save@v6.1.0
+      with:
+        path: ${{ runner.temp }}/pr-verification-state
+        key: pr-verification-state-${{ github.run_id }}-${{ github.run_attempt }}
