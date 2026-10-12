@@ -233,7 +233,7 @@ def _run(
     )
     kinds = _classify(decider, claims, ledger, clock)
     gathered = _gather(
-        orchestration, ledger, claims, pull_request.repository, before, after, model, decider
+        orchestration, ledger, claims, kinds, pull_request.repository, before, after, model, decider
     )
     verified = tuple(
         _verified(text, kind, answer)
@@ -316,6 +316,7 @@ def _gather(
     orchestration: Orchestration | None,
     ledger: Ledger,
     claims: tuple[str, ...],
+    kinds: tuple[ClaimKind | None, ...],
     repository: Path,
     before: str,
     after: str,
@@ -324,7 +325,8 @@ def _gather(
 ) -> tuple[Gathered, ...]:
     """What the orchestration gathered for each Claim, with the fixed pipeline when none is
     given, whose progress guard `decider` then answers. One that keeps to a Budget is asked
-    within `ledger`. Raises `ValueError` when it does not answer for each Claim."""
+    within `ledger` and told `kinds`. Raises `ValueError` when it does not answer for each
+    Claim."""
     if not claims:
         return ()
     with ExitStack() as kept:
@@ -334,7 +336,13 @@ def _gather(
             orchestration = fixed_pipeline(Path(state), progress_guard=decider)
         if isinstance(orchestration, BudgetedOrchestration):
             gathered = orchestration.gather_within(
-                ledger, claims, repository=repository, before=before, after=after, model=model
+                ledger,
+                claims,
+                repository=repository,
+                before=before,
+                after=after,
+                model=model,
+                kinds=kinds,
             )
         else:
             gathered = orchestration.gather(
@@ -348,9 +356,10 @@ def _gather(
 
 
 def _verified(text: str, kind: ClaimKind | None, gathered: Gathered) -> Claim:
-    """One Claim of the report: its Verdict, computed from the Evidence gathered for it, and
-    its kind when it was classified."""
-    computed = compute_verdict(gathered.evidence)
+    """One Claim of the report: its Verdict, computed from the Evidence gathered for it and
+    its kind, which it has when it was classified. With none it is verified as a Behavioural
+    Claim."""
+    computed = compute_verdict(gathered.evidence, ClaimKind.BEHAVIOURAL if kind is None else kind)
     reason = computed.reason
     # What the orchestration says can explain an Inconclusive Verdict, and can never give one.
     if computed.verdict is Verdict.INCONCLUSIVE and gathered.inconclusive is not None:

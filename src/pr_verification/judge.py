@@ -8,15 +8,20 @@ can do is keep a Reproduction from deciding a Claim, by not accepting it: whethe
 Reproduction supports or contradicts its Claim is computed by code, from its runs.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 
-from pr_verification.agent import RoleRun
+from pr_verification.agent import Role, RoleRun, run_role
 from pr_verification.decision import Decider
 from pr_verification.ecosystem import ReproductionEcosystem
-from pr_verification.model import Model
-from pr_verification.report import AcceptedReproduction
-from pr_verification.reproduction import ReproductionRun
+from pr_verification.model import Model, ModelFailed
+from pr_verification.report import AcceptedReproduction, ReproductionEvidence
+from pr_verification.reproduction import (
+    Rejected,
+    ReproductionRun,
+    rewrite_reproduction,
+    write_reproduction,
+)
 from pr_verification.sandbox import Limits, Sandbox
 
 JUDGE_STEP_CAP = 3
@@ -39,6 +44,24 @@ rounds made and `reason` is the reason of the last rejection."""
 JUDGE_COULD_NOT_FINISH = "The Reproduction judge could not finish its work: {failure}"
 """Why a Claim is Inconclusive when the model failed while the judge was at work. `failure` is
 what the `ModelFailed` raised said."""
+
+_INSTRUCTIONS = """\
+You judge a Reproduction. A Claim is a statement a pull request makes about what its code does when
+it is run, and it is the "claim" of your task. A Reproduction is a test of what that Claim says, and
+it is the "reproduction" of your task. It is run against the code before the pull request and
+against the code after it.
+
+Decide one thing: whether the Reproduction tests what the Claim says. It does when it would pass on
+code that behaves as the Claim says and fail on code that does not. It does not when it could end
+the same way whatever that behaviour is: when it asserts nothing, asserts something the Claim does
+not say, or checks only that the code exists or can be called.
+
+Do not judge whether the Claim is true. You are shown the Claim and the Reproduction and nothing
+else, and you have no tools: judge from the two alone.
+
+Finish with {"accepted": true} when the Reproduction tests what the Claim says. Otherwise finish
+with why it does not, in one or two sentences, in this form:
+{"accepted": false, "reason": "<why>"}"""
 
 
 @dataclass(frozen=True)
@@ -90,7 +113,17 @@ def judge_reproduction(
 
     Raises as `run_role` does. `ModelFailed` is not caught here.
     """
-    raise NotImplementedError
+    role = Role("reproduction-judge", _INSTRUCTIONS, tools=(), step_cap=step_cap)
+    task = {"claim": claim, "reproduction": reproduction}
+    run = run_role(role, task, model, progress_guard=progress_guard)
+    answer = run.answer if run.answer is not None else {}
+    # Asked whether it is equal to `True`, 1 would pass for it.
+    if answer.get("accepted") is True:
+        return Judgement(accepted=True, reason=None, run=run)
+    reason = answer.get("reason")
+    if not (isinstance(reason, str) and reason.strip()):
+        reason = NO_REASON_GIVEN
+    return Judgement(accepted=False, reason=reason, run=run)
 
 
 @dataclass(frozen=True)
@@ -181,4 +214,61 @@ def write_judged_reproduction(
     Raises `ValueError` before any request when `round_cap` is less than 1. Any other
     exception is a fault in the system and is raised.
     """
-    raise NotImplementedError
+    if round_cap < 1:
+        raise ValueError(f"the cap on rounds is {round_cap}: under 1")
+    rounds: list[Round] = []
+    rejected: list[Rejected] = []
+
+    def ended(evidence: AcceptedReproduction | None, inconclusive: str | None) -> JudgedRun:
+        return JudgedRun(tuple(rounds), evidence, inconclusive)
+
+    while len(rounds) < round_cap:
+        if rounds:
+            written = rewrite_reproduction(
+                claim,
+                tuple(rejected),
+                model=model,
+                sandbox=sandbox,
+                ecosystem=ecosystem,
+                repository=repository,
+                before=before,
+                after=after,
+                limits=limits,
+                progress_guard=progress_guard,
+            )
+        else:
+            written = write_reproduction(
+                claim,
+                progress_guard,
+                model=model,
+                sandbox=sandbox,
+                ecosystem=ecosystem,
+                repository=repository,
+                before=before,
+                after=after,
+                limits=limits,
+            )
+        if written.evidence is None:
+            rounds.append(Round(written, judgement=None))
+            return ended(None, written.inconclusive)
+        reproduction = written.evidence.reproduction
+        try:
+            judgement = judge_reproduction(
+                claim, reproduction, model=model, progress_guard=progress_guard
+            )
+        except ModelFailed as failure:
+            rounds.append(Round(written, judgement=None))
+            return ended(None, JUDGE_COULD_NOT_FINISH.format(failure=failure))
+        rounds.append(Round(written, judgement))
+        if judgement.accepted:
+            return ended(_accepted(written.evidence), None)
+        rejected.append(Rejected(reproduction, judgement.reason or NO_REASON_GIVEN))
+    reason = ROUND_CAP_REACHED.format(rounds=len(rounds), reason=rejected[-1].reason)
+    return ended(None, reason)
+
+
+def _accepted(evidence: ReproductionEvidence) -> AcceptedReproduction:
+    """The Evidence of a Reproduction the judge accepted: all that `evidence` holds, and
+    nothing else. The one place an `AcceptedReproduction` is made."""
+    held = {field.name: getattr(evidence, field.name) for field in fields(evidence)}
+    return AcceptedReproduction(**held)

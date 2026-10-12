@@ -89,6 +89,21 @@ def reading_tools(repository: Path, commit: str) -> tuple[Tool, ...]:
     return _tools(_Files(repository, commit))
 
 
+def lines_holding(
+    repository: Path, commit: str, text: str, path: str | None = None
+) -> tuple[str, ...]:
+    """Every line of the files of `commit` that holds `text`, as the `search` tool of
+    `reading_tools` finds, writes, and orders them, and none when no line holds it.
+
+    With `path`, only the lines of the file at that path, named as `reading_tools` names a
+    file. A commit with no file there has no line that holds the text.
+    """
+    files = _Files(repository, commit)
+    if path is None:
+        return tuple(files.holding(text, sorted(files.paths)))
+    return tuple(files.holding(text, [path])) if path in files.paths else ()
+
+
 @dataclass(frozen=True)
 class Located:
     """What the locator found for one Claim, and the record of its run."""
@@ -206,6 +221,17 @@ class _Files:
             yield path, _lines(answers[content_starts:content_ends])
             start = content_ends + 1
 
+    def holding(self, text: str, paths: Sequence[str]) -> list[str]:
+        """Every line of these files that holds `text` exactly as written, each as
+        `<path>:<line number>:<line>`, in the order of `paths` and then by line number. Each
+        is one of `paths`."""
+        return [
+            f"{path}:{number}:{line}"
+            for path, lines in self.lines_of_each(paths)
+            for number, line in enumerate(lines, start=1)
+            if text in line
+        ]
+
 
 def _lines(content: bytes) -> list[str]:
     """The lines of a file, a line being what `reading_tools` says it is."""
@@ -234,12 +260,7 @@ def _tools(files: _Files) -> tuple[Tool, ...]:
         given = usable_arguments(arguments, needed=("text",))
         if given is None:
             return BAD_ARGUMENTS
-        found = [
-            f"{path}:{number}:{line}"
-            for path, lines in files.lines_of_each(sorted(files.paths))
-            for number, line in enumerate(lines, start=1)
-            if given["text"] in line
-        ]
+        found = files.holding(given["text"], sorted(files.paths))
         return "\n".join(found) if found else NOTHING_FOUND
 
     def read_file(arguments: Mapping[str, object]) -> str:

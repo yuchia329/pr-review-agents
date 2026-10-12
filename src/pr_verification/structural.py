@@ -11,10 +11,11 @@ there is none.
 from dataclasses import dataclass
 from pathlib import Path
 
-from pr_verification.agent import RoleRun
+from pr_verification.agent import Role, RoleRun, Stopped, Tool, run_role
 from pr_verification.decision import Decider
-from pr_verification.model import Model
-from pr_verification.report import SearchEvidence
+from pr_verification.model import Model, ModelFailed
+from pr_verification.reading import lines_holding, reading_tools
+from pr_verification.report import EvidenceSource, SearchEvidence, TextChange
 
 VERIFIER_STEP_CAP = 12
 """The most steps one run of the Structural verifier takes unless another cap is given."""
@@ -32,6 +33,33 @@ step cap."""
 VERIFIER_COULD_NOT_FINISH = "The Structural verifier could not finish its work: {failure}"
 """Why a Claim is Inconclusive when the model failed. `failure` is what the `ModelFailed`
 raised said."""
+
+_INSTRUCTIONS = """\
+You find the texts that a Structural Claim is about. A Structural Claim is a statement a pull
+request makes about the text of its code, such as a rename, a removal, a change to a document, or a
+value in a configuration file. It is the "claim" of your task.
+
+Your tools read the files of the repository as they were before the pull request and as they are
+after it. Use them to find what the Claim says the pull request adds or removes, exactly as the
+code writes it: a name, a setting with its value, a line of a document.
+
+Do not judge whether the Claim is true. The code of both is searched for each text you name, and
+what is found decides. A text is matched exactly as written and letter case matters. It is not a
+pattern, and it is one line or part of one. Name a text long enough to tell it apart from everything
+else in the code and no longer, and at most {cap} of them. Give a "path" to search only the one
+file the Claim is about.
+
+Finish with each text and whether the Claim says the pull request "added" it or "removed" it, in
+this form:
+{{"texts": [{{"text": "UserManager", "change": "removed"}},
+{{"text": "retries = 3", "change": "added", "path": "settings.toml"}}]}}
+When the Claim names no text that is added or removed, finish with {{"texts": []}}."""
+
+_READS = {"before": "In the code before the pull request", "after": "In the code after it"}
+"""Which code a tool reads, by what stands in front of its name: how its description starts."""
+
+_MEMBERS = {"text", "change", "path"}
+"""The members an entry of the role's answer may have."""
 
 
 @dataclass(frozen=True)
@@ -117,4 +145,65 @@ def verify_structural_claim(
     Raises `ValueError` before any request when `step_cap` is less than 1. Any other
     exception is a fault in the system and is raised.
     """
-    raise NotImplementedError
+    commits = {"before": before, "after": after}
+    role = Role(
+        name="structural-verifier",
+        instructions=_INSTRUCTIONS.format(cap=TEXT_CAP),
+        tools=tuple(
+            Tool(f"{which}_{tool.name}", f"{_READS[which]}: {tool.description}", tool.run)
+            for which, commit in commits.items()
+            for tool in reading_tools(repository, commit)
+        ),
+        step_cap=step_cap,
+    )
+    try:
+        run = run_role(role, {"claim": claim}, model, progress_guard=progress_guard)
+    except ModelFailed as failure:
+        reason = VERIFIER_COULD_NOT_FINISH.format(failure=failure)
+        return StructuralRun(run=None, evidence=(), inconclusive=reason)
+    if run.stopped is Stopped.STEP_CAP:
+        reason = VERIFIER_STEP_CAP_REACHED.format(steps=step_cap)
+        return StructuralRun(run, evidence=(), inconclusive=reason)
+    texts = run.answer.get("texts") if run.answer is not None else None
+    if not isinstance(texts, list) or len(texts) > TEXT_CAP:
+        return StructuralRun(run, evidence=(), inconclusive=None)
+    named = [entry for entry in map(_named, texts) if entry is not None]
+    evidence = tuple(
+        _searched(repository, before, after, text, change, path) for text, change, path in named
+    )
+    return StructuralRun(run, evidence, inconclusive=None)
+
+
+def _named(entry: object) -> tuple[str, TextChange, str | None] | None:
+    """The text an entry of the role's answer names, what it says the pull request does to it,
+    and the one file to search when it names one. None when the entry cannot be used."""
+    if not (isinstance(entry, dict) and {"text", "change"} <= entry.keys() <= _MEMBERS):
+        return None
+    text, change, path = entry["text"], entry["change"], entry.get("path")
+    if not (isinstance(text, str) and text.strip() and "\n" not in text):
+        return None
+    if not (isinstance(change, str) and change in TextChange):
+        return None
+    if "path" in entry and not (isinstance(path, str) and path):
+        return None
+    return text, TextChange(change), path
+
+
+def _searched(
+    repository: Path, before: str, after: str, text: str, change: TextChange, path: str | None
+) -> SearchEvidence:
+    """What code found of one text in the two commits. Nothing the role said is in it but the
+    text, the change, and the path it named."""
+    before_lines = lines_holding(repository, before, text, path)
+    after_lines = lines_holding(repository, after, text, path)
+    return SearchEvidence(
+        source=EvidenceSource.READ_CODE,
+        observation=(
+            f"lines holding the text: {len(before_lines)} before, {len(after_lines)} after"
+        ),
+        text=text,
+        change=change,
+        path=path,
+        before_lines=before_lines,
+        after_lines=after_lines,
+    )

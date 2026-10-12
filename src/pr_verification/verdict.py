@@ -4,7 +4,15 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from pr_verification.ecosystem import Results
-from pr_verification.report import ClaimKind, Evidence, ReproductionEvidence, Verdict
+from pr_verification.report import (
+    AcceptedReproduction,
+    ClaimKind,
+    Evidence,
+    ReproductionEvidence,
+    SearchEvidence,
+    TextChange,
+    Verdict,
+)
 
 CONFIRMED = (
     "The Reproduction fails on the code before the pull request and passes on the code after it."
@@ -176,10 +184,16 @@ def compute_verdict(
         is for the Structural cases of the evaluation to measure.
     """
     if kind is ClaimKind.STRUCTURAL:
-        raise NotImplementedError
-    read = [results for results in map(_ran_on_both_commits, evidence) if results is not None]
-    if not read:
+        return _from_searches([piece for piece in evidence if isinstance(piece, SearchEvidence)])
+    ran = [
+        (piece, results)
+        for piece in evidence
+        if (results := _ran_on_both_commits(piece)) is not None
+    ]
+    if not ran:
         return Computed(Verdict.INCONCLUSIVE, NO_REPRODUCTION_RAN)
+    # That it ran is all a Reproduction the judge did not accept is read for.
+    read = [results for piece, results in ran if isinstance(piece, AcceptedReproduction)]
     supported = any(_holds_on_one_only(held=after, other=before) for before, after in read)
     contradicted = any(_holds_on_one_only(held=before, other=after) for before, after in read)
     if supported and not contradicted:
@@ -187,6 +201,29 @@ def compute_verdict(
     if contradicted and not supported:
         return Computed(Verdict.REFUTED, REFUTED)
     return Computed(Verdict.INCONCLUSIVE, DECIDES_NOTHING)
+
+
+def _from_searches(searches: Sequence[SearchEvidence]) -> Computed:
+    """The Verdict for a Structural Claim, from the searches among its Evidence."""
+    if not searches:
+        return Computed(Verdict.INCONCLUSIVE, NOTHING_SEARCHED)
+    # Only the change and how many lines hold the text on each commit are read.
+    found = [
+        (search.change, len(search.before_lines), len(search.after_lines)) for search in searches
+    ]
+    if any(change is TextChange.REMOVED and before and after for change, before, after in found):
+        return Computed(Verdict.REFUTED, STRUCTURAL_REFUTED)
+    if all(_shows_the_change(change, before, after) for change, before, after in found):
+        return Computed(Verdict.CONFIRMED, STRUCTURAL_CONFIRMED)
+    return Computed(Verdict.INCONCLUSIVE, SEARCH_DECIDES_NOTHING)
+
+
+def _shows_the_change(change: TextChange, before: int, after: int) -> bool:
+    """Whether a text held on this many lines of each commit was changed as `change` says: on
+    no line of the one commit and at least one of the other."""
+    if change is TextChange.ADDED:
+        return not before and bool(after)
+    return bool(before) and not after
 
 
 def _ran_on_both_commits(evidence: Evidence) -> tuple[Results, Results] | None:

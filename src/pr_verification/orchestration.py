@@ -10,7 +10,7 @@ An orchestration that is told the kind of each Claim routes by it: a Behavioural
 to a Reproduction, and a Structural Claim is verified by reading and is not sent to a Sandbox.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, ExitStack
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,7 +20,7 @@ from pr_verification.budget import BUDGET_SPENT, BudgetSpent, Ledger
 from pr_verification.decision import Decider
 from pr_verification.ecosystem import ReproductionEcosystem, Unsupported, find_commands
 from pr_verification.evidence import ending
-from pr_verification.judge import ROUND_CAP
+from pr_verification.judge import ROUND_CAP, write_judged_reproduction
 from pr_verification.model import Model
 from pr_verification.repo_profile import (
     CommandFailed,
@@ -35,7 +35,6 @@ from pr_verification.repo_profile import (
     prepare_target,
 )
 from pr_verification.report import ClaimKind, Evidence
-from pr_verification.reproduction import write_reproduction
 from pr_verification.sandbox import (
     ContainerSandbox,
     Limits,
@@ -43,6 +42,7 @@ from pr_verification.sandbox import (
     SandboxFailed,
     SandboxWithHomes,
 )
+from pr_verification.structural import verify_structural_claim
 
 LIMITS = Limits(seconds=600.0, memory_bytes=2 * 1024**3, processors=2.0)
 """The most one run in the Sandbox may use unless other limits are given."""
@@ -335,40 +335,47 @@ class FixedPipeline:
         Every Sandbox opened is closed before the answer is given or an exception goes on.
         Raises what `gather` raises. `BudgetSpent` is never raised from here.
         """
-        if kinds is not None:
-            raise NotImplementedError
+        if kinds is None:
+            kinds = (None,) * len(claims)
+        if len(kinds) != len(claims):
+            raise ValueError(f"{len(kinds)} kinds were given for the {len(claims)} Claims")
         if not claims:
             return ()
+        gathered: dict[int, Gathered] = {}
         with ExitStack() as opened:
             try:
-                gathered = self._gather_until_spent(
-                    ledger, claims, repository, before, after, model, opened
-                )
+                for index, given in self._gather_until_spent(
+                    ledger, claims, kinds, repository, before, after, model, opened
+                ):
+                    gathered[index] = given
             except BudgetSpent:
-                # It was spent while preparing, so no Claim had been answered for.
-                gathered = []
+                # It was spent while preparing or by setting the shares aside. The Claims
+                # answered for by then keep what they were given.
+                pass
         limit = ledger.stopped_by()
         if limit is None:
-            return tuple(gathered)
+            return tuple(gathered[index] for index in range(len(claims)))
         unresolved = Gathered((), BUDGET_SPENT.format(limit=limit.value))
-        return (*gathered, *[unresolved] * (len(claims) - len(gathered)))
+        return tuple(gathered.get(index, unresolved) for index in range(len(claims)))
 
     def _gather_until_spent(
         self,
         ledger: Ledger,
         claims: tuple[str, ...],
+        kinds: tuple[ClaimKind | None, ...],
         repository: Path,
         before: str,
         after: str,
         model: Model,
         opened: ExitStack,
-    ) -> list[Gathered]:
-        """The steps of `gather_within`, for as long as the Budget is not spent: what each Claim
-        is given, for the Claims answered for by then, in the order of `claims`. Raises
+    ) -> Iterator[tuple[int, Gathered]]:
+        """The steps of `gather_within`, for as long as the Budget is not spent: the place in
+        `claims` of each Claim answered for by then, with what it is given. Raises
         `BudgetSpent` when the Budget is spent during steps 1 to 3 or by setting the shares
         aside. Every Sandbox opened is left for `opened` to close."""
         if ledger.stopped_by() is not None:
-            return []
+            return
+        structural = [kind is ClaimKind.STRUCTURAL for kind in kinds]
         # Each Sandbox as it is used while preparing, with the same Sandbox as it was opened.
         as_opened: dict[SandboxWithHomes, SandboxWithHomes] = {}
 
@@ -381,32 +388,41 @@ class FixedPipeline:
             as_opened[through] = sandbox
             return through
 
-        ready = self._prepare(repository, before, after, sandbox_for)
+        # Steps 1 to 3 are for the Claims that go on to a Reproduction, when there are any.
+        ready = None if all(structural) else self._prepare(repository, before, after, sandbox_for)
         if isinstance(ready, str):
-            return [Gathered((), ready) for _ in claims]
+            # No Reproduction can be run, so each Claim that would go on to one is answered for.
+            for index in range(len(claims)):
+                if not structural[index]:
+                    yield index, Gathered((), ready)
+            if not any(structural):
+                return
         ledger.share_out(len(claims))
-        sandbox = as_opened[ready.sandbox]
-        gathered: list[Gathered] = []
         for index, claim in enumerate(claims):
+            if not (structural[index] or isinstance(ready, _Ready)):
+                continue
             if ledger.stopped_by() is not None:
                 break
             try:
-                gathered.append(
-                    self._reproduce(
+                if isinstance(ready, _Ready) and not structural[index]:
+                    given = self._reproduce(
                         claim,
                         ledger.model(model, claim=index),
-                        ledger.sandbox(sandbox, claim=index),
+                        ledger.sandbox(as_opened[ready.sandbox], claim=index),
                         ready.ecosystem,
                         repository,
                         before,
                         after,
                     )
-                )
+                else:
+                    given = self._verify_by_reading(
+                        claim, ledger.model(model, claim=index), repository, before, after
+                    )
             except BudgetSpent as spent:
                 if spent.claim is None:
                     break
-                gathered.append(Gathered((), str(spent)))
-        return gathered
+                given = Gathered((), str(spent))
+            yield index, given
 
     def prepare_target_commit(
         self, repository: Path, target: str
@@ -452,9 +468,8 @@ class FixedPipeline:
     ) -> Gathered:
         """Step 4 of `gather` for one Claim: what it is given, with every request made to
         `model` and every run made in `sandbox`."""
-        written = write_reproduction(
+        judged = write_judged_reproduction(
             claim,
-            self.progress_guard,
             model=model,
             sandbox=sandbox,
             ecosystem=ecosystem,
@@ -462,9 +477,26 @@ class FixedPipeline:
             before=before,
             after=after,
             limits=self.limits,
+            round_cap=self.round_cap,
+            progress_guard=self.progress_guard,
         )
-        evidence = () if written.evidence is None else (written.evidence,)
-        return Gathered(evidence, written.inconclusive)
+        evidence = () if judged.evidence is None else (judged.evidence,)
+        return Gathered(evidence, judged.inconclusive)
+
+    def _verify_by_reading(
+        self, claim: str, model: Model, repository: Path, before: str, after: str
+    ) -> Gathered:
+        """Step 4 of `gather_within` for one Structural Claim: what it is given, with every
+        request made to `model` and nothing run."""
+        verified = verify_structural_claim(
+            claim,
+            repository=repository,
+            before=before,
+            after=after,
+            model=model,
+            progress_guard=self.progress_guard,
+        )
+        return Gathered(verified.evidence, verified.inconclusive)
 
     def _prepare(
         self, repository: Path, before: str, after: str, sandbox_for: SandboxFor
