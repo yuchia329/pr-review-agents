@@ -16,14 +16,17 @@ from conftest import (
     GathersNothing,
     UnreachableModel,
     commit,
+    exported_spans,
     git,
     model_listing,
     results,
 )
+from hypothesis import given
+from hypothesis import strategies as st
 
 import pr_verification
 from pr_verification.comment import MARKER, render_comment
-from pr_verification.decision import ScriptedDecider
+from pr_verification.decision import Decider, ScriptedDecider
 from pr_verification.ecosystem import Unsupported
 from pr_verification.github_action import (
     CHECK_RUN_NAME,
@@ -52,7 +55,7 @@ from pr_verification.report import (
     Report,
     Verdict,
 )
-from pr_verification.sandbox import RunResult
+from pr_verification.sandbox import RunResult, SandboxFailed
 from pr_verification.tracing import ENDPOINT_VARIABLE
 
 TOKEN = "ghs_zqSecretToken"
@@ -64,19 +67,19 @@ ONE_INCONCLUSIVE = "Claims: 0 Confirmed, 0 Refuted, 1 Inconclusive."
 # The check run
 
 
-@pytest.mark.parametrize(
-    ("decision", "conclusion", "title"),
-    [
-        (GateDecision.PASS, Conclusion.SUCCESS, "Gate: pass"),
-        (GateDecision.BLOCK, Conclusion.FAILURE, "Gate: block"),
-    ],
-)
-def test_check_run_reports_the_gate_with_its_note_as_the_summary(
-    decision: GateDecision, conclusion: Conclusion, title: str
-) -> None:
-    gate = Gate(decision, "Claims: 2 Confirmed, 1 Refuted, 0 Inconclusive.")
+REPORTED_AS = {
+    GateDecision.PASS: (Conclusion.SUCCESS, "Gate: pass"),
+    GateDecision.BLOCK: (Conclusion.FAILURE, "Gate: block"),
+}
 
-    assert gate_check_run(gate) == CheckRun(conclusion, title, gate.note)
+
+@given(decision=st.sampled_from(GateDecision), note=st.text())
+def test_check_run_reports_any_gate_by_its_decision_with_its_note_as_the_summary(
+    decision: GateDecision, note: str
+) -> None:
+    conclusion, title = REPORTED_AS[decision]
+
+    assert gate_check_run(Gate(decision, note)) == CheckRun(conclusion, title, note)
 
 
 # GitHub's own API
@@ -272,22 +275,28 @@ class RecordingGitHub:
         return [name for name, *_ in self.calls]
 
 
+SAME_REPOSITORY: Mapping[str, object] = {"full_name": REPOSITORY}
+ABSENT = "the event's `head` has no `repo` at all"
+
+
 def pull_request_event(
     repository: FixtureRepository,
     *,
     body: str | None = "Also tidies the greeting.",
-    head_repository: object = REPOSITORY,
+    head_repo: object = SAME_REPOSITORY,
 ) -> dict[str, object]:
     """The event GitHub gives a run for a pull request numbered 7."""
-    head_repo = {"full_name": head_repository} if isinstance(head_repository, str) else None
+    head = {"sha": repository.after, "repo": head_repo}
+    if head_repo is ABSENT:
+        del head["repo"]
     return {
         "action": "synchronize",
         "pull_request": {
             "number": 7,
             "title": "Fix the crash on empty input",
             "body": body,
-            "head": {"sha": repository.after, "repo": head_repo},
-            "base": {"sha": repository.before, "repo": {"full_name": REPOSITORY}},
+            "head": head,
+            "base": {"sha": repository.before, "repo": SAME_REPOSITORY},
         },
     }
 
@@ -314,14 +323,17 @@ def environment_for(
     }
 
 
+STOP_LINE = re.compile("^::stop-commands::([0-9a-fA-F]{32})$", flags=re.MULTILINE)
+
+
 def between_the_stops(out: str) -> str:
-    """What a run printed for a reader, which is all that lies between the two lines that stop
-    GitHub's runner acting on commands."""
-    first, *between, last = out.splitlines()
-    stopped = re.fullmatch("::stop-commands::([0-9a-fA-F]{32})", first)
-    assert stopped is not None
-    assert last == f"::{stopped[1]}::"
-    return "\n".join(between)
+    """What a run printed between the line that stops GitHub's runner acting on commands and
+    the line that ends the stop, each of which it printed once."""
+    lines = out.splitlines()
+    (token,) = STOP_LINE.findall(out)
+    stop, end = lines.index(f"::stop-commands::{token}"), lines.index(f"::{token}::")
+    assert lines.count(f"::{token}::") == 1 and stop < end
+    return "\n".join(lines[stop + 1 : end])
 
 
 def report_printed(printed: Mapping[str, object]) -> Report:
@@ -422,7 +434,7 @@ class GathersARegression:
         return tuple(Gathered((REGRESSION,)) for _ in claims)
 
 
-def test_gate_that_blocks_is_a_failed_check_run_and_the_run_still_ends_as_done(
+def test_gate_that_blocks_is_a_check_run_concluded_as_failure_and_the_run_still_ends_as_done(
     fixture_repository: FixtureRepository, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     github = RecordingGitHub()
@@ -467,15 +479,19 @@ def test_pull_request_is_compared_with_the_commit_of_the_target_branch_it_starts
     assert github.calls[1][:2] == ("set_check_run", head)
 
 
-@pytest.mark.parametrize("head_repository", ["someone/shop", None])
+@pytest.mark.parametrize(
+    "head_repo",
+    [{"full_name": "someone/shop"}, None, ABSENT],
+    ids=["another repository", "a repository that is gone", "no repository named"],
+)
 def test_pull_request_from_a_fork_is_skipped_with_a_notice_and_nothing_else_is_done(
-    head_repository: object,
+    head_repo: object,
     fixture_repository: FixtureRepository,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     github, model = RecordingGitHub(), ScriptedModel([])
-    event = pull_request_event(fixture_repository, head_repository=head_repository)
+    event = pull_request_event(fixture_repository, head_repo=head_repo)
     environment = environment_for(tmp_path, fixture_repository, event)
     del environment["GITHUB_TOKEN"]
 
@@ -521,31 +537,69 @@ class Faulty:
         raise Fault("the orchestration has a fault")
 
 
-@pytest.mark.parametrize("cause", ["the model", "GitHub", "a fault"])
-def test_run_with_no_report_posts_no_comment_and_reports_a_neutral_check_run(
-    cause: str,
+def neutral_check_runs(github: RecordingGitHub) -> list[tuple[object, ...]]:
+    return [call for call in github.calls if call[0] == "set_check_run"]
+
+
+@pytest.mark.parametrize(
+    ("failing", "model", "decider", "configured"),
+    [
+        pytest.param((), UnreachableModel(), ScriptedDecider([]), {}, id="the model fails"),
+        pytest.param(
+            ("linked_issue",), ScriptedModel([]), ScriptedDecider([]), {}, id="GitHub fails"
+        ),
+        pytest.param((), None, ScriptedDecider([]), {}, id="no model is configured"),
+        pytest.param(
+            (),
+            ScriptedModel([]),
+            None,
+            {"PR_VERIFICATION_DECISION": "gpt"},
+            id="the decision layer cannot be had as configured",
+        ),
+    ],
+)
+def test_run_with_no_report_posts_no_comment_reports_a_neutral_check_run_and_prints_one_line(
+    failing: Collection[str],
+    model: Model | None,
+    decider: Decider | None,
+    configured: Mapping[str, str],
     fixture_repository: FixtureRepository,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    github = RecordingGitHub(failing={"linked_issue"} if cause == "GitHub" else ())
+    github = RecordingGitHub(failing=failing)
     event = pull_request_event(fixture_repository)
+    environment = environment_for(tmp_path, fixture_repository, event, **configured)
 
-    code = verify(
-        environment_for(tmp_path, fixture_repository, event),
-        github,
-        UnreachableModel() if cause == "the model" else None,
-        Faulty() if cause == "a fault" else None,
+    code = main(
+        environment, github=github, model=model, decider=decider, orchestration=GathersNothing()
     )
 
     assert code == EXIT_FAILED
-    assert github.calls[1:] == [("set_check_run", fixture_repository.after, NO_REPORT_CHECK_RUN)]
+    assert "post_comment" not in github.asked()
+    assert neutral_check_runs(github) == [
+        ("set_check_run", fixture_repository.after, NO_REPORT_CHECK_RUN)
+    ]
     printed = between_the_stops(capsys.readouterr().out)
-    if cause == "a fault":
-        assert "Traceback" in printed and "the orchestration has a fault" in printed
-    else:
-        assert printed.startswith("pr-verification: ")
-        assert len(printed.splitlines()) == 1
+    assert printed.startswith("pr-verification: ")
+    assert len(printed.splitlines()) == 1
+
+
+def test_fault_in_the_system_is_printed_as_its_traceback_and_reported_as_a_neutral_check_run(
+    fixture_repository: FixtureRepository, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    github = RecordingGitHub()
+    event = pull_request_event(fixture_repository)
+
+    code = verify(environment_for(tmp_path, fixture_repository, event), github, None, Faulty())
+
+    assert code == EXIT_FAILED
+    assert "post_comment" not in github.asked()
+    assert neutral_check_runs(github) == [
+        ("set_check_run", fixture_repository.after, NO_REPORT_CHECK_RUN)
+    ]
+    printed = between_the_stops(capsys.readouterr().out)
+    assert "Traceback" in printed and "the orchestration has a fault" in printed
 
 
 def test_neutral_check_run_that_github_refuses_is_one_more_printed_line(
@@ -564,8 +618,11 @@ def test_neutral_check_run_that_github_refuses_is_one_more_printed_line(
 
 
 @pytest.mark.parametrize("event", [None, "this is not JSON", "[]", "{}"])
-def test_event_that_cannot_be_read_is_a_failure_and_nothing_is_asked_of_anyone(
-    event: str | None, fixture_repository: FixtureRepository, tmp_path: Path
+def test_event_that_cannot_be_read_is_a_failure_of_one_line_and_nothing_is_asked_of_anyone(
+    event: str | None,
+    fixture_repository: FixtureRepository,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     github, model = RecordingGitHub(), model_listing(CLAIM)
     environment = environment_for(tmp_path, fixture_repository, event or "")
@@ -577,6 +634,9 @@ def test_event_that_cannot_be_read_is_a_failure_and_nothing_is_asked_of_anyone(
     assert code == EXIT_FAILED
     assert github.calls == []
     assert model.requests == []
+    printed = between_the_stops(capsys.readouterr().out)
+    assert printed.startswith("pr-verification: ")
+    assert len(printed.splitlines()) == 1
 
 
 def test_event_that_is_neither_a_pull_request_nor_a_push_is_a_failure_and_nothing_is_done(
@@ -626,9 +686,8 @@ def test_untrusted_content_is_printed_only_where_the_runner_acts_on_nothing(
     verify(environment, RecordingGitHub(), model_listing(command))
     second = capsys.readouterr().out
 
-    assert command in between_the_stops(first)
-    assert first.count("::stop-commands::") == 1
-    assert first.splitlines()[0] != second.splitlines()[0], "each run chooses a token of its own"
+    assert first.count(command) == between_the_stops(first).count(command) > 0
+    assert STOP_LINE.findall(first) != STOP_LINE.findall(second), "each run chooses its token"
 
 
 # A push to the target branch
@@ -638,14 +697,24 @@ def test_untrusted_content_is_printed_only_where_the_runner_acts_on_nothing(
 class Prepares(FixedPipeline):
     """A fixed pipeline that records each commit it is asked to prepare, and prepares none."""
 
-    answer: RepoProfile | Unsupported | CommandFailed = Unsupported("Nothing to install.")
+    answer: RepoProfile | Unsupported | CommandFailed | Exception = Unsupported("Not found.")
     asked: list[tuple[Path, str]] = field(default_factory=list)
 
     def prepare_target_commit(
         self, repository: Path, target: str
     ) -> RepoProfile | Unsupported | CommandFailed:
         self.asked.append((repository.resolve(), target))
+        if isinstance(self.answer, Exception):
+            raise self.answer
         return self.answer
+
+
+def prepares(
+    tmp_path: Path, answer: RepoProfile | Unsupported | CommandFailed | Exception
+) -> Prepares:
+    return Prepares(
+        DirectoryStore(tmp_path / "profiles"), DependencyCache(tmp_path / "homes"), answer=answer
+    )
 
 
 @pytest.mark.parametrize(
@@ -662,9 +731,7 @@ def test_push_prepares_the_commit_pushed_and_asks_nothing_of_a_model_or_of_githu
     tmp_path: Path,
 ) -> None:
     github = RecordingGitHub()
-    pipeline = Prepares(
-        DirectoryStore(tmp_path / "profiles"), DependencyCache(tmp_path / "homes"), answer=answer
-    )
+    pipeline = prepares(tmp_path, answer)
     environment = environment_for(tmp_path, fixture_repository, {"ref": "main"}, name="push")
     environment["GITHUB_SHA"] = fixture_repository.after
     del environment["GITHUB_TOKEN"]
@@ -687,6 +754,33 @@ def test_push_with_nowhere_to_keep_anything_does_nothing_and_ends_as_done(
     assert github.calls == []
 
 
+def test_push_whose_pipeline_raises_is_a_failure(
+    fixture_repository: FixtureRepository, tmp_path: Path
+) -> None:
+    github, pipeline = RecordingGitHub(), prepares(tmp_path, SandboxFailed("no container runtime"))
+    environment = environment_for(tmp_path, fixture_repository, {"ref": "main"}, name="push")
+
+    assert main(environment, github=github, orchestration=pipeline) == EXIT_FAILED
+    assert len(pipeline.asked) == 1
+    assert github.calls == []
+
+
+def test_push_prepares_nothing_when_the_state_is_kept_where_a_pull_request_could_write(
+    fixture_repository: FixtureRepository, tmp_path: Path
+) -> None:
+    pipeline = prepares(tmp_path, Unsupported("Nothing here says how the code is tested."))
+    environment = environment_for(
+        tmp_path,
+        fixture_repository,
+        {"ref": "main"},
+        name="push",
+        **{STATE_VARIABLE: str(fixture_repository.path / "kept")},
+    )
+
+    assert main(environment, github=RecordingGitHub(), orchestration=pipeline) == EXIT_FAILED
+    assert pipeline.asked == []
+
+
 # Tracing
 
 
@@ -706,28 +800,32 @@ def test_run_of_the_action_sends_its_one_trace_before_it_returns_and_answers_as_
     assert len(collector.received) == 1
     ((path, sent),) = collector.received
     assert path == "/v1/traces"
-    spans = sent["resourceSpans"][0]["scopeSpans"][0]["spans"]
-    assert [span["name"] for span in spans].count("pr-verification") == 1
+    assert [span["name"] for span in exported_spans(sent)].count("pr-verification") == 1
     assert TOKEN not in json.dumps(sent)
 
 
 # The core knows nothing about GitHub
 
 
-def test_no_other_module_imports_the_wrapper_or_reads_what_github_sets() -> None:
+def test_no_other_module_imports_the_wrapper_or_names_a_variable_that_github_sets() -> None:
     package = Path(pr_verification.__file__).parent
     delivery = {"github_action.py", "comment.py"}
 
     for module in sorted(package.glob("*.py")):
-        source = module.read_text()
+        nodes = list(ast.walk(ast.parse(module.read_text())))
         imported = {
             name
-            for node in ast.walk(ast.parse(source))
+            for node in nodes
             if isinstance(node, ast.Import | ast.ImportFrom)
             for name in [getattr(node, "module", None), *(alias.name for alias in node.names)]
         }
+        texts = {
+            node.value
+            for node in nodes
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        }
         if module.name != "github_action.py":
             assert not imported & {"pr_verification.github_action", "github_action"}, module.name
-            assert "GITHUB_" not in source, module.name
+            assert not any(re.fullmatch("GITHUB_[A-Z_]+", text) for text in texts), module.name
         if module.name not in delivery:
             assert not imported & {"pr_verification.comment", "comment"}, module.name

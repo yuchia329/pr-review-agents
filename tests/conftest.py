@@ -74,8 +74,8 @@ def commit_snapshots(path: Path, *snapshots: Mapping[str, str]) -> tuple[str, ..
 
 @pytest.fixture(autouse=True)
 def no_model_configured(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A model configured on the developer's machine must not be reached from a test, and a
-    Budget or a price configured there must not change one."""
+    """A model or a collector of traces configured on the developer's machine must not be
+    reached from a test, and a Budget or a price configured there must not change one."""
     for name in (
         "PR_VERIFICATION_ENDPOINT",
         "PR_VERIFICATION_MODEL",
@@ -182,6 +182,12 @@ class Collector:
 
     received: list[tuple[str, Any]] = field(default_factory=list)
     """The path and the JSON body of each request that was posted, in order."""
+
+
+def exported_spans(sent: Any) -> list[Any]:
+    """The spans in the JSON body of a request to export traces."""
+    spans: list[Any] = sent["resourceSpans"][0]["scopeSpans"][0]["spans"]
+    return spans
 
 
 @pytest.fixture

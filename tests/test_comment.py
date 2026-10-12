@@ -272,12 +272,12 @@ def test_claim_with_no_evidence_says_that_none_was_gathered() -> None:
     )
 
 
-@pytest.mark.parametrize("claim", [REFUTED, CONFIRMED], ids=["refuted", "confirmed"])
+@pytest.mark.parametrize("verdict", [Verdict.REFUTED, Verdict.CONFIRMED])
 def test_reproduction_is_shown_with_its_output_before_and_after_straight_after_its_evidence(
-    claim: Claim,
+    verdict: Verdict,
 ) -> None:
-    (ran,) = claim.evidence
-    assert isinstance(ran, ReproductionEvidence)
+    ran = REGRESSION
+    claim = Claim("Keeps the net price", verdict, "It is as the Reproduction shows.", (ran, READ))
 
     comment = render_comment(report_with(claim, UNTOUCHED))
 
@@ -291,6 +291,7 @@ def test_reproduction_is_shown_with_its_output_before_and_after_straight_after_i
         block(ran.before.output),
         AFTER_LINE,
         block(ran.after.output),
+        EVIDENCE_LINE.format(source="reading code", observation=inline(READ.observation)),
         CLAIM_LINE.format(verdict="Inconclusive", claim=inline(UNTOUCHED.text)),
     )
 
@@ -359,15 +360,32 @@ def test_untrusted_content_is_in_the_comment_only_as_a_quote() -> None:
 def test_text_within_a_line_is_cut_to_the_longest_quote_by_its_length_alone(mark: str) -> None:
     whole, longer = mark * LONGEST_QUOTE, mark * (LONGEST_QUOTE + 1)
 
+    ran = reproduction(path=longer, observation=longer)
+    cut = inline(whole) + CUT_SHORT
+
     comment = render_comment(
-        report_with(Claim(longer, Verdict.INCONCLUSIVE, whole), findings=(Finding(longer),))
+        report_with(Claim(longer, Verdict.REFUTED, longer, (ran,)), findings=(Finding(longer),))
     )
 
-    assert CLAIM_LINE.format(verdict="Inconclusive", claim=inline(whole) + CUT_SHORT) in comment
-    assert inline(whole) + CUT_SHORT in comment.split(FINDINGS_LINE)[1]
+    assert CLAIM_LINE.format(verdict="Refuted", claim=cut) in comment
+    assert REASON_LINE.format(reason=cut) in comment
+    assert EVIDENCE_LINE.format(source="running code", observation=cut) in comment
+    assert REPRODUCTION_LINE.format(path=cut) in comment
+    assert cut in comment.split(FINDINGS_LINE)[1]
     assert inline(longer) not in comment
-    assert REASON_LINE.format(reason=inline(whole)) in comment
-    assert REASON_LINE.format(reason=inline(whole)) + CUT_SHORT not in comment
+
+
+def test_text_no_longer_than_what_is_quoted_of_it_is_quoted_whole_and_not_marked_as_cut() -> None:
+    whole, share = "a" * LONGEST_QUOTE, BLOCK_BUDGET // 3
+    ran = reproduction("r" * share, before="b" * share, after="c" * share, path=whole)
+
+    comment = render_comment(
+        report_with(Claim(whole, Verdict.REFUTED, whole, (ran,)), findings=(Finding(whole),))
+    )
+
+    assert CLAIM_LINE.format(verdict="Refuted", claim=inline(whole)) in comment
+    assert comes_in_order(comment, block("r" * share), block("b" * share), block("c" * share))
+    assert CUT_SHORT not in comment
 
 
 @pytest.mark.parametrize("reproductions", [1, 7])
@@ -375,7 +393,7 @@ def test_blocks_share_the_block_budget_keeping_the_start_of_a_reproduction_and_t
     reproductions: int,
 ) -> None:
     share = BLOCK_BUDGET // (3 * reproductions)
-    ran = reproduction("r" * share + "R", before="B" + "b" * share, after="a" * share)
+    ran = reproduction("r" * share + "R", before="B" + "b" * share, after="A" + "a" * share)
 
     comment = render_comment(
         report_with(Claim("Adds tax", Verdict.REFUTED, "It fails after.", (ran,) * reproductions))
@@ -383,8 +401,7 @@ def test_blocks_share_the_block_budget_keeping_the_start_of_a_reproduction_and_t
 
     assert comment.count(block("r" * share) + CUT_SHORT) == reproductions
     assert comment.count(block("b" * share) + CUT_SHORT) == reproductions
-    assert comment.count(block("a" * share)) == reproductions
-    assert block("a" * share) + CUT_SHORT not in comment
+    assert comment.count(block("a" * share) + CUT_SHORT) == reproductions
 
 
 def test_report_too_long_for_one_comment_is_given_in_the_short_form() -> None:
@@ -405,8 +422,8 @@ def test_report_too_long_for_one_comment_is_given_in_the_short_form() -> None:
         TOO_LONG_LINE,
         "Time: 1.5 seconds. Cost: $0.25. Steps: 3.",
     )
-    assert "<code>" not in comment
-    assert FINDINGS_LINE not in comment
+    assert "Claim 0" not in comment
+    assert FINDINGS_LINE not in comment and "The diff also changes" not in comment
     assert len(comment) <= LONGEST_COMMENT
 
 

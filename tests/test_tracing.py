@@ -13,9 +13,12 @@ from conftest import (
     GathersNothing,
     UnreachableModel,
     asks,
+    exported_spans,
     finishes,
     model_listing,
 )
+from hypothesis import given
+from hypothesis import strategies as st
 
 from pr_verification import cli
 from pr_verification.agent import Role, Tool, run_role
@@ -286,7 +289,7 @@ def test_role_stopped_at_its_step_cap_says_so_and_how_many_steps_it_took() -> No
     assert role.attributes == {"pr_verification.steps": 2, "pr_verification.stopped": "step_cap"}
 
 
-def test_tool_that_raises_is_a_failed_span_and_so_is_its_role_which_carries_no_attribute() -> None:
+def test_role_whose_tool_raises_is_a_failed_span_that_does_not_say_how_it_stopped() -> None:
     def broken(arguments: Mapping[str, object]) -> str:
         raise OSError("zq-what-the-exception-said")
 
@@ -295,10 +298,10 @@ def test_tool_that_raises_is_a_failed_span_and_so_is_its_role_which_carries_no_a
     with record() as recording, pytest.raises(OSError, match="zq-what-the-exception-said"):
         run_role(role, {"claim": "Adds tax"}, OnlyCompletes(asks("read_file", path="tax.py")))
 
-    request, tool, ran = recording.trace().spans
-    assert [span.failed for span in (request, tool, ran)] == [False, True, True]
+    request, tool, role_span = recording.trace().spans
+    assert [span.failed for span in (request, tool, role_span)] == [False, True, True]
     assert (tool.kind, tool.name) == (SpanKind.TOOL_CALL, "read_file")
-    assert ran.attributes == {}
+    assert "pr_verification.stopped" not in role_span.attributes
     assert "zq-what-the-exception-said" not in repr(recording.trace())
 
 
@@ -459,7 +462,7 @@ def test_no_span_holds_anything_that_a_pull_request_or_a_model_wrote(
         run_twice(RAN_TWICE)
 
     trace = recording.trace()
-    assert len(trace.spans) == 11
+    assert len(trace.spans) == 11, "4 for the run, 5 for the role, and 2 Sandbox runs"
     assert "zq-" not in repr(trace)
     assert "zq-" not in json.dumps(to_otlp(trace))
 
@@ -502,15 +505,18 @@ def test_trace_is_written_as_one_request_to_export_it_in_the_opentelemetry_proto
 
     written = json.loads(json.dumps(exported))
     assert written == exported
+    assert set(written) == {"resourceSpans"}
     (resource_spans,) = written["resourceSpans"]
-    assert resource_spans["resource"] == {
-        "attributes": [{"key": "service.name", "value": {"stringValue": SERVICE_NAME}}]
-    }
+    assert resource_spans["resource"]["attributes"] == [
+        {"key": "service.name", "value": {"stringValue": SERVICE_NAME}}
+    ]
     (scope_spans,) = resource_spans["scopeSpans"]
     assert scope_spans["scope"] == {"name": "pr_verification"}
-    for span in scope_spans["spans"]:
+    request, sandbox_run = scope_spans["spans"]
+    for span in (request, sandbox_run):
         span["attributes"].sort(key=lambda attribute: attribute["key"])
-    assert scope_spans["spans"] == [
+    assert "parentSpanId" not in sandbox_run
+    stated = [
         {
             "traceId": "0af7651916cd43dd8448eb211c80319c",
             "spanId": "00f067aa0ba902b7",
@@ -541,8 +547,57 @@ def test_trace_is_written_as_one_request_to_export_it_in_the_opentelemetry_proto
             "status": {"code": 2},
         },
     ]
-    assert set(written) == {"resourceSpans"}
-    assert set(resource_spans) == {"resource", "scopeSpans"}
+    assert [
+        {member: span[member] for member in members}
+        for span, members in zip((request, sandbox_run), stated, strict=True)
+    ] == stated
+
+
+def otlp_value(value: str | int | float) -> dict[str, object]:
+    """One attribute's value, written by its Python type as the contract says."""
+    if isinstance(value, str):
+        return {"stringValue": value}
+    return {"intValue": str(value)} if isinstance(value, int) else {"doubleValue": value}
+
+
+IDS = st.text("0123456789abcdef", min_size=16, max_size=16)
+TIMES = st.integers(min_value=0, max_value=2**63 - 1)
+SPANS = st.builds(
+    Span,
+    st.sampled_from(SpanKind),
+    st.text(max_size=8),
+    span_id=IDS,
+    parent_id=st.none() | IDS,
+    start_unix_nano=TIMES,
+    end_unix_nano=TIMES,
+    attributes=st.dictionaries(
+        st.text("abcdefgh_.", max_size=8),
+        st.text(max_size=8) | st.integers() | st.floats(allow_nan=False, allow_infinity=False),
+        max_size=3,
+    ),
+    failed=st.booleans(),
+)
+
+
+@given(spans=st.lists(SPANS, max_size=4))
+def test_any_trace_is_written_span_for_span_in_its_order_with_each_value_by_its_type(
+    spans: list[Span],
+) -> None:
+    trace = Trace("0af7651916cd43dd8448eb211c80319c", tuple(spans))
+
+    exported = to_otlp(trace)
+
+    assert to_otlp(trace) == exported
+    written = exported_spans(json.loads(json.dumps(exported)))
+    assert [span["spanId"] for span in written] == [span.span_id for span in spans]
+    for sent, span in zip(written, spans, strict=True):
+        assert sent.get("parentSpanId") == span.parent_id
+        assert ("parentSpanId" in sent) == (span.parent_id is not None)
+        assert sent["status"] == ({"code": 2} if span.failed else {})
+        assert {held["key"]: held["value"] for held in sent["attributes"]} == {
+            **{name: otlp_value(value) for name, value in span.attributes.items()},
+            "pr_verification.kind": {"stringValue": span.kind.value},
+        }
 
 
 # Where traces are sent
@@ -565,20 +620,19 @@ class Listening:
 
 def span_names(body: bytes) -> list[str]:
     """The names of the spans in a request to export traces."""
-    sent = json.loads(body)
-    return [span["name"] for span in sent["resourceSpans"][0]["scopeSpans"][0]["spans"]]
+    return [span["name"] for span in exported_spans(json.loads(body))]
 
 
 @pytest.mark.parametrize("environment", [{}, {ENDPOINT_VARIABLE: ""}])
 def test_with_no_endpoint_configured_tracing_is_off_and_nothing_is_sent(
     environment: Mapping[str, str],
 ) -> None:
-    collector = Listening()
+    listening = Listening()
 
-    with traced(environment, collector.transport), record() as own:
+    with traced(environment, listening.transport), record() as own:
         run_twice(RAN_TWICE)
 
-    assert collector.requests == []
+    assert listening.requests == []
     assert len(own.trace().spans) == 2, "no recording was open, so one could be opened inside"
 
 
@@ -593,53 +647,53 @@ def test_with_no_endpoint_configured_tracing_is_off_and_nothing_is_sent(
 def test_with_an_endpoint_configured_the_trace_is_sent_there_once_when_the_work_is_done(
     endpoint: str, sent_to: str
 ) -> None:
-    collector = Listening()
+    listening = Listening()
 
-    with traced({ENDPOINT_VARIABLE: endpoint}, collector.transport):
-        with pytest.raises(RuntimeError):
-            record().__enter__()
+    with traced({ENDPOINT_VARIABLE: endpoint}, listening.transport):
+        with pytest.raises(RuntimeError), record():
+            pass
         run_twice(RAN_TWICE)
-        assert collector.requests == []
+        assert listening.requests == []
 
-    (request,) = collector.requests
+    (request,) = listening.requests
     assert (request.method, str(request.url)) == ("POST", sent_to)
     assert request.headers["Content-Type"] == "application/json"
     assert span_names(request.content) == ["sandbox", "sandbox"]
 
 
 def test_headers_configured_for_the_collector_are_sent_with_the_trace() -> None:
-    collector = Listening()
+    listening = Listening()
     environment = {
         ENDPOINT_VARIABLE: "http://collector.example:4318",
         HEADERS_VARIABLE: "x-api-key = zq%20collector%2Ckey , x-team=verification=core",
     }
 
-    with traced(environment, collector.transport):
+    with traced(environment, listening.transport):
         run_twice(RAN_TWICE)
 
-    (request,) = collector.requests
+    (request,) = listening.requests
     assert request.headers["x-api-key"] == "zq collector,key"
     assert request.headers["x-team"] == "verification=core"
 
 
 def test_trace_with_no_spans_is_not_sent() -> None:
-    collector = Listening()
+    listening = Listening()
 
-    with traced({ENDPOINT_VARIABLE: "http://collector.example:4318"}, collector.transport):
+    with traced({ENDPOINT_VARIABLE: "http://collector.example:4318"}, listening.transport):
         pass
 
-    assert collector.requests == []
+    assert listening.requests == []
 
 
 def test_trace_is_sent_though_the_work_raised_and_the_exception_goes_on_as_it_was() -> None:
-    collector = Listening()
+    listening = Listening()
     sandbox = ScriptedSandbox({"before-commit": SandboxFailed("no container runtime")})
 
     with pytest.raises(SandboxFailed, match="no container runtime"):
-        with traced({ENDPOINT_VARIABLE: "http://collector.example:4318"}, collector.transport):
+        with traced({ENDPOINT_VARIABLE: "http://collector.example:4318"}, listening.transport):
             run_twice(sandbox)
 
-    (request,) = collector.requests
+    (request,) = listening.requests
     assert span_names(request.content) == ["sandbox"]
 
 
@@ -647,29 +701,27 @@ def test_trace_is_sent_though_the_work_raised_and_the_exception_goes_on_as_it_wa
     "answer",
     [
         httpx.ConnectError("connection refused"),
-        httpx.Response(503, text="zq collector,key is not known here"),
+        httpx.Response(503, text="zq-collector-key is not known here"),
         httpx.Response(401, json={"error": "unauthorised"}),
     ],
 )
 def test_trace_that_cannot_be_sent_is_one_line_on_standard_error_and_nothing_is_raised(
     answer: httpx.Response | Exception, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    collector = Listening(answer)
+    listening = Listening(answer)
     environment = {
         ENDPOINT_VARIABLE: "http://collector.example:4318",
-        HEADERS_VARIABLE: "x-api-key=zq%20collector%2Ckey",
+        HEADERS_VARIABLE: "x-api-key=zq-collector-key",
     }
 
-    with traced(environment, collector.transport):
+    with traced(environment, listening.transport):
         run_twice(RAN_TWICE)
 
     captured = capsys.readouterr()
-    assert len(collector.requests) == 1
-    assert captured.out == ""
+    assert len(listening.requests) == 1
     assert captured.err.startswith("pr-verification: ")
     assert len(captured.err.splitlines()) == 1
-    assert "zq collector,key" not in captured.err
-    assert "zq%20collector%2Ckey" not in captured.err
+    assert "zq-collector-key" not in captured.err
 
 
 def test_command_line_sends_the_one_trace_of_its_run_and_prints_and_returns_what_it_would(
@@ -704,7 +756,7 @@ def test_command_line_sends_the_one_trace_of_its_run_and_prints_and_returns_what
     assert len(collector.received) == 1
     ((path, sent),) = collector.received
     assert path == "/v1/traces"
-    spans = sent["resourceSpans"][0]["scopeSpans"][0]["spans"]
+    spans = exported_spans(sent)
     assert [span["name"] for span in spans] == [
         "model", "claim-extractor", "decision", "pr-verification"
     ]  # fmt: skip

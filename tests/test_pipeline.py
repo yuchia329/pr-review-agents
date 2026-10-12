@@ -79,6 +79,7 @@ from pr_verification.sandbox import (
     RunResult,
     SandboxFailed,
 )
+from pr_verification.tracing import SpanKind, record
 
 IMAGE = "lines:1"
 FETCH: Command = ("fetch", "--locked")
@@ -576,6 +577,21 @@ def test_sandbox_is_closed_before_a_failure_to_prepare_a_target_commit_goes_on(
         a_pipeline(tmp_path / "state", sandboxes).prepare_target_commit(shop.path, shop.before)
 
     assert sandboxes.opened and all(sandbox.closed for sandbox in sandboxes.opened)
+
+
+def test_trace_of_preparing_a_target_commit_holds_its_sandbox_runs_each_with_no_parent(
+    shop: FixtureRepository, tmp_path: Path
+) -> None:
+    pipeline = a_pipeline(tmp_path / "state", Sandboxes(shop))
+
+    with record() as recording:
+        pipeline.prepare_target_commit(shop.path, shop.before)
+
+    spans = recording.trace().spans
+    assert [(span.kind, span.name, span.parent_id) for span in spans] == [
+        (SpanKind.SANDBOX_RUN, "sandbox", None)
+    ] * 2
+    assert [span.attributes["pr_verification.phase"] for span in spans] == ["install", "test"]
 
 
 # The report, through the core's entry point
