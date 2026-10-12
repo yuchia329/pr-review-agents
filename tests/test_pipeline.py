@@ -6,20 +6,28 @@ The ones from there on verify a Python pull request in a real Sandbox.
 
 import json
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from types import TracebackType
 from typing import Self
 
 import pytest
-from conftest import Clock, FixtureRepository, commit_snapshots, finishes
+from conftest import Clock, FixtureRepository, asks, commit_snapshots, finishes
 
 from pr_verification import verdict
+from pr_verification.agent import (
+    ALTERNATION_LENGTH,
+    PROGRESS,
+    PROGRESS_INTERVAL,
+    REPEAT_LENGTH,
+    TOLD,
+    LoopKind,
+)
 from pr_verification.budget import BUDGET_SPENT, SHARE_SPENT, Budget, Ledger
 from pr_verification.cli import main
 from pr_verification.core import PullRequest, run
-from pr_verification.decision import ScriptedDecider
+from pr_verification.decision import NO, ScriptedDecider
 from pr_verification.ecosystem import (
     Commands,
     Ecosystem,
@@ -53,6 +61,7 @@ from pr_verification.reproduction import (
     ATTEMPT_CAP_REACHED,
     COULD_NOT_FINISH,
     ENDINGS,
+    WRITER_STEP_CAP,
     AttemptResult,
     write_reproduction,
 )
@@ -499,6 +508,15 @@ def test_fixed_pipeline_keeps_the_repo_profile_and_dependencies_under_its_state_
     assert pipeline.discover is find_commands
 
 
+def test_fixed_pipeline_has_the_progress_guard_it_is_given_and_none_unless_given(
+    tmp_path: Path,
+) -> None:
+    guard = ScriptedDecider([])
+
+    assert fixed_pipeline(tmp_path / "state", progress_guard=guard).progress_guard is guard
+    assert fixed_pipeline(tmp_path / "state").progress_guard is None
+
+
 # The report, through the core's entry point
 
 
@@ -901,6 +919,89 @@ def test_commit_that_cannot_be_prepared_is_answered_for_as_one_whatever_was_spen
     assert ledger.stopped_by() is BudgetLimit.TIME
 
 
+# A role that goes round in circles, through the core's entry point
+
+CLAIM = "Adds tax"
+READS, READS_ANOTHER = asks("read_file", path="total.txt"), asks("read_file", path="deps.lock")
+NEVER_THE_SAME = [asks("read_file", path=f"{number}.txt") for number in range(WRITER_STEP_CAP)]
+
+
+class GoesRoundUntilTold:
+    """A stand-in model that makes one Claim. As the Reproduction writer it takes the steps
+    prepared, round and round, until the loop tells it something, and then writes the
+    Reproduction prepared. As the Reproduction judge it accepts what it is shown."""
+
+    told: list[str | None]
+    """What the writer was shown it was told after each of its steps, when it stopped going
+    round: None for a step it was told nothing after. Empty while it has been told nothing."""
+
+    def __init__(self, steps: Sequence[str], reproduction: str = "fixed") -> None:
+        self._steps, self._reproduction = steps, reproduction
+        self.told = []
+
+    def complete(self, request: ModelRequest) -> str:
+        asked = json.loads(request.data)
+        if "task" not in asked:
+            return json.dumps({"claims": [CLAIM]})
+        if "reproduction" in asked["task"]:
+            return finishes(accepted=True)
+        told = [step.get("told") for step in asked["steps"]]
+        if not any(told):
+            return self._steps[len(told) % len(self._steps)]
+        self.told = told
+        return writes(self._reproduction)
+
+
+@pytest.mark.parametrize(
+    ("steps", "kind", "found"),
+    [
+        ([READS], LoopKind.EXACT_REPEAT, REPEAT_LENGTH),
+        ([READS, READS_ANOTHER], LoopKind.ALTERNATION, ALTERNATION_LENGTH),
+    ],
+    ids=["the same step again and again", "back and forth between two steps"],
+)
+def test_role_that_goes_round_in_circles_is_told_what_was_detected_and_goes_on_to_a_verdict(
+    shop: FixtureRepository, tmp_path: Path, steps: list[str], kind: LoopKind, found: int
+) -> None:
+    model = GoesRoundUntilTold(steps)
+
+    verified = verify(shop, model, a_pipeline(tmp_path / "state", Sandboxes(shop)))
+
+    assert [given for given, _ in verified] == [Verdict.CONFIRMED]
+    assert model.told == [*[None] * (found - 1), TOLD[kind]]
+
+
+def test_progress_guard_is_a_decision_that_tells_a_role_whose_steps_all_differ_it_gets_no_closer(
+    shop: FixtureRepository, tmp_path: Path
+) -> None:
+    model, guard = GoesRoundUntilTold(NEVER_THE_SAME), ScriptedDecider([NO])
+    pipeline = replace(a_pipeline(tmp_path / "state", Sandboxes(shop)), progress_guard=guard)
+
+    verified = verify(shop, model, pipeline)
+
+    ((state, question),) = guard.asked
+    assert question == PROGRESS
+    assert json.loads(state)["task"]["claim"] == CLAIM
+    assert model.told == [*[None] * (PROGRESS_INTERVAL - 1), TOLD[LoopKind.NO_PROGRESS]]
+    assert [given for given, _ in verified] == [Verdict.CONFIRMED]
+
+
+def test_role_that_goes_round_whatever_it_is_told_is_stopped_at_its_caps_with_no_verdict_decided(
+    shop: FixtureRepository, tmp_path: Path
+) -> None:
+    model = WritesFor({CLAIM: READS})
+
+    verified = verify(shop, model, a_pipeline(tmp_path / "state", Sandboxes(shop)))
+
+    last = json.loads(model.requests[-1].data)["steps"]
+    assert verified == [(Verdict.INCONCLUSIVE, cap_reached(AttemptResult.NO_REPRODUCTION))]
+    assert len(model.tasks(CLAIM)) == ATTEMPT_CAP * WRITER_STEP_CAP
+    assert [step.get("told") for step in last] == [
+        *[None] * (REPEAT_LENGTH - 1),
+        *[TOLD[LoopKind.EXACT_REPEAT]] * (WRITER_STEP_CAP - REPEAT_LENGTH),
+    ]
+
+
 # A Python pull request, in a real Sandbox
 
 ITS_OWN_TEST = """\
@@ -986,3 +1087,20 @@ def test_python_pull_request_is_verified_with_no_orchestration_given_and_nothing
     assert (claim.verdict, claim.reason) == (Verdict.CONFIRMED, verdict.CONFIRMED)
     assert report.gate.decision is GateDecision.PASS
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("kept", [True, False], ids=["with a state directory", "with none"])
+def test_command_line_gives_its_decider_to_the_fixed_pipeline_as_the_progress_guard(
+    pricing: FixtureRepository, tmp_path: Path, capsys: pytest.CaptureFixture[str], kept: bool
+) -> None:
+    arguments = ["--repo", str(pricing.path), "--before", pricing.before, "--after", pricing.after]
+    state = ["--state-dir", str(tmp_path / "state")] if kept else []
+    model = GoesRoundUntilTold(NEVER_THE_SAME, ADDS_TAX)
+    decider = ScriptedDecider(["behavioural", NO])
+
+    exited = main([*arguments, "--title", "Add tax to the total", *state], model, decider)
+
+    (claim,) = json.loads(capsys.readouterr().out)["claims"]
+    assert (exited, claim["verdict"]) == (0, "confirmed")
+    assert [question for _, question in decider.asked[1:]] == [PROGRESS]
+    assert model.told == [*[None] * (PROGRESS_INTERVAL - 1), TOLD[LoopKind.NO_PROGRESS]]

@@ -14,7 +14,18 @@ from conftest import FixtureRepository, asks, commit_snapshots, finishes
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from pr_verification.agent import NO_SUCH_TOOL, StepOutcome, Stopped
+from pr_verification.agent import (
+    NO_SUCH_TOOL,
+    PROGRESS,
+    PROGRESS_INTERVAL,
+    REPEAT_LENGTH,
+    TOLD,
+    LoopKind,
+    StepOutcome,
+    Stopped,
+    Trigger,
+)
+from pr_verification.decision import NO, YES, DecisionFailed, ScriptedDecider
 from pr_verification.ecosystem import (
     LONGEST_REPRODUCTION,
     Commands,
@@ -599,6 +610,103 @@ def test_whatever_the_model_writes_no_more_attempts_are_made_than_the_cap_and_ea
     assert (run.evidence is None) != (run.inconclusive is None)
     assert (run.evidence is not None) == (shown[-1] is SHOWS_A_DIFFERENCE)
     assert run.evidence is not None or len(run.attempts) == attempt_cap
+
+
+# The writer, watched for loops
+
+
+def write_watched(
+    guard: ScriptedDecider, repository: FixtureRepository, *responses: str, **caps: int
+) -> tuple[ReproductionRun, ScriptedModel]:
+    """As `write`, with a progress guard, which the writer takes by position."""
+    model = ScriptedModel(responses)
+    run = write_reproduction(
+        CLAIM,
+        guard,
+        model=model,
+        sandbox=StandInSandbox(repository),
+        ecosystem=LineEcosystem(),
+        repository=repository.path,
+        before=repository.before,
+        after=repository.after,
+        limits=LIMITS,
+        **caps,
+    )
+    return run, model
+
+
+def looks(count: int, differing: bool = True) -> list[str]:
+    """Steps that read a file, each a different one unless they are all to be the same step."""
+    return [asks("read_file", path=f"{number if differing else 0}.py") for number in range(count)]
+
+
+def test_each_attempt_is_watched_for_loops_on_its_own_and_starts_with_nothing_found(
+    pricing: FixtureRepository,
+) -> None:
+    again = [READS] * (REPEAT_LENGTH - 1)
+
+    run, model = write(pricing, *again, READS, writes("same"), *again, writes("fixed"))
+
+    first, second = run.attempts
+    assert first.run.triggers == (Trigger(LoopKind.EXACT_REPEAT, step=REPEAT_LENGTH),)
+    assert second.run.triggers == ()
+    assert (first.result, second.result) == (SHOWS_NOTHING, SHOWS_A_DIFFERENCE)
+    shown = json.loads(model.requests[REPEAT_LENGTH].data)["steps"]
+    assert shown[-1]["told"] == TOLD[LoopKind.EXACT_REPEAT]
+
+
+def test_progress_guard_given_to_the_writer_is_asked_about_the_run_of_each_attempt(
+    pricing: FixtureRepository,
+) -> None:
+    guard = ScriptedDecider([NO, YES])
+    steps = looks(PROGRESS_INTERVAL)
+
+    run, model = write_watched(
+        guard, pricing, *steps, writes("same"), *steps, writes("fixed"), step_cap=len(steps) + 1
+    )
+
+    first, second = run.attempts
+    assert first.run.triggers == (Trigger(LoopKind.NO_PROGRESS, step=PROGRESS_INTERVAL),)
+    assert second.run.triggers == ()
+    assert [(json.loads(state)["task"], question) for state, question in guard.asked] == [
+        (task(model.requests[0]), PROGRESS),
+        (task(model.requests[len(steps) + 1]), PROGRESS),
+    ]
+    assert run.evidence is not None
+
+
+@pytest.mark.parametrize("differing", [False, True], ids=["one step", "steps that all differ"])
+def test_whatever_is_detected_the_writer_makes_no_more_attempts_or_steps_than_its_caps(
+    pricing: FixtureRepository, differing: bool
+) -> None:
+    step_cap = 2 * PROGRESS_INTERVAL + REPEAT_LENGTH
+    steps = looks(2 * step_cap + 5, differing)
+    guard = ScriptedDecider([NO] * len(steps))
+
+    run, model = write_watched(guard, pricing, *steps, attempt_cap=2, step_cap=step_cap)
+
+    assert [len(attempt.run.steps) for attempt in run.attempts] == [step_cap, step_cap]
+    assert all(len(attempt.run.triggers) > 1 for attempt in run.attempts)
+    assert len(model.requests) == 2 * step_cap
+    assert run.inconclusive == ATTEMPT_CAP_REACHED.format(
+        attempts=2, ending=ENDINGS[NO_REPRODUCTION]
+    )
+
+
+def test_progress_guard_that_fails_ends_the_work_as_a_failing_model_does(
+    pricing: FixtureRepository,
+) -> None:
+    guard = ScriptedDecider([DecisionFailed("the decision gave no usable answer")])
+    steps = looks(PROGRESS_INTERVAL)
+
+    run, model = write_watched(
+        guard, pricing, writes("same"), *steps, writes("fixed"), step_cap=len(steps) + 1
+    )
+
+    assert [attempt.result for attempt in run.attempts] == [SHOWS_NOTHING]
+    assert run.evidence is None
+    assert run.inconclusive == COULD_NOT_FINISH.format(failure="the decision gave no usable answer")
+    assert len(model.requests) == 1 + len(steps)
 
 
 # The writer and the Python Ecosystem, in a real Sandbox
