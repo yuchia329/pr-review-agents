@@ -1,0 +1,271 @@
+# The Structural cases of the evaluation. `tools/structural_cases.py` says how they are read.
+#
+# Each table is one real commit. `title` and `description` are what a pull request for it would
+# say, written by hand so that every Claim in the text is Structural and has the one answer.
+# Where there is a false case, the text says nothing of how the code was before. `key` is the answer key, which the system is never shown. An entry with
+# `left_out_of_false_case` also gives a false case: the same text over the same commit, without
+# the commit's change to those files.
+
+# Renames
+
+[[commit]]
+name = "structural/rename/attrs-post-init-hook"
+part = "development"
+repository = "python-attrs/attrs"
+commit = "3964f9d37b1f3e5e9cea4531d7c1f642f6d63120"
+title = "Rename __post_init__ to __attrs_post_init__"
+description = "Nothing in `src/attr/_make.py` uses the old name."
+key = [
+    { text = "__post_init__", change = "removed" },
+    { text = "__attrs_post_init__", change = "added" },
+]
+left_out_of_false_case = ["src/attr/_make.py"]
+
+[[commit]]
+name = "structural/rename/httpx-url-pattern"
+part = "held_out"
+repository = "encode/httpx"
+commit = "71d52343052359c416a9e6252daa322abdf8dd90"
+title = "Rename URLMatcher to URLPattern"
+description = "`httpx/_client.py` no longer uses `URLMatcher`."
+key = [
+    { text = "URLMatcher", change = "removed" },
+    { text = "URLPattern", change = "added" },
+]
+left_out_of_false_case = ["httpx/_client.py"]
+
+[[commit]]
+name = "structural/rename/packaging-gil-disabled"
+part = "development"
+repository = "pypa/packaging"
+commit = "a2b3e346b03c0446df2ab8e7f9c997d65495dc6d"
+title = "Rename Py_NOGIL to Py_GIL_DISABLED"
+description = "`tags.py` now reads the config variable of a free-threaded build as `Py_GIL_DISABLED`."
+key = [
+    { text = "Py_NOGIL", change = "removed" },
+    { text = "Py_GIL_DISABLED", change = "added" },
+]
+left_out_of_false_case = ["src/packaging/tags.py"]
+
+[[commit]]
+name = "structural/rename/pluggy-hook-opts"
+part = "held_out"
+repository = "pytest-dev/pluggy"
+commit = "9538f2a75d248afafeecfd7dbb44a28d4d12aba9"
+title = "Rename HookImplOpts to HookimplOpts and HookSpecOpts to HookspecOpts"
+key = [
+    { text = "HookImplOpts", change = "removed" },
+    { text = "HookimplOpts", change = "added" },
+    { text = "HookSpecOpts", change = "removed" },
+    { text = "HookspecOpts", change = "added" },
+]
+
+# The new name holds the old one, so a search for the old name alone still finds it afterwards.
+[[commit]]
+name = "structural/rename/packaging-private-format-full-version"
+part = "development"
+repository = "pypa/packaging"
+commit = "668da8662a112036e4850b68980790cb2d10dae9"
+title = "Rename format_full_version to _format_full_version"
+description = "The helper in `markers.py` now has a name that starts with an underscore."
+key = [
+    { text = "def format_full_version(", change = "removed" },
+    { text = "def _format_full_version(", change = "added" },
+]
+
+# Removals
+
+# The changelog entry the commit adds names what it removes, so a search for that name finds it.
+[[commit]]
+name = "structural/removal/attrs-validators-provides"
+part = "development"
+repository = "python-attrs/attrs"
+commit = "8460190b29de93621012599ef65605a83baf591b"
+title = "Remove attrs.validators.provides"
+description = "The `provides()` validator and its `_ProvidesValidator` class are deleted from `src/attr/validators.py`."
+key = [
+    { text = "def provides(interface)", change = "removed", path = "src/attr/validators.py" },
+    { text = "class _ProvidesValidator", change = "removed" },
+]
+left_out_of_false_case = ["src/attr/validators.py"]
+
+[[commit]]
+name = "structural/removal/structlog-until-not-interrupted"
+part = "held_out"
+repository = "hynek/structlog"
+commit = "5abf7b5383472e178f6b9806fef0db108f615253"
+title = "Remove until_not_interrupted()"
+description = "The helper is deleted from `src/structlog/_utils.py`."
+key = [
+    { text = "def until_not_interrupted(", change = "removed" },
+]
+left_out_of_false_case = ["src/structlog/_utils.py"]
+
+[[commit]]
+name = "structural/removal/httpx-extra-javascript"
+part = "development"
+repository = "encode/httpx"
+commit = "31a7bb381ac9f5d99e3e2dc68ffaff4b5d23faca"
+title = "Remove extra_javascript from mkdocs.yml"
+description = "The configuration of the documentation site no longer lists `js/chat.js` or `js/sidecar-1.5.0.js`."
+key = [
+    { text = "extra_javascript:", change = "removed", path = "mkdocs.yml" },
+    { text = "js/chat.js", change = "removed", path = "mkdocs.yml" },
+]
+left_out_of_false_case = ["mkdocs.yml"]
+
+[[commit]]
+name = "structural/removal/packaging-lparen-token"
+part = "held_out"
+repository = "pypa/packaging"
+commit = "4221ba034ec696a47b0b2e4ee4c1bd4d4a9f0c5b"
+title = "Remove the unused LPAREN token from the tokenizer"
+key = [
+    { text = '"LPAREN"', change = "removed" },
+]
+
+# A whole file is removed, and the Claim names the file and no text of it.
+[[commit]]
+name = "structural/removal/httpx-chinese-readme"
+part = "development"
+repository = "encode/httpx"
+commit = "7e10342c2ad44955582e4fef96470f3e653347d4"
+title = "Delete README_chinese.md"
+description = "The Chinese translation of the README is removed from the repository."
+key = [
+    { text = "通过 pip 安装 HTTPX：", change = "removed", path = "README_chinese.md" },
+]
+
+# Documentation changes
+
+[[commit]]
+name = "structural/documentation/flask-public-key-pinning"
+part = "development"
+repository = "pallets/flask"
+commit = "2ae36c8dd5c9d24578d9fca85f8c351290d0de04"
+title = "Remove HTTP Public Key Pinning from the security docs"
+key = [
+    { text = "HTTP Public Key Pinning (HPKP)", change = "removed", path = "docs/web-security.rst" },
+]
+
+[[commit]]
+name = "structural/documentation/httpx-timeouts-compatibility"
+part = "held_out"
+repository = "encode/httpx"
+commit = "a2a69e4bf7fc071b3ad237a643b306e5e131337f"
+title = "Mention the default timeout difference from Requests in the compatibility docs"
+description = "Adds a Timeouts section to `docs/compatibility.md`."
+key = [
+    { text = "## Timeouts", change = "added", path = "docs/compatibility.md" },
+]
+
+[[commit]]
+name = "structural/documentation/pluggy-plugin-count"
+part = "development"
+repository = "pytest-dev/pluggy"
+commit = "c65e5d9824caa8c3f4c32d0050e9c248c27c4d8d"
+title = "docs: update the number of pytest plugins to 1400+"
+key = [
+    { text = "500+ plugins", change = "removed" },
+    { text = "1400+ plugins", change = "added" },
+]
+
+[[commit]]
+name = "structural/documentation/flask-harddrive-typo"
+part = "development"
+repository = "pallets/flask"
+commit = "81798b406f97ffe4795d2c9fc18db7db744a96dc"
+title = "Fix the 'harddrive' typo in the error handling docs"
+description = "`docs/errorhandling.rst` now says 'a hard drive crashed'."
+key = [
+    { text = "a harddrive crashed", change = "removed" },
+    { text = "a hard drive crashed", change = "added" },
+]
+left_out_of_false_case = ["docs/errorhandling.rst"]
+
+[[commit]]
+name = "structural/documentation/httpx-readme-prompt"
+part = "held_out"
+repository = "encode/httpx"
+commit = "fa6dac8383541669f42086d4f07c71b0f8d6a279"
+title = "Remove the leading $ from the shell commands in the README"
+description = "No install command in `README.md` starts with the prompt character."
+key = [
+    { text = "$ pip install", change = "removed", path = "README.md" },
+]
+left_out_of_false_case = ["README.md"]
+
+# The false case says a section was added that was not, so no text is left in the code to find.
+[[commit]]
+name = "structural/documentation/click-path-completion-faq"
+part = "held_out"
+repository = "pallets/click"
+commit = "c4597ed340477f3a69cfb8a9944149fab9d09b74"
+title = "Add a FAQ section on why custom completions show the full value"
+description = "Adds a 'Custom completions show the full value' section to `docs/faqs.md`."
+key = [
+    { text = "### Custom completions show the full value", change = "added", path = "docs/faqs.md" },
+]
+left_out_of_false_case = ["docs/faqs.md"]
+
+# Configuration values
+
+[[commit]]
+name = "structural/configuration/requests-chardet-limit"
+part = "development"
+repository = "psf/requests"
+commit = "b2a1d33f571518ca9a6148e7da787cc5827f897a"
+title = "Raise the chardet limit of the use_chardet_on_py3 extra to <8"
+description = "`pyproject.toml` now gives the extra as `chardet>=3.0.2,<8`."
+key = [
+    { text = "chardet>=3.0.2,<7", change = "removed", path = "pyproject.toml" },
+    { text = "chardet>=3.0.2,<8", change = "added", path = "pyproject.toml" },
+]
+left_out_of_false_case = ["pyproject.toml"]
+
+[[commit]]
+name = "structural/configuration/flask-minimum-blinker"
+part = "held_out"
+repository = "pallets/flask"
+commit = "470e2b8d17fd0032271b21f1d6775d48c3855a79"
+title = "Require blinker>=1.9 in pyproject.toml"
+key = [
+    { text = '"blinker>=1.8"', change = "removed", path = "pyproject.toml" },
+    { text = '"blinker>=1.9"', change = "added", path = "pyproject.toml" },
+]
+left_out_of_false_case = ["pyproject.toml"]
+
+# The examples and the docs keep the old requirement, so a search of every file still finds it.
+[[commit]]
+name = "structural/configuration/flask-flit-core"
+part = "development"
+repository = "pallets/flask"
+commit = "fe3b215d3ade4db68262dae1a3cdc464a1fc524f"
+title = "Increase the required flit_core version to 3.11"
+key = [
+    { text = 'requires = ["flit_core<4"]', change = "removed", path = "pyproject.toml" },
+    { text = 'requires = ["flit_core>=3.11,<4"]', change = "added", path = "pyproject.toml" },
+]
+
+[[commit]]
+name = "structural/configuration/structlog-python-latest"
+part = "held_out"
+repository = "hynek/structlog"
+commit = "62e39b4c8d71bf074a947cd85d119c05a9e9004b"
+title = "Use Python 3.11 by default in CI"
+description = "Sets `PYTHON_LATEST` in `.github/workflows/ci.yml` to 3.11."
+key = [
+    { text = 'PYTHON_LATEST: "3.10"', change = "removed" },
+    { text = 'PYTHON_LATEST: "3.11"', change = "added" },
+]
+
+[[commit]]
+name = "structural/configuration/httpx-cryptography-pin"
+part = "development"
+repository = "encode/httpx"
+commit = "b395e6626b45dc2122c04c6e080fc7fb908cc9af"
+title = "Bump cryptography from 44.0.0 to 44.0.1"
+key = [
+    { text = "cryptography==44.0.0", change = "removed" },
+    { text = "cryptography==44.0.1", change = "added" },
+]
