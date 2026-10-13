@@ -74,7 +74,9 @@ def count_loops(found: Iterable[tuple[Sequence[Loop], Verdict]]) -> LoopCounts:
 
     A loop is counted by what came of its Claim, and not by what came of its own run. One
     whose role was told and then finished is counted under `ended_inconclusive` when its
-    Claim was left Inconclusive for any other cause.
+    Claim was left Inconclusive for any other cause. One whose role was told, and whose
+    Claim was decided only by work dispatched for it afterwards, is counted under
+    `recovered_after_told`: the rung is the one the loop's own run reached.
     """
     raise NotImplementedError
 

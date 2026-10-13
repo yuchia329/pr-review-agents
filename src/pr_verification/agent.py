@@ -177,7 +177,8 @@ nothing of the task, of any response, or of anything a tool returned."""
 
 @dataclass(frozen=True)
 class Trigger:
-    """One time loop detection found something in a run. The role was told of it."""
+    """One time loop detection found something in a run. The role was told of the first of a
+    run, and stopped at the second."""
 
     kind: LoopKind
     """What was found."""

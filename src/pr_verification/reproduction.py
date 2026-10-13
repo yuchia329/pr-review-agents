@@ -34,7 +34,8 @@ WRITER_STEP_CAP = 12
 
 
 class AttemptResult(StrEnum):
-    """What one attempt at a Reproduction came to. Only the last of these ends the revising."""
+    """What one attempt at a Reproduction came to. Of these, only the last ends the revising.
+    A role stopped for going round in circles ends it too, as `write_reproduction` says."""
 
     NO_REPRODUCTION = "no_reproduction"
     """The role gave no Reproduction to run."""

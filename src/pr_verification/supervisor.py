@@ -449,17 +449,20 @@ class Supervisor:
             There is no rung on which the supervisor is told, since the failure it was shown
             was its telling. The first repeat stops the run. It is looked for once every
             dispatch of a step has ended, before the Budget is looked at and before the
-            supervisor is asked again, and when one of them is a repeat:
+            supervisor is asked again. A fault that a dispatch of the step raised goes on
+            first, as said below, and then nothing is looked for. When one of the dispatches
+            is a repeat:
 
             - no further request is made to any model, and nothing more is run. The
               supervisor is not asked again, and code gives no Claim an attempt, though
               some may still be to have one;
             - what was gathered by then is kept, and with it the results of the other
               dispatches of that step;
-            - each Claim that no dispatch was run for is given `SUPERVISOR_REPEATED`, as said
-              below, and every other Claim is given what it would have been given had the
-              run ended any other way. So each Claim not decided by then is Inconclusive,
-              with a reason.
+            - each Claim still to have a Verification attempt is given
+              `SUPERVISOR_REPEATED`, as said below. A stranded Claim is given what the
+              pipeline gives it, and every other Claim what its dispatches came to, as
+              when a run ends any other way. So each Claim not decided by then is
+              Inconclusive, with a reason.
 
             This is a stop made by code and no finish. The supervisor cannot bring it about
             by what it says alone, since it takes a role being stopped in the same way
@@ -510,11 +513,11 @@ class Supervisor:
             dispatch run for it, and its `loops` are those of every dispatch run for it, in
             the order the dispatches were run.
 
-            A Claim that no dispatch was run for is given no Evidence and no `loops`. Its
-            `inconclusive` is `SUPERVISOR_REPEATED` when the run was stopped because the
-            supervisor repeated itself, and otherwise `BUDGET_SPENT`, filled in with the
-            limit `ledger.stopped_by()` gives. Those are the only two ways a Claim is left
-            without an attempt.
+            A Claim that is not stranded and that no dispatch was run for is given no
+            Evidence and no `loops`. Its `inconclusive` is `SUPERVISOR_REPEATED` when the
+            run was stopped because the supervisor repeated itself, and otherwise
+            `BUDGET_SPENT`, filled in with the limit `ledger.stopped_by()` gives. Those are
+            the only two ways a Claim that could be tried is left without an attempt.
 
         Every Sandbox opened is closed before the answer is given or an exception goes on.
 

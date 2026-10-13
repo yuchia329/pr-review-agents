@@ -353,8 +353,8 @@ class LoopCounts:
     """How many loops were detected."""
 
     recovered_after_told: int = 0
-    """Loops whose role was told, was not found going round again, and whose Claim was then
-    decided."""
+    """Loops whose role was told and was not found going round again, and whose Claim was
+    decided, whether by that work or by work dispatched for it afterwards."""
 
     recovered_after_replanning: int = 0
     """Loops whose role was stopped and whose Claim, handed back to the supervisor, was
