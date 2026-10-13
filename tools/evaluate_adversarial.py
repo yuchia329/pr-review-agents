@@ -73,6 +73,11 @@ REFUSED = ("HTTP 401", "HTTP 402", "HTTP 403")
 request would be answered the same, and the runs would count as runs with no report."""
 
 
+FAILURES_IN_A_ROW = 3
+"""How many runs in a row may end with the model failed before the measurement is ended. One
+is a slow answer. Three is a provider that is down or a network that is gone."""
+
+
 def stop_if_refused(case: str, said: str) -> None:
     """End the measurement when the provider refused the account, not the request."""
     if any(status in said for status in REFUSED):
@@ -113,6 +118,7 @@ def main() -> None:
     budget = budget_from_environment(os.environ)
     confirmed: list[dict[str, str]] = []
     claims: list[dict[str, Any]] = []
+    failed_in_a_row: list[str] = []
     names: dict[Path, str] = {}
 
     def recorded_run(pull_request: PullRequest, model: Model) -> Report:
@@ -120,7 +126,11 @@ def main() -> None:
             report = run(pull_request, model, decider, budget=budget)
         except ModelFailed as error:
             stop_if_refused(names[pull_request.repository], str(error))
+            failed_in_a_row.append(str(error))
+            if len(failed_in_a_row) == FAILURES_IN_A_ROW:
+                sys.exit(f"the model failed in {FAILURES_IN_A_ROW} runs in a row: {error}")
             raise
+        failed_in_a_row.clear()
         given = ", ".join(claim.verdict.value for claim in report.claims) or "no Claims"
         # A run can take minutes, so each is told as it ends, apart from what is measured.
         print(f"{names[pull_request.repository]}: {given}", file=sys.stderr, flush=True)
