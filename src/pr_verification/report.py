@@ -131,7 +131,8 @@ class SearchEvidence(Evidence):
 
     `source` is always `EvidenceSource.READ_CODE`. In the printed report it appears among a
     Claim's `evidence` with `source`, `observation`, `text`, `change`, `path`, `before_lines`,
-    and `after_lines`, so that every line a Verdict rests on can be read there.
+    `after_lines`, and `after_lines_elsewhere`, so that every line a Verdict rests on can be
+    read there.
     """
 
     text: str
@@ -150,6 +151,12 @@ class SearchEvidence(Evidence):
     Content."""
     after_lines: tuple[str, ...]
     """The same, in the code after the pull request, `Report.after`."""
+    after_lines_elsewhere: tuple[str, ...] = ()
+    """Every line that holds the text in the code after the pull request in a file other than
+    the one at `path`, written and ordered as `after_lines` is. Code searches there only for a
+    text said to be removed from one file: it is empty when `change` is `TextChange.ADDED`,
+    and when `path` is None, every file being in `after_lines` already. The role chose the
+    `path`, and these are the lines its choice left out. Untrusted Content."""
 
 
 @dataclass(frozen=True)

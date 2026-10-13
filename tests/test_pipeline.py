@@ -769,6 +769,7 @@ def test_structural_claim_is_verified_by_reading_with_no_sandbox_and_decided_by_
             "accounts.txt:5:manager = UserManager()",
         ],
         "after_lines": still_there,
+        "after_lines_elsewhere": [],
     }
     assert (new_name["path"], new_name["before_lines"]) == ("accounts.txt", [])
     assert new_name["after_lines"][0] == "accounts.txt:1:class AccountManager:"

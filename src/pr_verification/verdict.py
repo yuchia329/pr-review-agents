@@ -56,6 +56,14 @@ NOTHING_SEARCHED = (
 """The reason for Inconclusive when the Evidence for a Structural Claim holds no
 `SearchEvidence`."""
 
+KEPT_ELSEWHERE = (
+    "Searching the one file the Claim was taken to be about found the text removed from it, "
+    "and the code after the pull request still holds that text in other files, on the lines "
+    "the Evidence lists."
+)
+"""The reason for Inconclusive when a text that a Structural Claim was taken to say is removed
+is gone from the one file searched and is held by another file after the pull request."""
+
 SEARCH_DECIDES_NOTHING = (
     "The code before the pull request and the code after it were searched, and the Evidence "
     "from searching neither supports nor contradicts the Claim."
@@ -74,8 +82,8 @@ class Computed:
     reason: str
     """Word for word, one of `CONFIRMED`, `REFUTED`, `NO_REPRODUCTION_RAN`, and
     `DECIDES_NOTHING` for a Behavioural Claim, and one of `STRUCTURAL_CONFIRMED`,
-    `STRUCTURAL_REFUTED`, `NOTHING_SEARCHED`, and `SEARCH_DECIDES_NOTHING` for a Structural
-    Claim. It is written by the project and holds no Untrusted Content."""
+    `STRUCTURAL_REFUTED`, `NOTHING_SEARCHED`, `KEPT_ELSEWHERE`, and `SEARCH_DECIDES_NOTHING`
+    for a Structural Claim. It is written by the project and holds no Untrusted Content."""
 
 
 def compute_verdict(
@@ -145,19 +153,23 @@ def compute_verdict(
         Only `SearchEvidence` can decide the Claim. Any other Evidence decides nothing,
         whatever it holds: a Reproduction, accepted or not, any other Evidence obtained by
         running code, and a `ReadEvidence`. Of a `SearchEvidence`, only its `change` and
-        how many lines hold its text on each commit are read: the number of its
-        `before_lines` and of its `after_lines`. Its text, its path, its observation, and
-        what the lines hold are never read here.
+        how many lines hold its text are read: the number of its `before_lines`, of its
+        `after_lines`, and of its `after_lines_elsewhere`. Its text, its path, its
+        observation, and what the lines hold are never read here.
 
         One `SearchEvidence`:
 
         - supports the Claim when the code shows the change the Claim says. For
           `TextChange.ADDED`, no line holds the text before the pull request and at least one
-          does after. For `TextChange.REMOVED`, at least one line holds it before and none
-          does after;
+          does after. For `TextChange.REMOVED`, at least one line holds it before, none does
+          after, and none does after in any other file: it has no `after_lines_elsewhere`;
         - contradicts the Claim when its `change` is `TextChange.REMOVED` and at least one
           line holds the text before the pull request and at least one after: what the Claim
           says the pull request removes is still there;
+        - is kept elsewhere when its `change` is `TextChange.REMOVED`, at least one line
+          holds the text before the pull request, none does after, and it has at least one
+          of `after_lines_elsewhere`: the text is gone from the one file searched and
+          another file still holds it. It neither supports nor contradicts the Claim;
         - otherwise does neither. So a text that is on neither commit does neither: the Claim
           may be false, or the text may be the wrong one to search for, and nothing recorded
           tells the two apart. So does a text said to be added that was already there before,
@@ -174,7 +186,19 @@ def compute_verdict(
           says, so one that shows nothing leaves the Claim undecided;
         - Inconclusive, with the reason `NOTHING_SEARCHED`, when there is no `SearchEvidence`,
           which includes there being no Evidence at all;
+        - Inconclusive, with the reason `KEPT_ELSEWHERE`, when none contradicts the Claim and
+          at least one is kept elsewhere, whatever the others show;
         - Inconclusive, with the reason `SEARCH_DECIDES_NOTHING`, in every other case.
+
+        `after_lines_elsewhere` can only take a Confirmed away. It never leads to Refuted,
+        and it is not read for a text said to be added. A rename or a removal is a Claim
+        about every file, and the role chooses the `path`: searched in one file alone, a
+        rename that skips another file was Confirmed, a False Assurance, in three of the
+        Structural cases of the evaluation. So code searches the other files whatever path
+        the role gave, and a line found there stops Confirmed. It does not give Refuted,
+        because a text can have good reason to stay in another file, as an old requirement
+        does in a project's examples, and Refuted there would be a False Block. The price is
+        Decided Rate: a true Claim whose text stays elsewhere is now Inconclusive.
 
         Refuted blocks the Gate, so its condition is kept to the one case with lines to
         show, which the Evidence lists: it is never met by a search that found nothing. The

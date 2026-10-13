@@ -113,20 +113,9 @@ def verify_structural_claim(
     the one file it names, as `reading_tools` names a file.
 
     Each text is then searched for by code, in the code of both commits, and becomes one
-    `SearchEvidence`:
-
-    - `source` is `EvidenceSource.READ_CODE`;
-    - `text` and `change` are the entry's, and `path` is the entry's, or None when it was
-      left out;
-    - `before_lines` is every line of `before` that holds the text, and `after_lines` every
-      line of `after` that does, each as `lines_holding` of `pr_verification.reading` gives
-      them for the commit, the text, and the `path`. A line holds a text, and is written
-      and ordered, as the `search` tool of `reading_tools` has it:
-      `<path>:<line number>:<line>`, by path and then by line number. With a `path`, only
-      the lines of the file at that path are searched, and a commit with no file there has
-      no line that holds the text;
-    - `observation` is `lines holding the text: <number> before, <number> after`, written by
-      code.
+    `SearchEvidence`: the one `search_for` gives for the entry's `text` and `change`, and its
+    `path`, or None when it was left out. So a text said to be removed from one file is
+    searched for in the other files as well, whatever the role said of them.
 
     So what is recorded is what code found in the two commits, whatever the role said is
     there. The model's word alone is never Evidence, and the role gives no Verdict: one is
@@ -174,7 +163,7 @@ def verify_structural_claim(
         return StructuralRun(run, evidence=(), inconclusive=None)
     named = [entry for entry in map(_named, texts) if entry is not None]
     evidence = tuple(
-        _searched(repository, before, after, text, change, path) for text, change, path in named
+        search_for(repository, before, after, text, change, path) for text, change, path in named
     )
     return StructuralRun(run, evidence, inconclusive=None)
 
@@ -194,11 +183,42 @@ def _named(entry: object) -> tuple[str, TextChange, str | None] | None:
     return text, TextChange(change), path
 
 
-def _searched(
-    repository: Path, before: str, after: str, text: str, change: TextChange, path: str | None
+def search_for(
+    repository: Path,
+    before: str,
+    after: str,
+    text: str,
+    change: TextChange,
+    path: str | None = None,
 ) -> SearchEvidence:
-    """What code found of one text in the two commits. Nothing the role said is in it but the
-    text, the change, and the path it named."""
+    """What code finds of one text in the commits before and after a pull request.
+
+    It is the search behind every `SearchEvidence`: the Structural verifier makes it for each
+    text its role names, and the Structural cases of the evaluation make it for each text of
+    an answer key. No model is asked and nothing is run. Nothing of the caller's is in the
+    Evidence but `text`, `change`, and `path`:
+
+    - `source` is `EvidenceSource.READ_CODE`;
+    - `text`, `change`, and `path` are as given;
+    - `before_lines` is every line of `before` that holds the text, and `after_lines` every
+      line of `after` that does, each as `lines_holding` of `pr_verification.reading` gives
+      them for the commit, the text, and the `path`. A line holds a text, and is written
+      and ordered, as the `search` tool of `reading_tools` has it:
+      `<path>:<line number>:<line>`, by path and then by line number. With a `path`, only
+      the lines of the file at that path are searched, and a commit with no file there has
+      no line that holds the text;
+    - `after_lines_elsewhere` is, when `change` is `TextChange.REMOVED` and there is a
+      `path`, every line of `after` that holds the text in any other file: the lines that
+      `lines_holding` gives for `after` and the text with no path, less those of
+      `after_lines`, in the same order. So a `path` that the commit has no file at leaves
+      every line of `after` that holds the text here. It is empty when `change` is
+      `TextChange.ADDED` and when there is no `path`;
+    - `observation` is `lines holding the text: <number> before, <number> after`, written by
+      code. It counts `before_lines` and `after_lines` and no other line.
+
+    `text` is expected not to be empty, as `lines_holding` expects.
+    """
+    # Contract only: `after_lines_elsewhere` is left empty until the search is implemented.
     before_lines = lines_holding(repository, before, text, path)
     after_lines = lines_holding(repository, after, text, path)
     return SearchEvidence(
