@@ -221,8 +221,24 @@ class PythonEcosystem:
 
         `path` is `REPRODUCTION_PATH`, at the root of the working copy, so a Reproduction
         imports the repository's code as a test file of its own at the root would. `run`
-        runs pytest over that file alone, and `read_results` names each of its tests by node
-        ID, as in `test_pr_verification_reproduction.py::test_total_adds_tax`.
+        asks pytest for that file alone. The repository's own pytest settings still apply,
+        so pytest may run other files too, as with an `addopts` that names one.
+
+        `take_results` is always given. `run` has pytest write its results to a file at the
+        root of the working copy. Each call chooses that file's name anew, from the
+        operating system's source of randomness and with no less than 128 bits of it. So
+        two placements differ in `run` and in `take_results`, even for the same text, and
+        nothing but those two commands holds the name.
+
+        `run` leaves nothing else of the Reproduction in the working copy: Python writes no
+        compiled file there and pytest keeps no cache. Once `take_results` has exited with
+        status 0, the working copy holds no file or directory that `write` and `run` added.
+        What the Reproduction's own tests or the code under test write there is theirs, and
+        stays.
+
+        What `run` prints is what pytest prints for `Commands.test`, and `read_results`
+        can still read it. It is shown to the writer's role and is not what is counted:
+        `read_results_file` is.
         """
         # Half of a character that takes two code units in UTF-16 has no UTF-8 of its own, and a
         # model can write one. It is written as it stands, and Python then refuses the file.
@@ -232,6 +248,24 @@ class PythonEcosystem:
             write=(*_WRITE, REPRODUCTION_PATH, content),
             run=(*_TEST, REPRODUCTION_PATH),
         )
+
+    def read_results_file(self, ran: RunResult, taken: RunResult) -> Results | Unreadable:
+        """See `ResultsFileEcosystem.read_results_file`.
+
+        Each test is named by its pytest node ID, which starts with `REPRODUCTION_PATH::`,
+        as in `test_pr_verification_reproduction.py::test_total_adds_tax`. `passed`,
+        `failed`, and `could_not_run` are as `read_results` has them. A Reproduction that
+        pytest could not collect, such as one with an import error at the top of the file,
+        is named by `REPRODUCTION_PATH` in `could_not_run`.
+
+        A test from any other file is in none of the three, however pytest came to run it:
+        named by `addopts` in the repository's settings, or added by a `conftest.py`.
+
+        The limit `ResultsFileEcosystem` states holds here: pytest imports the code under
+        test into its own process, so that code can reach the results file and pytest
+        itself.
+        """
+        raise NotImplementedError
 
 
 def _pyproject(repository: Path, commit: str) -> dict[str, Any]:

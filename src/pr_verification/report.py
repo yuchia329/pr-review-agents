@@ -74,7 +74,8 @@ class ReproductionEvidence(RunEvidence):
     read, so it is Untrusted Content."""
     before_results: Results | Unreadable | None = None
     """Which tests of the Reproduction passed and failed against the code before the pull
-    request, as its Ecosystem read them from `before`. None when they were never read. A
+    request, as its Ecosystem read them: from the Reproduction's results file where the
+    Ecosystem keeps one, and otherwise from `before`. None when they were never read. A
     Verdict is computed from these and from `after_results`, and from nothing else here."""
     after_results: Results | Unreadable | None = None
     """The same, against the code after the pull request."""

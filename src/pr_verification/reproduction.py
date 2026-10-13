@@ -102,9 +102,10 @@ class Attempt:
     """The text of the Reproduction, or None when the result is `NO_REPRODUCTION`."""
 
     before: RunResult | None
-    """What the last command of this attempt did against the code before the pull request:
-    running the Reproduction, or placing it when it could not be placed on both commits.
-    None when the result is `NO_REPRODUCTION`, where no command was run."""
+    """What this attempt did against the code before the pull request: running the
+    Reproduction, or placing it when it could not be placed on both commits. Never the run
+    that took its results. None when the result is `NO_REPRODUCTION`, where no command was
+    run."""
 
     after: RunResult | None
     """The same, against the code after the pull request."""
@@ -192,7 +193,24 @@ def write_reproduction(
        the Reproduction is not run, and the attempt records those two runs.
     3. Runs. The placement's `run` is run against `before`, then against `after`, however
        the first ended. The attempt records these two runs.
-    4. Reads. `ecosystem.read_results` reads each run, and `compare_runs` gives the result.
+    4. Takes the results. When the placement has `take_results`, it is run against
+       `before`, then against `after`, however any command before it ended: after step 3,
+       and also straight after a placing in step 2 that failed. The attempt does not record
+       these two runs. Once both have exited with status 0, neither working copy holds the
+       Reproduction or its results file. So an attempt finds nothing an earlier one left,
+       and a later run of `Commands.test` in the same Sandbox collects no Reproduction.
+    5. Reads, unless placing failed. With `take_results`, `ecosystem.read_results_file`
+       reads each commit's run from step 3 together with what step 4 took for that commit,
+       and nothing the Reproduction's run printed is counted. Without,
+       `ecosystem.read_results` reads each run from step 3. `compare_runs` gives the
+       result. So results that name none of the Reproduction's own tests on one commit or
+       the other, as when the repository's settings stop it from being collected, are
+       `COULD_NOT_RUN` and never Evidence, and a test from anywhere else that ran alongside
+       makes no difference.
+
+    A placement has `take_results` only when `ecosystem` is a `ResultsFileEcosystem`. One
+    that has it from any other Ecosystem is a fault in the system: `TypeError` is raised
+    before the Reproduction is placed.
 
     Every command is run by `sandbox.run`, in `Phase.TEST` with `limits`, and no other way:
     nothing a model wrote is run outside the Sandbox.
@@ -201,16 +219,17 @@ def write_reproduction(
     model, and `evidence` holds `source` `EvidenceSource.RAN_CODE`, the command that ran the
     Reproduction, both results, and `observation` as `run_on_both_commits` writes it, with
     the placement's `path`, the Reproduction's text, and as `before_results` and
-    `after_results` what `ecosystem.read_results` gave for the two runs in step 4. Any other
+    `after_results` what step 5 read for the two commits. Any other
     result is revised with another attempt, until `attempt_cap` attempts have been made. Then
     there is no
     `evidence`, and `inconclusive` is `ATTEMPT_CAP_REACHED` filled in. The cap is enforced
     here, by code: whatever the model says, no more than `attempt_cap` attempts are made.
 
     When the model raises `ModelFailed` or the Sandbox raises `SandboxFailed`, the work
-    ends there: no further request is made to the model and nothing more is run. The record
-    is still returned, with the attempts before the one that was under way, no `evidence`,
-    and `inconclusive` as `COULD_NOT_FINISH` filled in. A failure inside the system leaves
+    ends there: no further request is made to the model and nothing more is run, so a
+    Reproduction already placed may be left in a working copy. The record is still
+    returned, with the attempts before the one that was under way, no `evidence`, and
+    `inconclusive` as `COULD_NOT_FINISH` filled in. A failure inside the system leaves
     the Claim Inconclusive, and what was tried before it is not lost.
 
     Every attempt that came to a result is kept in the record, whatever the result.
