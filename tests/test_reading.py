@@ -331,7 +331,7 @@ def test_locator_with_a_step_cap_under_one_is_rejected_before_the_model_is_asked
 def test_locator_that_never_finishes_stops_at_its_step_cap_with_no_evidence(
     billing: FixtureRepository,
 ) -> None:
-    looking = [asks("read_file", path="billing/tax.py")] * (LOCATOR_STEP_CAP + 3)
+    looking = [asks("read_file", path=f"notes/{step}.txt") for step in range(LOCATOR_STEP_CAP + 3)]
 
     by_default = located_by(billing, *looking)
     capped = located_by(billing, *looking, step_cap=2)

@@ -21,6 +21,7 @@ from pr_verification.agent import (
     PROGRESS,
     PROGRESS_INTERVAL,
     REPEAT_LENGTH,
+    STOPPED_LOOPING,
     TOLD,
     LoopKind,
 )
@@ -86,8 +87,6 @@ from pr_verification.sandbox import (
 )
 from pr_verification.structural import (
     VERIFIER_COULD_NOT_FINISH,
-    VERIFIER_STEP_CAP,
-    VERIFIER_STEP_CAP_REACHED,
 )
 from pr_verification.tracing import SpanKind, record
 
@@ -856,10 +855,12 @@ def test_structural_claim_is_still_verified_when_no_reproduction_can_be_run(
         ),
         (
             asks("after_list_files"),
-            VERIFIER_STEP_CAP_REACHED.format(steps=VERIFIER_STEP_CAP),
+            STOPPED_LOOPING.format(
+                role="structural-verifier", first="exact_repeat", second="exact_repeat"
+            ),
         ),
     ],
-    ids=["the model fails", "the verifier never finishes"],
+    ids=["the model fails", "the verifier goes round in circles"],
 )
 def test_structural_claim_the_verifier_did_not_finish_is_inconclusive_and_the_next_is_verified(
     tmp_path: Path, response: str | Exception, reason: str
@@ -1407,20 +1408,18 @@ def test_progress_guard_is_a_decision_that_tells_a_role_whose_steps_all_differ_i
     assert [given for given, _ in verified] == [Verdict.CONFIRMED]
 
 
-def test_role_that_goes_round_whatever_it_is_told_is_stopped_at_its_caps_and_its_claim_inconclusive(
+def test_role_that_goes_round_again_once_told_is_stopped_and_only_its_own_claim_is_inconclusive(
     shop: FixtureRepository, tmp_path: Path
 ) -> None:
-    model = WritesFor({CLAIM: READS})
+    model = WritesFor({CLAIM: READS, "Keeps": writes("broken")})
 
     verified = verify(shop, model, a_pipeline(tmp_path / "state", Sandboxes(shop)))
 
-    last = json.loads(model.requests[-1].data)["steps"]
-    assert verified == [(Verdict.INCONCLUSIVE, cap_reached(AttemptResult.NO_REPRODUCTION))]
-    assert len(model.tasks(CLAIM)) == ATTEMPT_CAP * WRITER_STEP_CAP
-    assert [step.get("told") for step in last] == [
-        *[None] * (REPEAT_LENGTH - 1),
-        *[TOLD[LoopKind.EXACT_REPEAT]] * (WRITER_STEP_CAP - REPEAT_LENGTH),
-    ]
+    repeat = LoopKind.EXACT_REPEAT.value
+    stopped = STOPPED_LOOPING.format(role="reproduction-writer", first=repeat, second=repeat)
+    assert verified == [(Verdict.INCONCLUSIVE, stopped), (Verdict.REFUTED, verdict.REFUTED)]
+    # Told at the repeat and stopped at the next step: nothing more was tried for the Claim.
+    assert len(model.tasks(CLAIM)) == REPEAT_LENGTH + 1
 
 
 # A Python pull request, in a real Sandbox

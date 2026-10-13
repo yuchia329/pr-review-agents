@@ -19,6 +19,7 @@ from pr_verification.agent import (
     PROGRESS,
     PROGRESS_INTERVAL,
     REPEAT_LENGTH,
+    STOPPED_LOOPING,
     TOLD,
     LoopKind,
     StepOutcome,
@@ -446,7 +447,7 @@ def test_role_that_reaches_its_step_cap_gave_no_reproduction_and_the_next_attemp
     reads = asks("read_file", path="pricing.py")
 
     capped, model = write(pricing, reads, reads, writes("fixed"), step_cap=2)
-    by_default, _ = write(pricing, *[reads] * WRITER_STEP_CAP, writes("fixed"))
+    by_default, _ = write(pricing, *looks(WRITER_STEP_CAP), writes("fixed"))
 
     assert [attempt.result for attempt in capped.attempts] == [NO_REPRODUCTION, SHOWS_A_DIFFERENCE]
     assert capped.attempts[0].run.stopped is Stopped.STEP_CAP
@@ -679,21 +680,29 @@ def test_progress_guard_given_to_the_writer_is_asked_about_the_run_of_each_attem
     assert run.evidence is not None
 
 
-@pytest.mark.parametrize("differing", [False, True], ids=["one step", "steps that all differ"])
-def test_whatever_is_detected_the_writer_makes_no_more_attempts_or_steps_than_its_caps(
-    pricing: FixtureRepository, differing: bool
+@pytest.mark.parametrize(
+    ("differing", "progress", "found"),
+    [(False, YES, LoopKind.EXACT_REPEAT), (True, NO, LoopKind.NO_PROGRESS)],
+    ids=["one step", "steps that all differ"],
+)
+def test_writer_whose_role_is_stopped_for_going_round_in_circles_ends_the_work_and_tries_no_more(
+    pricing: FixtureRepository, differing: bool, progress: str, found: LoopKind
 ) -> None:
-    step_cap = 2 * PROGRESS_INTERVAL + REPEAT_LENGTH
-    steps = looks(2 * step_cap + 5, differing)
-    guard = ScriptedDecider([NO] * len(steps))
+    steps = looks(2 * PROGRESS_INTERVAL + REPEAT_LENGTH, differing)
+    guard = ScriptedDecider([progress] * len(steps))
 
-    run, model = write_watched(guard, pricing, *steps, attempt_cap=2, step_cap=step_cap)
+    run, model = write_watched(
+        guard, pricing, *steps, writes("fixed"), attempt_cap=2, step_cap=len(steps) + 1
+    )
 
-    assert [len(attempt.run.steps) for attempt in run.attempts] == [step_cap, step_cap]
-    assert all(len(attempt.run.triggers) > 1 for attempt in run.attempts)
-    assert len(model.requests) == 2 * step_cap
-    assert run.inconclusive == ATTEMPT_CAP_REACHED.format(
-        attempts=2, ending=ENDINGS[NO_REPRODUCTION]
+    (attempt,) = run.attempts
+    told, stopped = attempt.run.triggers
+    assert (attempt.result, attempt.run.stopped) == (NO_REPRODUCTION, Stopped.LOOP)
+    assert (told.kind, stopped.kind) == (found, found)
+    assert len(model.requests) == len(attempt.run.steps) == stopped.step
+    assert run.evidence is None
+    assert run.inconclusive == STOPPED_LOOPING.format(
+        role="reproduction-writer", first=found.value, second=found.value
     )
 
 

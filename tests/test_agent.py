@@ -6,7 +6,7 @@ from itertools import groupby
 
 import pytest
 from conftest import UnreachableModel, asks, finishes
-from hypothesis import given
+from hypothesis import example, given
 from hypothesis import strategies as st
 
 from pr_verification.agent import (
@@ -17,6 +17,7 @@ from pr_verification.agent import (
     REPEAT_LENGTH,
     TOLD,
     UNREADABLE_RESPONSE,
+    Loop,
     LoopKind,
     Role,
     RoleRun,
@@ -26,6 +27,7 @@ from pr_verification.agent import (
     Tool,
     Trigger,
     detect_repeat,
+    loop_of,
     run_role,
 )
 from pr_verification.decision import NO, YES, DecisionFailed, InputTooLong, ScriptedDecider
@@ -551,20 +553,41 @@ def test_retry_that_comes_out_differently_is_not_flagged_and_a_repeat_after_it_i
     assert run.triggers == (Trigger(EXACT_REPEAT, step=len(results)),)
 
 
-def test_role_that_repeats_whatever_it_is_told_triggers_at_each_step_until_its_step_cap() -> None:
-    read = RecordingTool("read_file")
-    step_cap = REPEAT_LENGTH + 3
+def test_role_that_takes_the_same_step_once_more_after_it_was_told_is_stopped_at_that_step() -> (
+    None
+):
+    read, capped_read = RecordingTool("read_file"), RecordingTool("read_file")
+    stopped_at = REPEAT_LENGTH + 1
+    told_once = (Trigger(EXACT_REPEAT, step=REPEAT_LENGTH),)
 
-    run, model = run_scripted(role_with(read, step_cap=step_cap), *[READS] * (step_cap + 5))
+    run, model = run_scripted(role_with(read, step_cap=stopped_at + 3), *[READS] * (stopped_at + 3))
+    # A step that reaches the cap is not checked, so the cap is what stops this run.
+    capped, _ = run_scripted(role_with(capped_read, step_cap=stopped_at), *[READS] * stopped_at)
 
-    again = range(REPEAT_LENGTH, step_cap)
-    assert run.triggers == tuple(Trigger(EXACT_REPEAT, step=step) for step in again)
-    assert told(model.requests[-1]) == [
-        *[None] * (REPEAT_LENGTH - 1),
-        *[TOLD[EXACT_REPEAT]] * len(again),
-    ]
-    assert (run.stopped, run.answer) == (Stopped.STEP_CAP, None)
-    assert len(run.steps) == len(model.requests) == len(read.calls) == step_cap
+    assert run.triggers == (*told_once, Trigger(EXACT_REPEAT, step=stopped_at))
+    assert (run.stopped, run.answer) == (Stopped.LOOP, None)
+    assert len(run.steps) == len(model.requests) == len(read.calls) == stopped_at
+    assert told(model.requests[-1]) == [*[None] * (REPEAT_LENGTH - 1), TOLD[EXACT_REPEAT]]
+    assert (capped.stopped, capped.triggers) == (Stopped.STEP_CAP, told_once)
+    assert len(capped.steps) == len(capped_read.calls) == stopped_at
+
+
+@given(
+    role=st.text(max_size=20),
+    found=st.lists(st.sampled_from(LoopKind), max_size=2),
+    stopped=st.sampled_from(Stopped),
+    steps=st.lists(STEPS, max_size=4),
+    answer=st.none() | st.just({"places": ["tax.py"]}),
+)
+def test_loop_of_any_run_is_its_role_and_the_kinds_of_its_triggers_and_none_when_it_has_none(
+    role: str, found: list[LoopKind], stopped: Stopped, steps: list[Step], answer: dict[str, object]
+) -> None:
+    triggers = tuple(Trigger(kind, step=place + 1) for place, kind in enumerate(found))
+
+    loop = loop_of(RoleRun(role, tuple(steps), stopped, answer, triggers))
+
+    told_of, found_again = [*found, None, None][:2]
+    assert loop == (None if told_of is None else Loop(role, told_of, found_again))
 
 
 # The progress guard
@@ -678,27 +701,66 @@ def test_what_the_progress_guard_raises_is_not_caught(failure: Exception) -> Non
         watched(guard, *differing(PROGRESS_INTERVAL), finishes(), step_cap=PROGRESS_INTERVAL + 1)
 
 
+def test_role_is_stopped_at_its_second_trigger_whatever_kind_it_is_and_however_much_later() -> None:
+    # A repeat is found first. The guard is next due at the multiple of the interval after it,
+    # and has been asked once for each multiple before the repeat.
+    due = (REPEAT_LENGTH // PROGRESS_INTERVAL + 1) * PROGRESS_INTERVAL
+    after_a_repeat = [*[READS] * REPEAT_LENGTH, *differing(due)]
+    said_before = [YES] * ((REPEAT_LENGTH - 1) // PROGRESS_INTERVAL)
+    # The guard finds no progress first. A repeat is found once the same step has been taken
+    # enough times after that, and the guard is not asked about a step a repeat is found at.
+    last = PROGRESS_INTERVAL + REPEAT_LENGTH
+    after_no_progress = [*differing(PROGRESS_INTERVAL), *[READS] * (REPEAT_LENGTH + 3)]
+    guard, other_guard = ScriptedDecider([*said_before, NO]), ScriptedDecider([NO, *[YES] * last])
+
+    first, model = watched(guard, *after_a_repeat, finishes(), step_cap=len(after_a_repeat) + 1)
+    second, _ = watched(other_guard, *after_no_progress, step_cap=len(after_no_progress))
+
+    assert first.triggers == (
+        Trigger(EXACT_REPEAT, step=REPEAT_LENGTH),
+        Trigger(LoopKind.NO_PROGRESS, step=due),
+    )
+    assert (first.stopped, first.answer) == (Stopped.LOOP, None)
+    assert len(first.steps) == len(model.requests) == due
+    assert len(guard.asked) == len(said_before) + 1
+    assert second.triggers == (
+        Trigger(LoopKind.NO_PROGRESS, step=PROGRESS_INTERVAL),
+        Trigger(EXACT_REPEAT, step=last),
+    )
+    assert (second.stopped, len(second.steps)) == (Stopped.LOOP, last)
+    assert len(other_guard.asked) <= last // PROGRESS_INTERVAL
+
+
 GOING_ROUND = st.sampled_from([asks("given"), asks("given", path="tax.py"), "what?"])
 
 
 @given(
-    responses=st.lists(GOING_ROUND | RESPONSES, min_size=1, max_size=12),
+    responses=st.lists(GOING_ROUND, min_size=1, max_size=12)
+    | st.lists(GOING_ROUND | RESPONSES, min_size=1, max_size=12),
     answers=st.lists(st.sampled_from([YES, NO]), min_size=12, max_size=12),
-    data=st.data(),
+    step_cap=st.integers(min_value=1, max_value=12),
 )
-def test_whatever_is_detected_the_step_cap_holds_and_the_role_is_told_of_every_trigger(
-    responses: list[str], answers: list[str], data: st.DataObject
+@example(responses=["what?"] * (REPEAT_LENGTH + 3), answers=[YES] * 12, step_cap=12)
+def test_whatever_is_detected_the_step_cap_holds_and_a_run_is_stopped_at_its_second_trigger(
+    responses: list[str], answers: list[str], step_cap: int
 ) -> None:
-    step_cap = data.draw(st.integers(min_value=1, max_value=len(responses)))
+    step_cap = min(step_cap, len(responses))
     model, guard = ScriptedModel(responses), ScriptedDecider(answers)
-    role = role_with(RecordingTool("given"), step_cap=step_cap)
+    given_tool = RecordingTool("given")
 
-    run = run_role(role, TASK, model, progress_guard=guard)
+    run = run_role(role_with(given_tool, step_cap=step_cap), TASK, model, progress_guard=guard)
 
-    found = {trigger.step: TOLD[trigger.kind] for trigger in run.triggers}
+    finished = run.steps[-1].outcome is StepOutcome.FINISHED
     assert 1 <= len(run.steps) <= step_cap
     assert len(model.requests) == len(run.steps)
-    assert (run.stopped is Stopped.STEP_CAP) == (run.steps[-1].outcome is not StepOutcome.FINISHED)
+    assert len(given_tool.calls) == sum(step.outcome is StepOutcome.RAN_TOOL for step in run.steps)
     assert len(guard.asked) <= len(run.steps) // PROGRESS_INTERVAL
-    assert sorted(found) == [trigger.step for trigger in run.triggers]
+    assert len(run.triggers) <= 2
+    assert (run.stopped is Stopped.LOOP) == (len(run.triggers) == 2)
+    assert (run.stopped is Stopped.FINISHED) == finished
+    assert (run.answer is not None) == finished
+    if run.stopped is Stopped.LOOP:
+        assert run.triggers[-1].step == len(run.steps) < step_cap
+    # The role was told of the first trigger, after the step it was found at, and of no other.
+    found = {trigger.step: TOLD[trigger.kind] for trigger in run.triggers[:1]}
     assert told(model.requests[-1]) == [found.get(step) for step in range(1, len(run.steps))]
