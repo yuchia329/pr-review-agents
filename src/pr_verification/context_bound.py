@@ -19,13 +19,14 @@ SMALLEST_LIMIT = 200
 cut, however long the text."""
 
 TOOL_RESULT_LIMIT = 20_000
-"""The most characters a role is shown of one result of a tool unless another limit is set. A
-starting value: it is to be chosen again from measurement, so nothing may rely on the number
-itself."""
+"""The most characters a role is shown of one result of a tool unless another limit is set.
+Kept after the measurement in `docs/context-bound.md`. It may be chosen again from another,
+so nothing may rely on the number itself."""
 
 SANDBOX_OUTPUT_LIMIT = 8_000
 """The most characters the Reproduction writer is shown of the output of one run in the
-Sandbox unless another limit is set. A starting value, as `TOOL_RESULT_LIMIT` is."""
+Sandbox unless another limit is set. A starting value: it is to be chosen from measurement,
+so nothing may rely on the number itself."""
 
 TOOL_RESULT_VARIABLE = "PR_VERIFICATION_TOOL_RESULT_LIMIT"
 SANDBOX_OUTPUT_VARIABLE = "PR_VERIFICATION_SANDBOX_OUTPUT_LIMIT"

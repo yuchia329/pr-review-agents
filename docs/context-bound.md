@@ -60,3 +60,51 @@ uv run --extra laya python tools/measure_context_bound.py --clones ~/.cache/pr-v
 
 Run it once with the limits to be measured, and once with both set to 1000000000, which is how
 a run went before there was a bound.
+
+### Results, 2026-10-12
+
+Both runs were of the 20 development cases, once each, with MiniMax M3 on its hosted endpoint
+and `PR_VERIFICATION_DECISION=small_llm`. Every run gave a report. The price was set to 0.30
+and 1.20 dollars for a million tokens, as price trackers list it, not as MiniMax bills it.
+
+| | Before: nothing cut | After: 20000 and 8000 |
+| --- | --- | --- |
+| Largest request, in characters | 105,469 | 48,767 |
+| Requests to the model | 257 | 256 |
+| Seconds for a pull request | 145 | 144 |
+| Dollars for a pull request | 0.017 | 0.015 |
+| Claims | 30 (19 true, 11 false) | 29 (17 true, 12 false) |
+| Decided | 23 | 21 |
+| False Blocks | 0 | 0 |
+| False Assurances | 2 | 2 |
+| Inconclusive | 5 | 6 |
+| Decided Rate | 0.77 | 0.72 |
+
+- **The largest request is under half what it was.** Before, one case,
+  `rename/packaging-gil-disabled`, made a request twice the size of any other. After, the
+  largest three requests are between 43,000 and 49,000 characters. That is under a quarter of
+  what the limits allow, and it fits the 32768 tokens the local model is given
+  (`ollama/Modelfile`), which the largest request before does not at three characters to a
+  token.
+- **Time and money did not change.** A pull request took as many requests either way, and
+  most of them are small.
+- **The Decided Rate differs by two Claims, which one repetition cannot tell from chance.**
+  The system splits each pull request into Claims in its own words, so the two runs did not
+  even score the same Claims, and `docs/structural-cases.md` records that a Verdict here
+  varies from run to run. No Claim was Refuted that should not have been, in either run.
+- **Not measured:** more than one repetition, any other value of the limits, the held-out
+  part, and the cases made from SWE-bench Verified. Nothing shows that a run in the Sandbox
+  printed more than 8,000 characters, so the limit on a run's output may never have cut.
+
+### The defaults
+
+`PR_VERIFICATION_TOOL_RESULT_LIMIT` stays at 20000. At that value the largest request seen
+fits the smaller of the two models the project is run with, and nothing measured shows it
+costing a Verdict. A lower limit was not measured, so there is no ground to choose one.
+
+`PR_VERIFICATION_SANDBOX_OUTPUT_LIMIT` stays at 8000 as a starting value: these cases give no
+number to choose it from.
+
+The largest request the limits allow, 220,000 characters and more, is still several times the
+local model's window. What keeps a request inside it today is that roles finish in fewer steps
+than their cap and read less than the limit at each, which the limits do not enforce.
