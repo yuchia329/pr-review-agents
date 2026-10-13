@@ -342,6 +342,9 @@ class FixedPipeline:
               a `RoleModels`, each role's model is asked through the ledger on its own:
               the model a role is run on is `ledger.model(model_for(model, role),
               claim=index)`, so it is charged at its own price and has its own capabilities.
+              `write_judged_reproduction`, which takes one `model` and reads it with
+              `model_for`, is then given a `RoleModels` that holds those two models, the
+              writer's and the judge's, each already asked through the ledger.
 
         When a Claim's share is spent
             A `BudgetSpent` for a Claim's share ends the work on that Claim: it is given no
