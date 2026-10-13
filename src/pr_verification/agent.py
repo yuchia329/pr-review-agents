@@ -396,9 +396,18 @@ def run_role(
         It is one step, whatever it holds: one request to the model, one `Step`, and one
         towards `role.step_cap`. Its `result` in `data` is a string, as every step's is:
         the text of a JSON list of strings, one for each tool in the order asked for, each
-        `bounded(returned, limit, tool.keeps)` with what that tool returned and that tool.
-        So each result is bounded on its own, as "What a role is shown of a result" below
-        says of one. The forms that ask for one tool and that finish are read as before.
+        `bounded(returned, share, tool.keeps)` with what that tool returned and that tool.
+
+        The tools of one step share the step's limit. With `limit` as "What a role is shown
+        of a result" below has it and `asked` as the number of tools the step asked for,
+        `share` is `limit // asked`, and `SMALLEST_LIMIT` (`pr_verification.context_bound`)
+        where that is less. So the strings of the list hold together no more than `limit`
+        characters, unless `limit` is under `asked * SMALLEST_LIMIT`, and then no more than
+        `asked * SMALLEST_LIMIT`: a step that asks for several tools is shown no more than
+        a step that asks for one, and asking for more at once does not let a role read
+        more than the step cap and the limit allow. The share is the same for every tool
+        of the step, whatever each returned: what one leaves unused is given to no other.
+        The forms that ask for one tool and that finish are read as before.
 
     Every outcome counts as a step, and `Step` says what each records. After a step that
     does not finish, the role is asked again, unless the run has taken `role.step_cap`
@@ -410,9 +419,9 @@ def run_role(
     What a role is shown of a result
         What a role is shown of what any one tool returned is never longer than a fixed
         limit, enforced here, by code, whatever a tool returns. So the `result` of a step
-        in `data` is never longer than that limit, except for a `RAN_TOOLS` step, which
-        holds up to `PARALLEL_CALL_CAP` results, each within the limit, as "Several tools
-        in one step" above says. The limit is the `tool_result` of
+        in `data` is never longer than that limit, except for a `RAN_TOOLS` step, whose
+        results share the limit between them, as "Several tools in one step" above says,
+        and are written there as the text of a JSON list. The limit is the `tool_result` of
         `limits_in_use()` (`pr_verification.context_bound`), read once before the first
         request, so it is the same on every step of a run.
 
