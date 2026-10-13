@@ -14,10 +14,12 @@ shown, it is named as the baseline's: each reason it gives starts with `BASELINE
 comparison prints it under `BASELINE_LABEL` (`pr_verification.comparison`).
 """
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from pr_verification.agent import RoleRun
+from pr_verification.budget import Clock
 from pr_verification.core import PullRequest
 from pr_verification.model import Model
 from pr_verification.report import Report, Verdict
@@ -82,7 +84,8 @@ def state_verdict(
     The role finishes with `{"verdict": "<verdict>", "reason": "<why>"}`, where the verdict
     is a value of `Verdict`. That is the `verdict` returned, whatever the code holds: here,
     and nowhere else in the project, a model's word is a Verdict. The `reason` returned is
-    `BASELINE_PREFIX` followed by the role's `reason`.
+    `BASELINE_PREFIX` followed by the role's `reason`. Any other member of the answer is
+    ignored.
 
     The Verdict is Inconclusive, and nothing is raised:
 
@@ -99,7 +102,11 @@ def state_verdict(
 
 
 def reading_only_baseline(
-    pull_request: PullRequest, model: Model, *, step_cap: int = VERIFIER_STEP_CAP
+    pull_request: PullRequest,
+    model: Model,
+    *,
+    step_cap: int = VERIFIER_STEP_CAP,
+    clock: Clock = time.monotonic,
 ) -> Report:
     """Verify one pull request by reading alone, and return what a report would hold.
 
@@ -123,10 +130,13 @@ def reading_only_baseline(
     The report holds one plain `Claim` for each Claim extracted, in that order, with the
     `verdict` and the `reason` of its `StatedVerdict` and no Evidence. Its `before` and
     `after` are the full commit IDs and its `findings` are empty. Its `budget_spend` is a
-    `BudgetSpend` of the whole call: its `seconds` are the time the call took, its `dollars`
-    the sum of what each request cost at the price of the model asked, with nothing for a
-    model that has no price, and its `steps` the number of requests made to a model. No
-    Budget is kept to: the step cap alone bounds each Claim.
+    `BudgetSpend` of the whole call: its `seconds` are the time the call took, between a
+    reading of `clock` before anything else is done and one just before the report is
+    returned, its `dollars` the sum of what each request cost at the price of the model
+    asked, with nothing for a model that has no price, and its `steps` the number of
+    requests made to a model. A request that fails counts as a step and costs nothing, as
+    with the ledger (`pr_verification.budget`). No Budget is kept to: the step cap alone
+    bounds each Claim.
 
     The report is for the harness to score and for nothing else. Its Gate follows from
     Verdicts that no Evidence bears out, and is never to be reported to a pipeline.

@@ -179,10 +179,12 @@ def configured_models(
 
     One client is made for each different `ModelChoice` among `configuration.default` and
     `configuration.roles`, of the class its `protocol` names, with the choice's `endpoint`,
-    `model`, and `parallel_tool_calls`, and with `transport`. Two roles with the same choice
-    share the one client. The `RoleModels` returned has the client of
-    `configuration.default` as its `default`, and in its `roles` the client of each role
-    `configuration.roles` names, and no other role. No request is made here.
+    `model`, and `parallel_tool_calls`, and with `transport`. Two choices are the same when
+    they are equal, whether or not they are one object, so two roles with equal choices
+    share the one client, as does a role whose choice equals the default. The `RoleModels`
+    returned has the client of `configuration.default` as its `default`, and in its `roles`
+    the client of each role `configuration.roles` names, and no other role. No request is
+    made here.
 
     A choice's key is what `environment` holds under its `key_variable`, and no key when it
     has none. Its price is the choice's own `price`. A choice with none is given the price

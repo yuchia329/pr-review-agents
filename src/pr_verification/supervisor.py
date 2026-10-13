@@ -220,7 +220,8 @@ class Supervisor:
     """The supervising model. With None, it is the model of the supervisor among those
     `gather_within` is given: `model_for(model, RoleName.SUPERVISOR)`
     (`pr_verification.model`). So one model that is given for every role supervises as well
-    as doing the roles' work."""
+    as doing the roles' work. A supervising model given here that is itself a `RoleModels`
+    is read the same way: the model asked is its `model_for(model, RoleName.SUPERVISOR)`."""
 
     step_cap: int = SUPERVISOR_STEP_CAP
     """The most steps the supervisor may take for one pull request. At least 1."""

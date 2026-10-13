@@ -338,7 +338,10 @@ class FixedPipeline:
               `ledger.sandbox(sandbox, claim=index)` in place of the Sandbox, where `sandbox`
               is the Sandbox as it was opened, so that no run is timed twice. So every request
               made for the Claim, by the writer, the judge, or the Structural verifier, is one
-              step against that Claim, and every run is timed against it.
+              step against that Claim, and every run is timed against it. When `model` is
+              a `RoleModels`, each role's model is asked through the ledger on its own:
+              the model a role is run on is `ledger.model(model_for(model, role),
+              claim=index)`, so it is charged at its own price and has its own capabilities.
 
         When a Claim's share is spent
             A `BudgetSpent` for a Claim's share ends the work on that Claim: it is given no

@@ -176,7 +176,12 @@ def write_judged_reproduction(
     of rounds.
 
     `claim` is a Behavioural Claim, and the other arguments are as `write_reproduction` takes
-    them. Makes one round after another. Each round:
+    them, but for `model`. The writer is run on `model_for(model,
+    RoleName.REPRODUCTION_WRITER)` and the judge on `model_for(model,
+    RoleName.REPRODUCTION_JUDGE)` (`pr_verification.model`), so a model that is no
+    `RoleModels` does the work of both, as before there were models for each role. Wherever
+    a step below says the writer or the judge is given the model, that is the one meant.
+    Makes one round after another. Each round:
 
     1. Writes. In the first round `write_reproduction` is called with `claim`,
        `progress_guard`, and the arguments given. In each later round `rewrite_reproduction`

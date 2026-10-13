@@ -13,6 +13,8 @@ from collections.abc import Sequence
 from contextlib import ExitStack
 from pathlib import Path
 
+import httpx
+
 from pr_verification.budget import Budget, InvalidBudget, budget_from_environment
 from pr_verification.claims import ClaimExtractionFailed
 from pr_verification.configuration import CONFIGURATION_VARIABLE
@@ -52,6 +54,7 @@ def main(
     *,
     orchestration: Orchestration | None = None,
     budget: Budget | None = None,
+    transport: httpx.BaseTransport | None = None,
 ) -> int:
     """Verify the pull request the arguments name, print its report, and return the exit code.
 
@@ -76,6 +79,10 @@ def main(
     run, and a configuration whose key the environment does not hold. So the reading-only
     baseline (`pr_verification.baseline`) cannot be selected here by any setting: it is
     neither a configuration nor an orchestration.
+
+    `transport` is for a caller that brings its own, as a test does. It is given to
+    `configured_models` and to `model_from_environment`, whichever makes the models, so with
+    it no connection to a model is opened. It is not read when `model` is given.
 
     `budget` is passed to the core's entry point. When it is None, the one the environment
     configures is used: `budget_from_environment(os.environ)`, which is the provisional
@@ -136,7 +143,7 @@ def main(
     returned is the same as with tracing off.
     """
     with traced(os.environ):
-        return _main(argv, model, decider, orchestration, budget)
+        return _main(argv, model, decider, orchestration, budget, transport)
 
 
 def _main(
@@ -145,10 +152,11 @@ def _main(
     decider: Decider | None,
     orchestration: Orchestration | None,
     budget: Budget | None,
+    transport: httpx.BaseTransport | None,
 ) -> int:
     """The run that `main` traces."""
     arguments = _parser().parse_args(argv)
-    if model is None and os.environ.get(CONFIGURATION_VARIABLE):
+    if model is None and (transport is not None or os.environ.get(CONFIGURATION_VARIABLE)):
         raise NotImplementedError
     try:
         if model is None:
