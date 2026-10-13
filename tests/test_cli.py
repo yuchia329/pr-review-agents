@@ -45,6 +45,12 @@ def test_command_line_prints_the_report_and_exits_zero_when_the_gate_passes(
         "claims": [],
         "findings": [],
         "budget_spend": {"dollars": 0.0, "steps": 1, "stopped_by": None, "claims": []},
+        "loops": {
+            "detected": 0,
+            "recovered_after_told": 0,
+            "recovered_after_replanning": 0,
+            "ended_inconclusive": 0,
+        },
     }
     assert code == 0
 
