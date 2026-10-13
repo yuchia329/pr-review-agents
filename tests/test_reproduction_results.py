@@ -441,6 +441,12 @@ def total(net):
 atexit.register(print, {FORGED!r})
 """
 RUNS_ITS_OWN_TEST = "[pytest]\naddopts = tests/test_theirs.py\n"
+ADDS_ITS_OWN_TEST = """\
+def pytest_configure(config):
+    config.args.append("tests/test_theirs.py")
+"""
+NEVER_ENDS = "import time\n\n\ndef test_never_ends():\n    time.sleep(600)\n"
+SOON = Limits(seconds=5.0, memory_bytes=1024 * 1024 * 1024, processors=2.0)
 HIDES_THE_REPRODUCTION = "[pytest]\npython_functions = check_*\naddopts = tests/test_theirs.py\n"
 LIST = (
     "python", "-I", "-c",
@@ -452,13 +458,14 @@ LIST = (
 
 @dataclass(frozen=True)
 class Shop:
-    """One repository, and the commit after each of four pull requests made from `base`. Only
+    """One repository, and the commit after each of five pull requests made from `base`. Only
     `adds_tax` does what the Claim says."""
 
     path: Path
     base: str
     adds_tax: str
     runs_its_own_test: str
+    adds_its_own_test: str
     forges: str
     hides_the_reproduction: str
 
@@ -468,6 +475,7 @@ class Shop:
             self.base,
             self.adds_tax,
             self.runs_its_own_test,
+            self.adds_its_own_test,
             self.forges,
             self.hides_the_reproduction,
         )
@@ -484,6 +492,11 @@ def shop(tmp_path_factory: pytest.TempPathFactory) -> Shop:
         {
             **base,
             "pytest.ini": RUNS_ITS_OWN_TEST,
+            "tests/test_theirs.py": "def test_theirs():\n    assert True\n",
+        },
+        {
+            **base,
+            "conftest.py": ADDS_ITS_OWN_TEST,
             "tests/test_theirs.py": "def test_theirs():\n    assert True\n",
         },
         {**base, "pricing.py": FORGES},
@@ -624,6 +637,22 @@ def test_python_working_copy_holds_nothing_the_placement_added_once_results_are_
     assert held(sandbox, shop.adds_tax) == untouched[shop.adds_tax]
 
 
+def test_python_results_command_removes_a_reproduction_whose_run_was_stopped_at_the_time_limit(
+    shop: Shop, installed: Installed, untouched: Mapping[str, str]
+) -> None:
+    sandbox, ecosystem, _ = installed
+    placement = ecosystem.place(NEVER_ENDS)
+
+    written = run_in_test_phase(sandbox, placement.write, shop.adds_tax)
+    assert written.exit_status == 0, written.output
+    ran = sandbox.run(placement.run, commit=shop.adds_tax, phase=Phase.TEST, limits=SOON)
+    assert ran.limit_hit is LimitHit.TIME
+    taken = run_in_test_phase(sandbox, placement.take_results, shop.adds_tax)
+
+    assert isinstance(ecosystem.read_results_file(ran, taken), Unreadable)
+    assert held(sandbox, shop.adds_tax) == untouched[shop.adds_tax]
+
+
 def test_python_results_command_removes_a_reproduction_that_was_placed_and_never_run(
     shop: Shop, installed: Installed, untouched: Mapping[str, str]
 ) -> None:
@@ -686,10 +715,12 @@ def write_in(
     return write(shop.path, shop.base, after, text, sandbox=sandbox, ecosystem=ecosystem)
 
 
+@pytest.mark.parametrize("added_by", ["runs_its_own_test", "adds_its_own_test"])
 def test_repositorys_own_test_added_to_every_run_does_not_count(
-    shop: Shop, installed: Installed
+    shop: Shop, installed: Installed, added_by: str
 ) -> None:
-    run, _ = write_in(shop, installed, shop.runs_its_own_test, SAME_ON_BOTH)
+    """The test is added by `addopts` in the repository's settings, or by its `conftest.py`."""
+    run, _ = write_in(shop, installed, getattr(shop, added_by), SAME_ON_BOTH)
 
     (attempt,) = run.attempts
     assert attempt.before is not None and attempt.after is not None
