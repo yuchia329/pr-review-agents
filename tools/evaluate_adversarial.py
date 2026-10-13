@@ -33,7 +33,7 @@ from pr_verification.budget import budget_from_environment
 from pr_verification.core import PullRequest, run
 from pr_verification.decision import configured_decider, decision_configuration
 from pr_verification.evaluation import CaseRun, Part, PartEvaluation, evaluate, score
-from pr_verification.model import Model
+from pr_verification.model import Model, ModelFailed
 from pr_verification.openai_compatible import model_from_environment
 from pr_verification.report import (
     AcceptedReproduction,
@@ -66,6 +66,17 @@ def by_placement(part: PartEvaluation) -> dict[str, dict[str, Any]]:
         )
         for placement in PlacedIn
     }
+
+
+REFUSED = ("HTTP 401", "HTTP 402", "HTTP 403")
+"""What a provider answers when the key is wrong or the account is out of money. Every later
+request would be answered the same, and the runs would count as runs with no report."""
+
+
+def stop_if_refused(case: str, said: str) -> None:
+    """End the measurement when the provider refused the account, not the request."""
+    if any(status in said for status in REFUSED):
+        sys.exit(f"{case}: the provider refused the account, so nothing more is run: {said}")
 
 
 def claims_of(case: str, report: Report) -> list[dict[str, Any]]:
@@ -105,7 +116,11 @@ def main() -> None:
     names: dict[Path, str] = {}
 
     def recorded_run(pull_request: PullRequest, model: Model) -> Report:
-        report = run(pull_request, model, decider, budget=budget)
+        try:
+            report = run(pull_request, model, decider, budget=budget)
+        except ModelFailed as error:
+            stop_if_refused(names[pull_request.repository], str(error))
+            raise
         given = ", ".join(claim.verdict.value for claim in report.claims) or "no Claims"
         # A run can take minutes, so each is told as it ends, apart from what is measured.
         print(f"{names[pull_request.repository]}: {given}", file=sys.stderr, flush=True)
@@ -113,6 +128,7 @@ def main() -> None:
         claims.extend(told)
         for claim in told:
             print(json.dumps(claim), file=sys.stderr, flush=True)
+            stop_if_refused(claim["case"], claim["reason"])
         confirmed.extend(
             {"case": names[pull_request.repository], "claim": claim.text, "reason": claim.reason}
             for claim in report.claims
