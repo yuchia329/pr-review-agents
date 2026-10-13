@@ -332,3 +332,46 @@ class Report:
 
     def to_json(self) -> str:
         return json.dumps({"gate": asdict(self.gate), **asdict(self)}, indent=2)
+
+
+@dataclass(frozen=True)
+class LoopCounts:
+    """How the loop ladder was used in some work: how many loops were detected, and what came
+    of them.
+
+    A loop is one run of a role in which loop detection triggered: a `Loop`, of
+    `pr_verification.agent`. `count_loops`, of `pr_verification.core`, counts every loop
+    detected under exactly one of the three outcomes and states which. So in the counts it
+    gives, and in any sum of them,
+    `recovered_after_told + recovered_after_replanning + ended_inconclusive` is `detected`.
+
+    In the printed report it appears with `detected`, `recovered_after_told`,
+    `recovered_after_replanning`, and `ended_inconclusive`.
+    """
+
+    detected: int = 0
+    """How many loops were detected."""
+
+    recovered_after_told: int = 0
+    """Loops whose role was told, was not found going round again, and whose Claim was then
+    decided."""
+
+    recovered_after_replanning: int = 0
+    """Loops whose role was stopped and whose Claim, handed back to the supervisor, was
+    decided by work dispatched for it afterwards."""
+
+    ended_inconclusive: int = 0
+    """Loops whose Claim was given an Inconclusive Verdict."""
+
+
+@dataclass(frozen=True)
+class ReportWithLoops(Report):
+    """A report that also records how the loop ladder was used in the run.
+
+    In the printed report it appears as a `Report` does, and with `loops`, as `LoopCounts`
+    is printed.
+    """
+
+    loops: LoopCounts
+    """The loops detected in the work done for the Claims of the pull request, and what came
+    of them. The core's entry point says what is counted."""

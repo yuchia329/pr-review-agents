@@ -75,8 +75,9 @@ class StructuralRun:
 
     inconclusive: str | None
     """Why the Claim is Inconclusive, when the role's run came to no answer:
-    `VERIFIER_STEP_CAP_REACHED` or `VERIFIER_COULD_NOT_FINISH`, filled in. There is no
-    Evidence then. None when the role finished, whatever it finished with."""
+    `VERIFIER_STEP_CAP_REACHED`, `VERIFIER_COULD_NOT_FINISH`, or `STOPPED_LOOPING` of
+    `pr_verification.agent`, filled in. There is no Evidence then. None when the role
+    finished, whatever it finished with."""
 
 
 def verify_structural_claim(
@@ -139,7 +140,9 @@ def verify_structural_claim(
     left out: the cap is enforced here, by code, and a longer list is searched for nothing.
 
     When the run stopped at the step cap, there is no Evidence and `inconclusive` is
-    `VERIFIER_STEP_CAP_REACHED` filled in. When `ModelFailed` is raised, by the model or as
+    `VERIFIER_STEP_CAP_REACHED` filled in. When it stopped with `Stopped.LOOP`, the role
+    having been stopped for going round in circles, there is no Evidence and `inconclusive`
+    is `STOPPED_LOOPING` filled in for the run. When `ModelFailed` is raised, by the model or as
     a `DecisionFailed` by the progress guard, the work ends there: the record is returned
     with no `run`, no Evidence, and `inconclusive` as `VERIFIER_COULD_NOT_FINISH` filled in.
     A failure inside the system leaves the Claim Inconclusive.

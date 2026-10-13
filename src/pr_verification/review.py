@@ -71,7 +71,8 @@ NOTHING_DECLARED = (
 
 REVIEW_UNFINISHED = "The Review could not be finished, so it may have missed something: {failure}"
 """The concern of a Finding of kind `UNFINISHED_REVIEW`. `failure` is what the `ModelFailed`
-raised said, or `DECISION_CAP_REACHED` or `STEP_CAP_REACHED` filled in."""
+raised said, or `DECISION_CAP_REACHED` or `STEP_CAP_REACHED` filled in, or `STOPPED_LOOPING`
+of `pr_verification.agent` filled in."""
 
 DECISION_CAP_REACHED = (
     "the injection detector may ask for {decisions} decisions, and the text left needs more"
@@ -304,6 +305,9 @@ def review_pull_request(
           one such Finding is added with what the exception said.
         - When the Reviewer's run stops at the step cap, it gives no Findings and one such
           Finding is added with `STEP_CAP_REACHED` filled in.
+        - When the Reviewer's run stops with `Stopped.LOOP`, the role having been stopped
+          for going round in circles, it gives no Findings and one such Finding is added
+          with `STOPPED_LOOPING` filled in for the run.
 
         Part 2 is done however part 1 ended.
 

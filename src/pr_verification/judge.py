@@ -104,8 +104,9 @@ def judge_reproduction(
 
     The Reproduction is accepted when, and only when, the run finished and its answer holds
     the JSON value `true` under `accepted`. Anything else is a rejection: `false`, any other
-    value, such as `"true"` or `1`, an answer with no `accepted`, and a run that stopped at
-    the step cap. So a judge that cannot be read accepts nothing.
+    value, such as `"true"` or `1`, an answer with no `accepted`, and a run that did not
+    finish: one that stopped at the step cap, or with `Stopped.LOOP`. So a judge that cannot
+    be read accepts nothing.
 
     The `reason` of a rejection is the answer's `reason`, exactly as the role gave it, when
     that is a string that is not blank, and `NO_REASON_GIVEN` otherwise. An acceptance has no
@@ -208,6 +209,13 @@ def write_judged_reproduction(
     it and its `judgement` None, no `evidence`, and `inconclusive` as
     `JUDGE_COULD_NOT_FINISH` filled in. A failure while the writer is at work is answered
     for by the writer, and ends the work as step 1 says.
+
+    A role stopped for going round in circles ends the work too. When the writer's run
+    stopped with `Stopped.LOOP`, the `ReproductionRun` has no `evidence`, and the work ends
+    as step 1 says. When the judge's run did, the work ends there, whatever rounds are left:
+    the round is kept with its `judgement`, a rejection, no further request is made to the
+    model, there is no `evidence`, and `inconclusive` is `STOPPED_LOOPING` filled in for the
+    judge's run. Neither role is run again here after it was stopped.
 
     Every round is kept in the record, however it ended.
 

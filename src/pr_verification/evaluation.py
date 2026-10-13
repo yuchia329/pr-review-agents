@@ -19,7 +19,7 @@ from pr_verification.claims import ClaimExtractionFailed
 from pr_verification.core import InvalidPullRequest, PullRequest, run
 from pr_verification.decision import Decider, InputTooLong, Question, options_of
 from pr_verification.model import Model, ModelFailed
-from pr_verification.report import BudgetSpend, Report, Verdict
+from pr_verification.report import BudgetSpend, LoopCounts, Report, ReportWithLoops, Verdict
 from pr_verification.repository import commit_staged, git, new_repository
 
 EntryPoint = Callable[[PullRequest, Model], Report]
@@ -84,6 +84,10 @@ class CaseRun:
     no_report: str | None
     """Why the run gave no report, as the error raised said it, or None when it gave one.
     It may quote a model's response, so it is Untrusted Content."""
+
+    loops: LoopCounts | None = None
+    """How the loop ladder was used in the run, as the report says, or None when the report
+    does not say, which is when it is not a `ReportWithLoops`, and when there is no report."""
 
 
 @dataclass(frozen=True)
@@ -230,6 +234,14 @@ class PartEvaluation:
             given.setdefault(case_run.name, set()).add(tuple(sorted(case_run.verdicts)))
         return tuple(name for name, different in given.items() if len(different) > 1)
 
+    @property
+    def loops(self) -> LoopCounts:
+        """The loops of all the runs together: each of the four counts of `LoopCounts` is the
+        sum of that count over the runs whose `loops` is not None. Every count is 0 when
+        there is no such run. So the loops of every case and every repetition of the part
+        are totalled, and each loop is still counted under exactly one outcome."""
+        raise NotImplementedError
+
 
 @dataclass(frozen=True)
 class Evaluation:
@@ -247,10 +259,11 @@ class Evaluation:
     def to_json(self) -> str:
         """The evaluation as a JSON object with `repetitions`, `development`, and `held_out`.
 
-        Each part holds `scores`, `by_repetition` (a list), and `varying` (a list of names).
-        Each scores object holds every field of `Scores` under its own name, and `claims`,
-        `decided_rate`, `false_block_rate`, and `false_assurance_rate`. A rate or a mean that
-        is None is null.
+        Each part holds `scores`, `by_repetition` (a list), `varying` (a list of names), and
+        `loops`. Each scores object holds every field of `Scores` under its own name, and
+        `claims`, `decided_rate`, `false_block_rate`, and `false_assurance_rate`. A rate or a
+        mean that is None is null. `loops` is the part's `loops`: an object that holds every
+        field of `LoopCounts` under its own name.
         """
         printed = {
             "repetitions": self.repetitions,
@@ -294,7 +307,9 @@ def evaluate(
     evaluate with Claims classified, give an `entry_point` that has one bound to it.
 
     Each run becomes one `CaseRun`, in the `PartEvaluation` of its case's part, with
-    `verdicts` taken from the report's Claims and `spend` from its `budget_spend`.
+    `verdicts` taken from the report's Claims and `spend` from its `budget_spend`. Its `loops`
+    are the report's `loops` when the report is a `ReportWithLoops`, as the core's entry
+    point gives, and None otherwise.
 
     A run that raises `InvalidPullRequest`, `ModelFailed`, or `ClaimExtractionFailed` is
     recorded with `no_report` and the evaluation carries on: these say that one pull request
@@ -327,6 +342,8 @@ def _run_once(case: Case, repetition: int, model: Model, entry_point: EntryPoint
         report = entry_point(case.pull_request, model)
     except (InvalidPullRequest, ModelFailed, ClaimExtractionFailed) as error:
         return CaseRun(case.name, repetition, case.expected, (), None, str(error))
+    if isinstance(report, ReportWithLoops):
+        raise NotImplementedError
     verdicts = tuple(claim.verdict for claim in report.claims)
     return CaseRun(case.name, repetition, case.expected, verdicts, report.budget_spend, None)
 

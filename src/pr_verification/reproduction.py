@@ -183,10 +183,10 @@ def write_reproduction(
        Sandbox output reaches the model only there, as data.
        The run is given `progress_guard`, which is passed by position after the Claim, so
        it is watched for loops as `run_role` says.
-       The role finishes with `{"reproduction": "<text>"}`. When its run stopped at the
-       step cap, or its answer holds under `reproduction` no string, a blank one, or one
-       longer than `LONGEST_REPRODUCTION` characters, the attempt's result is
-       `NO_REPRODUCTION` and nothing is run.
+       The role finishes with `{"reproduction": "<text>"}`. When its run did not finish,
+       or its answer holds under `reproduction` no string, a blank one, or one longer than
+       `LONGEST_REPRODUCTION` characters, the attempt's result is `NO_REPRODUCTION` and
+       nothing is run.
     2. Places. `ecosystem.place` is asked about the text, exactly as the role gave it, and
        the placement's `write` is run against `before`, then against `after`, however the
        first ended. When either does not exit with status 0, the result is `COULD_NOT_RUN`,
@@ -239,6 +239,13 @@ def write_reproduction(
     Detection moves neither cap: whatever is found, no more than `attempt_cap` attempts are
     made, of no more than `step_cap` steps each. A `DecisionFailed` from the progress guard
     is a `ModelFailed`, and ends the work as one does.
+
+    When an attempt's run stopped with `Stopped.LOOP`, the work ends there, however many
+    attempts are left. That attempt is kept, with the result `NO_REPRODUCTION`. No further
+    request is made to the model and nothing is run. There is no `evidence`, and
+    `inconclusive` is `STOPPED_LOOPING` filled in for that run. So the writer does not try
+    again by itself after its role was stopped: the Claim goes back to whatever asked for
+    the work.
 
     Raises `ValueError` before any request when `attempt_cap` or `step_cap` is less than 1.
     Any other exception is a fault in the system and is raised.

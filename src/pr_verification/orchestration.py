@@ -18,6 +18,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from pr_verification.agent import Loop
 from pr_verification.budget import BUDGET_SPENT, BudgetSpent, Ledger
 from pr_verification.decision import Decider
 from pr_verification.ecosystem import ReproductionEcosystem, Unsupported, find_commands
@@ -81,6 +82,13 @@ class Gathered:
     """Why the work ended without Evidence that could decide the Claim, when the orchestration
     knows. It can only ever explain an Inconclusive Verdict: it is never read to compute one.
     It may hold what a failure said, and so Untrusted Content."""
+
+    loops: tuple[Loop, ...] = ()
+    """What loop detection found in the work done for the Claim: `loop_of` each run of a role
+    made in that work, in the order the runs were made, without the runs it found nothing
+    in. Only a run that ended is among them. A run cut short, by a failing model or by a
+    limit of the Budget, left no record, so what was found in it is not here. It is never
+    read to compute a Verdict, and holds no Untrusted Content."""
 
 
 class Orchestration(Protocol):
@@ -232,6 +240,17 @@ class FixedPipeline:
         in the Sandbox. A Reproduction the judge did not accept is not among a Claim's
         Evidence, whatever its runs showed.
 
+        A role stopped for going round in circles ends the work on its Claim, as
+        `write_judged_reproduction` says: the Claim is given no Evidence and
+        `STOPPED_LOOPING` filled in. The fixed pipeline has no supervisor to hand the Claim
+        back to, so nothing more is tried for it, and the next Claim is worked on as if
+        nothing had happened.
+
+        Each Claim's `loops` are those of the runs the `JudgedRun` records, in the order
+        they were made: for each round, the writer's run of each attempt, and then the
+        judge's run when it has a `judgement`. A Claim that step 4 was not reached for has
+        none.
+
         Every Sandbox opened is closed before the answer is given or an exception goes on.
 
         Raises `ValueError` as `prepare_target` does. Any other exception is a fault in the
@@ -278,7 +297,9 @@ class FixedPipeline:
             `write_judged_reproduction`, with the Claim, `repository`, `before`, `after`, the
             model, the pipeline's `progress_guard`, and the step cap it has unless given
             another. The Claim is given the `StructuralRun`'s `evidence` and its
-            `inconclusive`. No Sandbox is used for it, and no Reproduction is written.
+            `inconclusive`, and as its `loops` the loop of the `StructuralRun`'s `run`, when
+            there is a run and it has one. No Sandbox is used for it, and no Reproduction
+            is written.
 
             Every other Claim goes on to a Reproduction, as step 4 of `gather` says: a Claim
             `kinds` names Behavioural, one it has None for, and every Claim when `kinds` is
@@ -313,6 +334,9 @@ class FixedPipeline:
             A `BudgetSpent` for a Claim's share ends the work on that Claim: it is given no
             Evidence, and the message of the `BudgetSpent`, which is `SHARE_SPENT` filled in.
             The next Claim is worked on as if nothing had happened, with its own share whole.
+            Work that a `BudgetSpent` ended, for a share or for the Budget, left no record,
+            so the Claim is given no `loops`, whatever was found before the limit was
+            reached.
 
         When the Budget is spent
             No further work is started: no further request is made to the model, nothing more

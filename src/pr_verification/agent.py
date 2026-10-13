@@ -5,9 +5,9 @@ because the caps and the handling of Untrusted Content need control of the loop 
 
 The loop also watches a role for going round in circles: repeating itself, or taking steps
 that bring it no closer to its goal. Each time that is found is a trigger, and triggers are
-answered on a ladder. On its first rung the role is told what was found and goes on. The next
-rung, stopping a role that triggers again, is not built yet. The step cap holds whatever is
-found.
+answered on a ladder. On its first rung the role is told what was found and goes on. On its
+second, a role that triggers again is stopped, and what becomes of its work is for whatever
+ran it to say. The step cap holds whatever is found.
 """
 
 import json
@@ -195,6 +195,21 @@ class Stopped(StrEnum):
     STEP_CAP = "step_cap"
     """The run had taken `Role.step_cap` steps without the model finishing."""
 
+    LOOP = "loop"
+    """Loop detection triggered for the second time in the run, so the role was not asked
+    again."""
+
+
+STOPPED_LOOPING = (
+    "The {role} was stopped for going round in circles. It was told what was found ({first}) "
+    "and went on, and was stopped when something was found again ({second})."
+)
+"""What is said of a run that stopped with `Stopped.LOOP`, and so why a Claim is Inconclusive
+when the role that was stopped was at work on it. `role` is the run's `RoleRun.role`, and
+`first` and `second` are the values of the `LoopKind` of its first and its second trigger.
+Written by the project: it holds nothing of the task, of any response, or of anything a tool
+returned."""
+
 
 @dataclass(frozen=True)
 class RoleRun:
@@ -210,12 +225,42 @@ class RoleRun:
     """Why the run ended."""
 
     answer: Mapping[str, object] | None
-    """The JSON object the model finished with, or None when the run stopped at the step cap.
+    """The JSON object the model finished with, or None when the run stopped any other way.
     It is the model's word, shaped by whatever the role read: data to check, never a Verdict."""
 
     triggers: tuple[Trigger, ...] = ()
     """Every time loop detection found something, in the order found. Empty when it never
-    did."""
+    did, and never more than two: the run is stopped at the second."""
+
+
+@dataclass(frozen=True)
+class Loop:
+    """One run of a role that loop detection found going round in circles, and how far up the
+    ladder it went.
+
+    It holds the role's name and what the project's own detection found. It holds nothing of
+    the task, of any response, or of anything a tool returned, and so no Untrusted Content.
+    """
+
+    role: str
+    """The name of the role that was run."""
+
+    first: LoopKind
+    """What was found the first time, which the role was told of."""
+
+    second: LoopKind | None
+    """What was found the second time, at which the run was stopped. None when nothing was
+    found again: the role was told once and its run ended another way."""
+
+
+def loop_of(run: RoleRun) -> Loop | None:
+    """The loop of `run`, or None when loop detection found nothing in it.
+
+    None when `run.triggers` is empty. Otherwise its `role` is `run.role`, its `first` is the
+    kind of the first trigger, and its `second` is the kind of the second trigger, or None
+    when there is only one. Nothing else of the run is read.
+    """
+    raise NotImplementedError
 
 
 def detect_repeat(steps: Sequence[Step]) -> LoopKind | None:
@@ -309,7 +354,8 @@ def run_role(
     does not finish, the role is asked again, unless the run has taken `role.step_cap`
     steps: then it stops with `Stopped.STEP_CAP` and makes no further request. The cap is
     enforced here, by code, whatever the model says, so a run never makes more than
-    `role.step_cap` requests to the model.
+    `role.step_cap` requests to the model. A run is also stopped when loop detection
+    triggers in it a second time, as said below.
 
     What a role is shown of a result
         The `result` of a step in `data` is never longer than a fixed limit, enforced here,
@@ -345,21 +391,33 @@ def run_role(
            differ and make no progress, and when the two probabilities are equal it finds
            nothing.
 
-        Finding something is a trigger, of whichever kind, and it is answered on the first
-        rung of the ladder: the role is told what was detected and the run goes on. The
-        trigger is recorded in `RoleRun.triggers`. In every later request of the run, the
-        object in `steps` for the step it was found after has the member `told`, which is
-        `TOLD` for the kind found. Nothing else changes: `instructions` are the same as on
-        every other step, telling is not a step, and each `Step` records what it would have.
+        Finding something is a trigger, of whichever kind, and every trigger is recorded in
+        `RoleRun.triggers`. Triggers are answered on a ladder, by how many the run has had:
 
-        Every trigger of a run is answered this way, the first and any after it. Nothing is
-        forgotten when the role is told: the steps before still count, so a role that takes
-        the same step once more triggers again at the very next step. Stopping a role that
-        triggers again is the next rung of the ladder, and it is not built here.
+        - The first is answered on the first rung: the role is told what was detected and
+          the run goes on. In every later request of the run, the object in `steps` for the
+          step it was found after has the member `told`, which is `TOLD` for the kind
+          found. Nothing else changes: `instructions` are the same as on every other step,
+          telling is not a step, and each `Step` records what it would have.
+        - The second is answered on the second rung: the run is stopped. The role is not
+          asked again, so no further request is made to `model`, no tool is run, and the
+          progress guard is not asked again. The run stops with `Stopped.LOOP` and no
+          `answer`, and its `steps` are the steps taken by then. The second trigger may be
+          of another kind than the first, and any number of steps after it.
+
+        Nothing is forgotten when the role is told: the steps before still count, so a role
+        that takes the same step once more triggers again at the very next step, and is
+        stopped there. So a run has two triggers when, and only when, it stopped with
+        `Stopped.LOOP`, and never more.
+
+        Stopping is all that is done here. What becomes of the work the role was run for is
+        said by whatever ran it: for a role at work on a Claim, the work ends and the Claim
+        goes back to the orchestration, with `STOPPED_LOOPING` filled in as the reason.
 
         The step cap holds throughout. Whatever is detected, and whatever the role is told,
-        a run takes no more than `role.step_cap` steps, makes one request to `model` for
-        each, and stops with `Stopped.STEP_CAP` at the cap. The progress guard is asked no
+        a run takes no more than `role.step_cap` steps and makes one request to `model` for
+        each. A step that reaches the cap is not checked, so a run that reaches it stops
+        with `Stopped.STEP_CAP`, whatever was found before. The progress guard is asked no
         more than once for every `PROGRESS_INTERVAL` steps taken. What its decider asks of
         a model of its own to answer is not a step and is not counted here. With
         `progress_guard` None it is never asked, and only `detect_repeat` can find anything.

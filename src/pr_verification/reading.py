@@ -182,8 +182,8 @@ def locate(
     path is not a file of the commit, or when its lines are not integers with
     `1 <= first_line <= last_line <= the number of lines in the file`, lines being what
     `reading_tools` says they are. Neither `4.0` nor `true` is an integer. So the model's
-    word alone is never recorded as Evidence. There is no Evidence at all when the run
-    stopped at the step cap, or when its answer has no list under `places`.
+    word alone is never recorded as Evidence. There is no Evidence at all when the run did
+    not finish, or when its answer has no list under `places`.
 
     Raises as `run_role` does.
     """

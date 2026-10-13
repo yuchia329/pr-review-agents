@@ -7,6 +7,10 @@ results, and never raw Untrusted Content. It gathers Evidence and decides nothin
 is computed by `compute_verdict` and the Gate by `compute_gate`, in the core's entry point,
 whatever the supervisor says. Its step cap, the Budget, and the rule against finishing early
 are enforced here, by code, from outside the model.
+
+A Claim whose role was stopped for going round in circles is handed back to the supervisor
+with a short account of what failed, and the supervisor may try again or give the Claim up. Its
+own decisions are watched in turn: a supervisor that repeats itself stops the run.
 """
 
 import contextvars
@@ -15,11 +19,12 @@ import math
 import threading
 from collections.abc import Callable
 from contextlib import ExitStack
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
 
+from pr_verification.agent import Loop
 from pr_verification.budget import BUDGET_SPENT, BudgetSpent, Ledger
 from pr_verification.decision import Decider
 from pr_verification.model import Model, ModelFailed, ModelRequest
@@ -68,6 +73,14 @@ FINISH_REFUSED = (
 )
 """What the supervisor is told after a finish that was refused. `unattempted` is how many
 Claims are still to have a Verification attempt."""
+
+SUPERVISOR_REPEATED = (
+    "The run was stopped before any work was done for this Claim, because the supervisor "
+    "repeated itself: it dispatched the same work for a Claim again after a role was stopped "
+    "for going round in circles, and the role was stopped in the same way."
+)
+"""Why a Claim is Inconclusive when the run was stopped because the supervisor repeated
+itself, and no dispatch had been run for the Claim by then."""
 
 
 class Strategy(StrEnum):
@@ -138,6 +151,22 @@ class ResultSummary:
     """The reason `compute_verdict` gave with it, which is written by the project."""
 
 
+@dataclass(frozen=True)
+class FailureSummary(ResultSummary):
+    """The summary of a dispatch that ended with a role stopped for going round in circles:
+    the short structured account of what failed that the supervisor is given when the Claim is
+    handed back to it.
+
+    In a request it appears as a `ResultSummary` does, and with `failure`: an object with
+    exactly `role`, `first`, and `second`. Like the rest of a summary, it holds only words
+    the project wrote.
+    """
+
+    failure: Loop = field(kw_only=True)
+    """The loop of the run that was stopped: the name of its role, what was found first, and
+    what was found again. Its `second` is never None."""
+
+
 def summarise(
     claim: int, strategy: Strategy, kind: ClaimKind | None, gathered: Gathered
 ) -> ResultSummary:
@@ -147,9 +176,18 @@ def summarise(
     Its `claim` and `strategy` are those given, and its `evidence_count` is how many pieces
     of Evidence `gathered` holds. Its `verdict` and `reason` are those of
     `compute_verdict(gathered.evidence, kind)`, with `ClaimKind.BEHAVIOURAL` for a `kind` of
-    None. Nothing else of `gathered` is read, and no model is asked: the same arguments
-    always give the same summary.
+    None.
+
+    When the last of `gathered.loops` has a `second`, a role was stopped for going round in
+    circles and the work ended there. The summary is then a `FailureSummary` with that `Loop`
+    as its `failure`. Otherwise it is a `ResultSummary` and no `FailureSummary`, whatever
+    else `gathered.loops` holds.
+
+    Nothing of `gathered` is read but its `evidence` and its `loops`, and no model is asked:
+    the same arguments always give the same summary.
     """
+    if gathered.loops and gathered.loops[-1].second is not None:
+        raise NotImplementedError
     computed = compute_verdict(gathered.evidence, _verified_as(kind))
     return ResultSummary(claim, strategy, len(gathered.evidence), computed.verdict, computed.reason)
 
@@ -248,11 +286,12 @@ class Supervisor:
               `ledger.left()`.
             - `supervisor_steps_left`, how many more steps the supervisor may take after
               this one.
-            - `results`, a list with the `ResultSummary` that `summarise` gives for each
-              dispatch of the step before, in the order they were dispatched in. Each is an
-              object with exactly `claim`, `strategy`, `evidence_count`, `verdict`, and
-              `reason`. It is empty when the step before dispatched nothing, and on the
-              first step.
+            - `results`, a list with the summary that `summarise` gives for each dispatch
+              of the step before, in the order they were dispatched in. Each is an object
+              with exactly `claim`, `strategy`, `evidence_count`, `verdict`, and `reason`.
+              A `FailureSummary` has `failure` as well: an object with exactly `role`,
+              `first`, and `second`. It is empty when the step before dispatched nothing,
+              and on the first step.
             - `refused`, what the supervisor is told when the step before was refused, and
               null when it was not.
 
@@ -327,7 +366,8 @@ class Supervisor:
             with the pipeline's own settings, and ending as it says when the Claim's share
             or the Budget is spent. So a `Strategy.REPRODUCTION` is a call of
             `write_judged_reproduction` and a `Strategy.READING` one of
-            `verify_structural_claim`. What a dispatch comes to is its result: a `Gathered`.
+            `verify_structural_claim`. What a dispatch comes to is its result: a `Gathered`,
+            with the `loops` the pipeline gives a Claim for that work.
             A dispatch for a Claim whose share is spent is run like any other, and ends at
             once with `SHARE_SPENT`, filled in.
 
@@ -360,6 +400,72 @@ class Supervisor:
             recording is open, what each dispatch does is recorded as
             `pr_verification.tracing` says of a thread started for a dispatch.
 
+        A role stopped for going round in circles
+            A dispatch ends, as the pipeline's step 4 says, when a role it runs is stopped
+            on the second rung of the ladder (`run_role`). It gave no Evidence, and its
+            `inconclusive` is `STOPPED_LOOPING` filled in. Its Claim is then handed back to
+            the supervisor with a short structured account of what failed: the summary of
+            the dispatch, in the `results` of the next request, is a `FailureSummary`. Its
+            `failure` holds the name of the role that was stopped and the two kinds of loop
+            that were found, all of them words the project wrote.
+
+            The Claim has had a Verification attempt, and no Evidence was gathered for it,
+            so its strategies are still open. What is done about it is the supervisor's to
+            choose, in any later step:
+
+            - A different approach: it dispatches the Claim again. A dispatch is a run of
+              its own. Its roles start from nothing and are shown nothing of the run that
+              was stopped, and the supervisor may first move more of the Budget to the
+              Claim, and may run it alone or alongside others. While each kind has one
+              strategy, a different approach is that strategy once more.
+            - Giving up on the Claim: it does not dispatch the Claim again. Giving up needs
+              no word of its own, and a finish is not refused on the Claim's account. The
+              Claim is then given what its last dispatch came to, so its Verdict is
+              Inconclusive, and the reason is `STOPPED_LOOPING` filled in.
+
+            No cap is moved by any of this. A dispatch made again is one of the at most
+            `DISPATCH_CAP` of its step, in one of the at most `self.step_cap` steps, and
+            spends from what is left of the Claim's share, which is not given back when a
+            role is stopped. The Budget and each share end work as they do for any other
+            dispatch.
+
+        When the supervisor repeats itself
+            The supervisor's own decisions are watched as a role's steps are, by comparing
+            results as well as actions. A dispatch is a repeat when all of these hold:
+
+            - its summary is a `FailureSummary`;
+            - the dispatch run before it for the same Claim had the same strategy;
+            - the summary of that dispatch was a `FailureSummary` too, with an equal
+              `failure`: the same `role`, the same `first`, and the same `second`.
+
+            So the supervisor repeats itself when it asks for the same work again after a
+            failure, and the work fails in the same way. A dispatch made again that ends any
+            other way is not a repeat: with Evidence, with no failure, or with a different
+            failure. Only the two dispatches for the one Claim are compared, so what was
+            dispatched for other Claims between them, a move, and a step that was refused
+            make no difference. A dispatch that code makes for a Claim the supervisor left
+            untried is the first for its Claim, and so never a repeat.
+
+            There is no rung on which the supervisor is told, since the failure it was shown
+            was its telling. The first repeat stops the run. It is looked for once every
+            dispatch of a step has ended, before the Budget is looked at and before the
+            supervisor is asked again, and when one of them is a repeat:
+
+            - no further request is made to any model, and nothing more is run. The
+              supervisor is not asked again, and code gives no Claim an attempt, though
+              some may still be to have one;
+            - what was gathered by then is kept, and with it the results of the other
+              dispatches of that step;
+            - each Claim that no dispatch was run for is given `SUPERVISOR_REPEATED`, as said
+              below, and every other Claim is given what it would have been given had the
+              run ended any other way. So each Claim not decided by then is Inconclusive,
+              with a reason.
+
+            This is a stop made by code and no finish. The supervisor cannot bring it about
+            by what it says alone, since it takes a role being stopped in the same way
+            twice, and a Claim it leaves untried is reported as Inconclusive with the reason
+            and is not passed over in silence.
+
         Nothing the supervisor says is a Verdict
             No response is read for a Verdict or for the Gate, and none has a member that
             could give one: a Verdict written in a `finish` is not read, and one written
@@ -374,7 +480,8 @@ class Supervisor:
             in the order of `claims`, each as a dispatch of the first of `strategies_for`
             its kind, for as long as the Budget is not spent. So a supervisor that wastes
             its steps, or whose model fails, costs the choices it would have made, and costs
-            no Claim its attempt.
+            no Claim its attempt. A supervisor that repeats itself is not stopped in this
+            way: the whole run is, as said above.
 
         When the run ends
             The supervisor is asked for one step after another until the first of these:
@@ -385,12 +492,14 @@ class Supervisor:
               response that comes after the Budget is spent is not acted on: no further
               request is made to any model, and nothing more is run;
             - the supervisor is stopped, and the run ends once code has given each Claim
-              its attempt, or the Budget is spent.
+              its attempt, or the Budget is spent;
+            - the supervisor repeats itself, which stops the run at once, as said above.
 
-            So whatever the supervising model does, when the run ends either no Claim is
-            still to have a Verification attempt or the Budget is spent. All of this is
-            enforced here, by code. The supervising model is not asked whether any Budget or
-            any step is left, and nothing it says changes a cap or a limit.
+            So whatever the supervising model does, when the run ends no Claim is still to
+            have a Verification attempt, or the Budget is spent, or the run was stopped
+            because the supervisor repeated itself. All of this is enforced here, by code.
+            The supervising model is not asked whether any Budget or any step is left, and
+            nothing it says changes a cap or a limit.
 
         What each Claim is given
             One `Gathered` for each Claim, in the order of `claims`. A stranded Claim is
@@ -398,10 +507,14 @@ class Supervisor:
             Evidence of the one dispatch that gave it any, in the order gathered, and none
             when no dispatch did. So all the Evidence is kept for the report, and only
             summaries reached the supervisor. Its `inconclusive` is that of the last
-            dispatch run for it. A Claim that no dispatch
-            was run for is given no Evidence and `BUDGET_SPENT`, filled in with the limit
-            `ledger.stopped_by()` gives: the Budget being spent is the only way a Claim is
-            left without an attempt.
+            dispatch run for it, and its `loops` are those of every dispatch run for it, in
+            the order the dispatches were run.
+
+            A Claim that no dispatch was run for is given no Evidence and no `loops`. Its
+            `inconclusive` is `SUPERVISOR_REPEATED` when the run was stopped because the
+            supervisor repeated itself, and otherwise `BUDGET_SPENT`, filled in with the
+            limit `ledger.stopped_by()` gives. Those are the only two ways a Claim is left
+            without an attempt.
 
         Every Sandbox opened is closed before the answer is given or an exception goes on.
 

@@ -3,10 +3,12 @@
 import subprocess
 import tempfile
 import time
+from collections.abc import Iterable, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
+from pr_verification.agent import Loop
 from pr_verification.budget import Budget, Clock, Ledger
 from pr_verification.claims import classify_claim, extract_claims
 from pr_verification.decision import Decider, Decision, Question
@@ -24,6 +26,7 @@ from pr_verification.report import (
     ClaimSpend,
     ClassifiedClaim,
     Finding,
+    LoopCounts,
     PullRequestSpend,
     Report,
     Verdict,
@@ -46,6 +49,34 @@ class PullRequest:
 
 class InvalidPullRequest(Exception):
     """The pull request as given cannot be verified at all, so there is no report."""
+
+
+def count_loops(found: Iterable[tuple[Sequence[Loop], Verdict]]) -> LoopCounts:
+    """Count the loops detected in one run, each under the one outcome it came to.
+
+    `found` holds, for each Claim of a pull request, the loops detected in the work done for
+    it, as `Gathered.loops` has them, and the Verdict the Claim was given. Each `Loop` in it
+    is counted once in `detected` and once under one outcome. The rung of the ladder its role
+    reached and the Verdict of its Claim settle which:
+
+    - `recovered_after_told` when the Verdict is Confirmed or Refuted and the loop has no
+      `second`: the role was told, was not found going round again, and the Claim was
+      decided.
+    - `recovered_after_replanning` when the Verdict is Confirmed or Refuted and the loop has
+      a `second`: the role was stopped, and the Claim was decided all the same. The work
+      that was stopped gave no Evidence, so what decided the Claim was dispatched for it
+      afterwards.
+    - `ended_inconclusive` when the Verdict is Inconclusive, whichever rung was reached.
+
+    So `detected` is the number of loops in `found`, and the three outcomes always add up to
+    it. With no Claims, or no loops, every count is 0. Nothing is read but whether each loop
+    has a `second`, and each Verdict.
+
+    A loop is counted by what came of its Claim, and not by what came of its own run. One
+    whose role was told and then finished is counted under `ended_inconclusive` when its
+    Claim was left Inconclusive for any other cause.
+    """
+    raise NotImplementedError
 
 
 def run(
@@ -72,6 +103,7 @@ def run(
     5. Computes each Claim's Verdict with `compute_verdict`, from the Evidence gathered for
        that Claim and its kind, and nothing else.
     6. With `review` true, reviews the pull request, as described below.
+    7. Counts the loops, as described below.
 
     Classifying
         Each Claim the extractor lists is labelled by `classify_claim(decider, text)`, once,
@@ -190,6 +222,25 @@ def run(
         Nothing a Review spends is recorded in the ledger, and no limit of the Budget stops
         it: until it is given a share, a Review is bounded by its own caps alone.
 
+    Loops
+        The report is a `ReportWithLoops`. Its `loops` are `count_loops` of, for each Claim
+        in the report's order, the `loops` of the `Gathered` the orchestration gave for it
+        and the Verdict computed for it in step 5. So each run records how many loops were
+        detected, how many recovered after the role was told, how many recovered after the
+        supervisor planned again, and how many ended Inconclusive. Every count is 0 when no
+        loop was found, as for a pull request with no Claims, and for an orchestration that
+        gives no `loops`.
+
+        A Claim whose role was stopped for going round in circles has no Evidence from that
+        work. Unless work dispatched for it afterwards decides it, its Verdict is
+        Inconclusive and its reason is the one the orchestration gave, which is
+        `STOPPED_LOOPING` filled in. A Claim that was never worked on because the supervisor
+        repeated itself is Inconclusive too, and its reason is `SUPERVISOR_REPEATED`.
+
+        Only the work the orchestration did for the Claims is counted. A loop found in the
+        Reviewer's run in step 6 is in no Claim's `loops`, and is not counted. Nothing of
+        the counts is read to compute a Verdict or the Gate.
+
     With `orchestration` None, the fixed pipeline is used and nothing is kept between runs: it
     is `fixed_pipeline` on a temporary directory, which is removed before the report is
     returned or an exception goes on. Its `progress_guard` is `decider`, so the decider that
@@ -235,6 +286,8 @@ def _run(
     gathered = _gather(
         orchestration, ledger, claims, kinds, pull_request.repository, before, after, model, decider
     )
+    if any(answer.loops for answer in gathered):
+        raise NotImplementedError
     verified = tuple(
         _verified(text, kind, answer)
         for text, kind, answer in zip(claims, kinds, gathered, strict=True)
