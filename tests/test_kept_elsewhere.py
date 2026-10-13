@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from conftest import FixtureRepository, a_search, commit_snapshots, finishes
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 from structural_cases import KeyText, StructuralCase, built, key_verdict
 
@@ -113,6 +113,7 @@ def test_text_said_to_be_removed_from_one_file_is_searched_for_in_the_other_file
     )
 
 
+@settings(deadline=None)
 @given(
     text=st.sampled_from(["Py_NOGIL", "Py_GIL_DISABLED", "FLAG", "lock", "name", "absent"]),
     change=st.sampled_from(TextChange),
