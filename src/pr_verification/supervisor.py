@@ -10,7 +10,8 @@ are enforced here, by code, from outside the model.
 
 A Claim whose role was stopped for going round in circles is handed back to the supervisor
 with a short account of what failed, and the supervisor may try again or give the Claim up. Its
-own decisions are watched in turn: a supervisor that repeats itself stops the run.
+own decisions are watched in turn: a supervisor that repeats itself is stopped, and code
+gives each Claim it left untried its attempt.
 """
 
 import contextvars
@@ -75,12 +76,13 @@ FINISH_REFUSED = (
 Claims are still to have a Verification attempt."""
 
 SUPERVISOR_REPEATED = (
-    "The run was stopped before any work was done for this Claim, because the supervisor "
-    "repeated itself: it dispatched the same work for a Claim again after a role was stopped "
-    "for going round in circles, and the role was stopped in the same way."
+    "The supervisor repeated itself and was stopped: it dispatched the same work for this "
+    "Claim again after a role was stopped for going round in circles, and the role was "
+    "stopped in the same way. {failure}"
 )
-"""Why a Claim is Inconclusive when the run was stopped because the supervisor repeated
-itself, and no dispatch had been run for the Claim by then."""
+"""Why a Claim is Inconclusive when the supervisor was stopped for repeating itself on it.
+`failure` is the `inconclusive` of the dispatch that was the repeat, which is
+`STOPPED_LOOPING` filled in."""
 
 
 class Strategy(StrEnum):
@@ -457,27 +459,25 @@ class Supervisor:
             untried is the first for its Claim, and so never a repeat.
 
             There is no rung on which the supervisor is told, since the failure it was shown
-            was its telling. The first repeat stops the run. It is looked for once every
-            dispatch of a step has ended, before the Budget is looked at and before the
-            supervisor is asked again. A fault that a dispatch of the step raised goes on
-            first, as said below, and then nothing is looked for. When one of the dispatches
-            is a repeat:
+            was its telling. The first repeat stops the supervisor, as said below. It is
+            looked for once every dispatch of a step has ended, before the supervisor is
+            asked again. A fault that a dispatch of the step raised goes on first, as said
+            below, and then nothing is looked for. When one or more of the dispatches is a
+            repeat:
 
-            - no further request is made to any model, and nothing more is run. The
-              supervisor is not asked again, and code gives no Claim an attempt, though
-              some may still be to have one;
+            - the supervisor is asked nothing more;
             - what was gathered by then is kept, and with it the results of the other
               dispatches of that step;
-            - each Claim still to have a Verification attempt is given
-              `SUPERVISOR_REPEATED`, as said below. A stranded Claim is given what the
-              pipeline gives it, and every other Claim what its dispatches came to, as
-              when a run ends any other way. So each Claim not decided by then is
-              Inconclusive, with a reason.
+            - each Claim whose dispatch in that step was a repeat is given
+              `SUPERVISOR_REPEATED` as its `inconclusive`, filled in with the
+              `inconclusive` of that dispatch. No further dispatch is run for it, so it is
+              Inconclusive with that reason;
+            - each Claim still to have a Verification attempt is given one by code, as for
+              a supervisor stopped in any other way.
 
-            This is a stop made by code and no finish. The supervisor cannot bring it about
-            by what it says alone, since it takes a role being stopped in the same way
-            twice, and a Claim it leaves untried is reported as Inconclusive with the reason
-            and is not passed over in silence.
+            So a supervisor that repeats itself costs the choices it would have made, and
+            costs no Claim its attempt (ADR 0003). A pull request cannot have its other
+            Claims passed over by making a role go round in circles on one of them.
 
         Nothing the supervisor says is a Verdict
             No response is read for a Verdict or for the Gate, and none has a member that
@@ -487,14 +487,13 @@ class Supervisor:
             code computes from that Evidence, whatever the supervising model said.
 
         When the supervisor is stopped
-            The supervisor is stopped when `self.step_cap` steps have been taken, and when
-            the supervising model raises `ModelFailed`. It is asked nothing more. Each Claim
-            still to have a Verification attempt is then given one by code: one at a time,
-            in the order of `claims`, each as a dispatch of the first of `strategies_for`
-            its kind, for as long as the Budget is not spent. So a supervisor that wastes
-            its steps, or whose model fails, costs the choices it would have made, and costs
-            no Claim its attempt. A supervisor that repeats itself is not stopped in this
-            way: the whole run is, as said above.
+            The supervisor is stopped when `self.step_cap` steps have been taken, when the
+            supervising model raises `ModelFailed`, and when it repeats itself, as said
+            above. It is asked nothing more. Each Claim still to have a Verification attempt
+            is then given one by code: one at a time, in the order of `claims`, each as a
+            dispatch of the first of `strategies_for` its kind, for as long as the Budget is
+            not spent. So a supervisor that wastes its steps, repeats itself, or whose model
+            fails, costs the choices it would have made, and costs no Claim its attempt.
 
         When the run ends
             The supervisor is asked for one step after another until the first of these:
@@ -505,14 +504,12 @@ class Supervisor:
               response that comes after the Budget is spent is not acted on: no further
               request is made to any model, and nothing more is run;
             - the supervisor is stopped, and the run ends once code has given each Claim
-              its attempt, or the Budget is spent;
-            - the supervisor repeats itself, which stops the run at once, as said above.
+              its attempt, or the Budget is spent.
 
-            So whatever the supervising model does, when the run ends no Claim is still to
-            have a Verification attempt, or the Budget is spent, or the run was stopped
-            because the supervisor repeated itself. All of this is enforced here, by code.
-            The supervising model is not asked whether any Budget or any step is left, and
-            nothing it says changes a cap or a limit.
+            So whatever the supervising model does, when the run ends either no Claim is
+            still to have a Verification attempt or the Budget is spent. All of this is
+            enforced here, by code. The supervising model is not asked whether any Budget or
+            any step is left, and nothing it says changes a cap or a limit.
 
         What each Claim is given
             One `Gathered` for each Claim, in the order of `claims`. A stranded Claim is
@@ -520,14 +517,14 @@ class Supervisor:
             Evidence of the one dispatch that gave it any, in the order gathered, and none
             when no dispatch did. So all the Evidence is kept for the report, and only
             summaries reached the supervisor. Its `inconclusive` is that of the last
-            dispatch run for it, and its `loops` are those of every dispatch run for it, in
-            the order the dispatches were run.
+            dispatch run for it, or `SUPERVISOR_REPEATED` filled in when that dispatch was
+            a repeat. Its `loops` are those of every dispatch run for it, in the order the
+            dispatches were run.
 
             A Claim that is not stranded and that no dispatch was run for is given no
-            Evidence and no `loops`. Its `inconclusive` is `SUPERVISOR_REPEATED` when the
-            run was stopped because the supervisor repeated itself, and otherwise
-            `BUDGET_SPENT`, filled in with the limit `ledger.stopped_by()` gives. Those are
-            the only two ways a Claim that could be tried is left without an attempt.
+            Evidence, no `loops`, and `BUDGET_SPENT`, filled in with the limit
+            `ledger.stopped_by()` gives: the Budget being spent is the only way a Claim
+            that could be tried is left without an attempt.
 
         Every Sandbox opened is closed before the answer is given or an exception goes on.
 

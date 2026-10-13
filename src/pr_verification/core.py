@@ -238,8 +238,8 @@ def run(
         A Claim whose role was stopped for going round in circles has no Evidence from that
         work. Unless work dispatched for it afterwards decides it, its Verdict is
         Inconclusive and its reason is the one the orchestration gave, which is
-        `STOPPED_LOOPING` filled in. A Claim that was never worked on because the supervisor
-        repeated itself is Inconclusive too, and its reason is `SUPERVISOR_REPEATED`.
+        `STOPPED_LOOPING` filled in, or `SUPERVISOR_REPEATED` filled in when the supervisor
+        was stopped for repeating itself on the Claim.
 
         Only the work the orchestration did for the Claims is counted. A loop found in the
         Reviewer's run in step 6 is in no Claim's `loops`, and is not counted. Nothing of
