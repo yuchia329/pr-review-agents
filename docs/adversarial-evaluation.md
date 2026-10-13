@@ -73,9 +73,10 @@ to read how far the work got: three attempts that showed no difference, a limit 
 model that failed. The scores are printed only when every run has ended, so keep standard error
 if a run may be cut short.
 
-The tool ends early, with nothing more run, when the provider answers 401, 402, or 403, or when
-the model has failed in three runs in a row. Without that, a provider out of money or a network
-that is gone is counted as so many runs with no report.
+The tool ends early, with nothing more run, when the provider answers 401, 402, or 403, when the
+model has failed in three runs in a row, or when the code could not be prepared for running in
+three runs in a row. Without that, a provider out of money or a network that is gone is counted
+as so many runs with no report, or as so many Claims safely Inconclusive.
 
 ## Reading the numbers
 
@@ -145,9 +146,8 @@ What is still to do:
 
 Two models were tried on the development part, one of them at two time limits. No run was
 finished, for reasons that were the provider's, the network's, or the clock's, so **there is
-still no rate to quote**. What
-there is: 0 false Claims Confirmed out of 77 that got a Verdict, of which 31 were worked to an
-end. The Reproduction judge was never asked, and the cases with a planted test were barely
+still no rate to quote**. What there is: 0 false Claims Confirmed out of 77 that got a Verdict,
+of which 31 were worked to an end. The Reproduction judge was never asked, and the cases with a planted test were barely
 reached. The logs of every run are in `~/.cache/pr-verification/measurements/issue-59/` on the
 machine that ran them.
 
