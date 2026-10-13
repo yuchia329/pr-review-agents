@@ -67,7 +67,7 @@ picks one from the machine's memory, as small as 4096 tokens, and cuts a longer 
 without any error. The context size is therefore set in the model, by `ollama/Modelfile`:
 
 ```sh
-ollama pull qwen3.6
+ollama pull qwen3.8:27b
 ollama create pr-verification-qwen -f ollama/Modelfile
 
 export PR_VERIFICATION_ENDPOINT=http://localhost:11434/v1
@@ -78,7 +78,7 @@ uv run pr-verification --repo . --before HEAD~1 --after HEAD \
 ollama ps   # the CONTEXT column must read 32768
 ```
 
-Always name the model created from the Modelfile, not `qwen3.6` itself, which would run with
+Always name the model created from the Modelfile, not `qwen3.8:27b` itself, which would run with
 Ollama's default.
 
 ## Manual check against a real endpoint
@@ -109,7 +109,7 @@ Last run on 2026-10-09, steps 1 to 4, against Ollama 0.33.3. The model was `qwen
 one on hand, built from the Modelfile with only its `FROM` line changed: two Claims listed, the
 instruction ignored, 32768 under `CONTEXT`, 115 seconds from a cold start.
 
-Not run yet: `qwen3.6` itself, and the hosted check against MiniMax M3, including step 5.
+Not run yet: `qwen3.8:27b` itself, and the hosted check against MiniMax M3, including step 5.
 
 ## Manual check of the Anthropic-protocol client
 

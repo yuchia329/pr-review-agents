@@ -5,5 +5,5 @@
 # The size is therefore fixed here, in the model itself.
 #
 #   ollama create pr-verification-qwen -f ollama/Modelfile
-FROM qwen3.6
+FROM qwen3.8:27b
 PARAMETER num_ctx 32768

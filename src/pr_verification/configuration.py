@@ -71,7 +71,7 @@ known to the project, so none is given here."""
 QWEN_LOCAL = ModelChoice(
     ModelProtocol.OPENAI_COMPATIBLE, "http://localhost:11434/v1", "pr-verification-qwen"
 )
-"""Qwen 3.6 served by Ollama on this machine, under the name `ollama/Modelfile` gives it so
+"""Qwen 3.8 served by Ollama on this machine, under the name `ollama/Modelfile` gives it so
 that its context size is set. It needs no key, and no price is given for it here."""
 
 CLAUDE_SONNET = ModelChoice(
@@ -112,7 +112,7 @@ DEFAULT = Configuration("default", MINIMAX_M3)
 """MiniMax M3 in every role, with the fixed pipeline."""
 
 SELF_HOSTED = Configuration("self-hosted", QWEN_LOCAL)
-"""Fully self-hosted use: Qwen 3.6 in every role, with the fixed pipeline. Every
+"""Fully self-hosted use: Qwen 3.8 in every role, with the fixed pipeline. Every
 `ModelChoice` it holds has an `endpoint` whose host is `localhost` and no `key_variable`, so
 every request made to a model it configures, for a role or as the small LLM behind the
 decider, goes to this machine and carries no key.

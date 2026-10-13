@@ -6,7 +6,7 @@ A configuration says which model does each role's work and which orchestration r
 | Name | Models | For |
 | --- | --- | --- |
 | `default` | MiniMax M3 in every role | Everyday use |
-| `self-hosted` | Qwen 3.6 on this machine, through Ollama, in every role | Use with no request leaving the machine and no key |
+| `self-hosted` | Qwen 3.8 on this machine, through Ollama, in every role | Use with no request leaving the machine and no key |
 | `ceiling` | Claude Sonnet 5.5 in the reasoning roles, MiniMax M3 in the Claim extractor and behind the decider | The evaluation only |
 
 Each uses the fixed pipeline unless told otherwise.
@@ -105,7 +105,7 @@ The threshold is a proposal made with this write-up, and no run has been held to
 | Provider | Status | Why |
 | --- | --- | --- |
 | MiniMax M3, hosted | Experimental | Not yet run three times. One repetition on 2026-10-12 gave no False Block and a Decided Rate of 0.72 (`docs/context-bound.md`) |
-| Qwen 3.6, through Ollama | Experimental | Never evaluated: the model is not on the machine |
+| Qwen 3.8, through Ollama | Experimental | Never evaluated: the model is not on the machine |
 | Claude Sonnet 5.5, through the Anthropic protocol | Experimental | Never evaluated: no request has been made to it |
 
 ## Results
