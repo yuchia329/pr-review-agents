@@ -235,6 +235,36 @@ The three renames that skip a file, in the six runs made of them alone:
 So with this model the rule gave up 0.04 of Decided Rate and bought nothing. What it guards
 against, a bare name searched for in one file, did not happen in these runs.
 
+## The three renames with the rule and MiniMax M3, 2026-10-13
+
+The three renames were then run with MiniMax M3 on its hosted endpoint, the model of the first
+results: the true and the false case of each once, and the three false cases twice more. That
+is 12 runs, nine of them of a false case, and every one gave a report. Before and after are
+again taken from the same runs.
+
+| The Claim of the rename, in nine runs of a false case | Rule before | Rule now |
+| --- | --- | --- |
+| Confirmed, a False Assurance | 6 | 3 |
+| Refuted | 2 | 2 |
+| Inconclusive | 1 | 4 |
+
+| Case | Confirmed, rule before | Confirmed, rule now |
+| --- | --- | --- |
+| `rename/attrs-post-init-hook@left-out` | 1 of 3 | 0 of 3 |
+| `rename/packaging-gil-disabled@left-out` | 2 of 3 | 1 of 3 |
+| `rename/httpx-url-pattern@left-out` | 3 of 3 | 2 of 3 |
+
+- **The rule took away three of the six False Assurances.** In each of the three the verifier
+  named the bare name with the path of a file where the rename was made, `Py_NOGIL` in
+  `tests/test_tags.py` for one, and code found the name on lines of other files.
+- **The three that remain are the narrow text again**: `class URLMatcher:` twice and
+  `"Py_NOGIL": 1,` once. So MiniMax M3 makes both mistakes, and the rule reaches one.
+- **It cost nothing in the three true cases.** Their five true Claims had the same Verdict
+  under both rules, four Confirmed and one Inconclusive, and none was Refuted.
+
+So the rule earns its place with this model and is not enough: half of the False Assurances of
+a rename that skips a file are left, and all of them come from a text narrower than the name.
+
 ## What is still to do
 
 - Repeat the run, to see how much the Verdicts vary, and set the model's prices so that the
@@ -242,5 +272,5 @@ against, a bare name searched for in one file, did not happen in these runs.
 - Decide what a rename is searched for when the verifier names a line and not the name. The
   search of the other files does not reach it, and it is where every False Assurance of
   2026-10-13 came from.
-- Run the cases with the rule and MiniMax M3, whose verifier named the bare name.
+- Run all 32 cases with the rule and MiniMax M3, for what the rule costs it in Decided Rate.
 - Run with the default decider, Laya, which needs `uv sync --extra laya`.
