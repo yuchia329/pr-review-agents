@@ -71,7 +71,9 @@ def main(
       `configured_models(configuration, os.environ)`, which has each role's work done by
       the model the configuration assigns it. `PR_VERIFICATION_ENDPOINT` and
       `PR_VERIFICATION_MODEL` are then not read. The orchestration is the configuration's,
-      unless `PR_VERIFICATION_ORCHESTRATION` is set, which then says as below.
+      unless `PR_VERIFICATION_ORCHESTRATION` is set to other than the empty string, which
+      then says as below. Set to the empty string it is as unset, which is how a pipeline
+      passes a setting it does not have, and the configuration's orchestration is used.
 
     An `InvalidConfiguration` is handled as a model that is not configured is: one line on
     standard error starting `pr-verification: `, no report, and exit code 2. That is what

@@ -121,7 +121,10 @@ def reading_only_baseline(
     - the same model: each Claim's role is run on `model_for(model,
       RoleName.REPRODUCTION_WRITER)`, the model that does the system's work on a
       Behavioural Claim, and the Claim extractor on its own, so a `RoleModels` is read as
-      `run` reads it;
+      `run` reads it. The role is run on that model with the capabilities it offers:
+      whatever counts its requests here offers parallel tool calls when, and only when,
+      the model does, as `Ledger.model` (`pr_verification.budget`) does, so the baseline
+      may ask for several tools in one step wherever the system may;
     - the same reading tools and the same step cap, as `state_verdict` says.
 
     Then `state_verdict` is called once for each Claim, in the order extracted. Nothing is
