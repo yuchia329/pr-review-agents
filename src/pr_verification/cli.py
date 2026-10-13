@@ -104,6 +104,13 @@ def main(
     report, when there is none to give or anything at all is raised: a failure never exits
     with the code of a block.
 
+    What a role is shown of any one thing it reads is bounded by the limits the environment
+    configures: the run is made inside
+    `shown_within(limits_from_environment(os.environ))` (`pr_verification.context_bound`),
+    which is the defaults unless the environment says otherwise. An `InvalidContextLimits`
+    is handled as a model that is not configured is: one line on standard error starting
+    `pr-verification: `, no report, and exit code 2.
+
     All of this is done inside `traced(os.environ)` (`pr_verification.tracing`): with tracing
     configured, the run's trace is sent before `main` returns, and what is printed and
     returned is the same as with tracing off.

@@ -21,6 +21,9 @@ NO_SUCH_FILE = "No file of this commit has that path."
 NOTHING_FOUND = "Nothing in this commit matches."
 """What a read-only tool answers when it has nothing to list."""
 
+NO_SUCH_LINES = "The file has no lines in the part asked for."
+"""What `read_file` answers for a part of a file that holds none of its lines."""
+
 BAD_ARGUMENTS = "The arguments are not the ones this tool takes."
 """What a read-only tool answers for arguments it cannot use."""
 
@@ -78,13 +81,33 @@ def reading_tools(repository: Path, commit: str) -> tuple[Tool, ...]:
         as `<path>:<line number>:<line>`, by path and then by line number. `text` is not a
         pattern and letter case matters. `NOTHING_FOUND` when no line holds it.
 
-    `read_file` takes `path`
+    `read_file` takes `path`, and an optional `first_line` and `last_line`
         Returns every line of the file, each as `<line number>:<line>`, and so the empty
         string for an empty file. `NO_SUCH_FILE` when the commit has no file at that path,
         as for a directory.
 
-    Each answers `BAD_ARGUMENTS` when an argument it needs is missing, when an argument is
-    not a string or is empty, or when it is given an argument it does not take.
+        With `first_line`, `last_line`, or both, only the lines numbered from `first_line`
+        to `last_line` are returned, both included, so a long file can be read in parts.
+        Each line keeps its own number in the file. Without `first_line` the part starts at
+        line 1, and without `last_line` it runs to the last line of the file. A `last_line`
+        beyond the end of the file is no fault: the lines there are returned.
+        `NO_SUCH_LINES` when the file has no line in the part asked for, as when
+        `first_line` is beyond its end, and for any part of an empty file. `NO_SUCH_FILE`
+        comes before both: it is the answer whenever the path names no file and the
+        arguments are ones the tool takes.
+
+        The two are whole numbers as JSON writes them: neither `4.0`, `"4"`, nor `true` is
+        one. `BAD_ARGUMENTS` when either is anything else, when `first_line` is less than
+        1, and when `last_line` is less than `first_line`, or less than 1 with no
+        `first_line`.
+
+    Each answers `BAD_ARGUMENTS` when an argument it needs is missing, when an argument that
+    is not a line number is not a string or is empty, or when it is given an argument it
+    does not take.
+
+    A tool returns what it finds whole, however long. What a role is shown of one result is
+    bounded by `run_role`, keeping the start: each of the three has `Tool.keeps` as
+    `Keep.START`.
     """
     return _tools(_Files(repository, commit))
 

@@ -171,9 +171,15 @@ def write_reproduction(
        where `attempts` has one object for each earlier attempt, in order, whose only
        members are `reproduction`, `result`, `before`, and `after`: the Reproduction's text,
        the value of the `AttemptResult`, and the output of the two runs the attempt records,
-       each null where the attempt has none. So the role's context holds its Claim, what
-       its earlier attempts did, and what it reads, and Sandbox output reaches the model
-       only there, as data.
+       each null where the attempt has none. An output is shown as
+       `bounded(output, limit, Keep.END)` (`pr_verification.context_bound`), where the
+       limit is the `sandbox_output` of `limits_in_use()`, read once before the first
+       attempt. So what the role is shown of one run is never longer than that limit, an
+       output over it keeps its end, where a test run says what went wrong, and says that
+       it was cut and how much was left out. Only what the role is shown is cut: the
+       `Attempt` in the record, and any Evidence, keep the output whole. So the role's
+       context holds its Claim, what its earlier attempts did, and what it reads, and
+       Sandbox output reaches the model only there, as data.
        The run is given `progress_guard`, which is passed by position after the Claim, so
        it is watched for loops as `run_role` says.
        The role finishes with `{"reproduction": "<text>"}`. When its run stopped at the

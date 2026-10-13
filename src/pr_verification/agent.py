@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from itertools import pairwise
 
+from pr_verification.context_bound import Keep
 from pr_verification.decision import NO, Decider, YesOrNo, ask_decider
 from pr_verification.model import Model, ModelRequest, ask
 from pr_verification.tracing import SpanKind, span
@@ -78,7 +79,12 @@ class Tool:
 
     The arguments are whatever JSON object the model wrote, so they are checked here. A tool
     answers every request with text: when it cannot do what was asked, the text says why. It
-    does not raise for what the arguments hold. What it returns may be Untrusted Content."""
+    does not raise for what the arguments hold. What it returns may be Untrusted Content, and
+    may be of any length: `run_role` bounds what the model is shown of it."""
+
+    keeps: Keep = Keep.START
+    """Which part of a result is kept when it is too long to show whole: the part most
+    likely to matter for what this tool returns."""
 
 
 @dataclass(frozen=True)
@@ -128,9 +134,10 @@ class Step:
     """The name of the tool that was run, or None when the outcome is not `RAN_TOOL`."""
 
     result: str
-    """What the role is shown for this step: what the tool returned for `RAN_TOOL`, the
-    text `NO_SUCH_TOOL` for `REFUSED`, the text `UNREADABLE_RESPONSE` for `UNREADABLE`, and
-    the empty string for `FINISHED`."""
+    """What came of this step, whole: what the tool returned for `RAN_TOOL`, however long,
+    the text `NO_SUCH_TOOL` for `REFUSED`, the text `UNREADABLE_RESPONSE` for `UNREADABLE`,
+    and the empty string for `FINISHED`. What the role is shown of it is bounded, as
+    `run_role` says, and may be less."""
 
 
 class LoopKind(StrEnum):
@@ -222,7 +229,8 @@ def detect_repeat(steps: Sequence[Step]) -> LoopKind | None:
       order of the members of an object or in the whitespace between one part and the next.
       Any other two are different actions, except that whether two numbers written
       differently, as `1` and `1.0` are, make the same action is not stated here.
-    - The result is `result`. Two are the same only when their text is exactly the same.
+    - The result is `result`, whole, whatever the role was shown of it. Two are the same
+      only when their text is exactly the same.
 
     Only the end of `steps` is looked at:
 
@@ -278,6 +286,8 @@ def run_role(
       with one object for each step taken so far, in order, whose only members are that
       step's `response` and `result`, and `told` where loop detection told the role
       something after that step. Everything the role reads reaches the model here, as data.
+      The `result` here is the step's result as shown, which "What a role is shown of a
+      result" below bounds.
 
     The response is read as a JSON object and decides the step's outcome. A response can be
     read when it is one of these and has no other member:
@@ -301,6 +311,24 @@ def run_role(
     enforced here, by code, whatever the model says, so a run never makes more than
     `role.step_cap` requests to the model.
 
+    What a role is shown of a result
+        The `result` of a step in `data` is never longer than a fixed limit, enforced here,
+        by code, whatever a tool returns. The limit is the `tool_result` of
+        `limits_in_use()` (`pr_verification.context_bound`), read once before the first
+        request, so it is the same on every step of a run.
+
+        For a step that ran a tool, what is shown is
+        `bounded(step.result, limit, tool.keeps)`, with the tool that was run. So a result
+        within the limit is shown whole, and a longer one is cut, keeps the part its tool
+        says matters, and says that it was cut and how much was left out. For any other
+        step it is the step's `result`, which is a fixed text shorter than `SMALLEST_LIMIT`
+        and so always whole.
+
+        A step is shown the same way in every request after it. Only what the model is
+        shown is cut: `Step.result` keeps what the tool returned whole, and `detect_repeat`
+        compares the whole. Nothing else of `data` is bounded here: not `task`, and not a
+        `response`, which is the model's own.
+
     Loop detection
         After every step that leaves the run going, which is one that neither finishes nor
         reaches the step cap, the steps taken so far are checked:
@@ -311,7 +339,8 @@ def run_role(
            decision: `progress_guard.decide` is called once. The question is `PROGRESS`. The
            state is a JSON object with exactly two members: `task`, as given, and `steps`,
            the last `PROGRESS_INTERVAL` steps in order, each an object whose only members
-           are that step's `response` and `result`. When the `top` of the `Decision` is
+           are that step's `response` and `result`, the result as the role is shown it,
+           and so bounded as above. When the `top` of the `Decision` is
            `NO`, what is found is `NO_PROGRESS`. So the guard catches a role whose steps all
            differ and make no progress, and when the two probabilities are equal it finds
            nothing.
