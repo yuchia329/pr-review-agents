@@ -194,9 +194,16 @@ def main() -> None:
     parser.add_argument("--check-keys", action="store_true")
     parser.add_argument("--part", type=Part, choices=list(Part))
     parser.add_argument("--repetitions", type=int, default=1)
+    parser.add_argument("--case", action="append", default=[], metavar="TEXT")
+    parser.add_argument("--reports", type=Path, metavar="DIRECTORY")
     arguments = parser.parse_args()
 
-    wanted = [case for case in load() if arguments.part in (None, case.part)]
+    wanted = [
+        case
+        for case in load()
+        if arguments.part in (None, case.part)
+        and (not arguments.case or any(text in case.name for text in arguments.case))
+    ]
     with tempfile.TemporaryDirectory() as directory:
         cases = [
             built(case, clone_of(case.repository, arguments.clones), Path(directory))
@@ -217,8 +224,18 @@ def main() -> None:
             parser.error("no model is configured: see docs/model-endpoints.md")
         decider = configured_decider(decision_configuration(os.environ), model)
 
+        names = {case.pull_request.after: case.name for case in cases}
+        written: Counter[str] = Counter()
+
         def classified_run(pull_request: PullRequest, model: Model) -> Report:
-            return run(pull_request, model, decider)
+            report = run(pull_request, model, decider)
+            if arguments.reports is not None:
+                # One file for each run, so the Evidence behind a Verdict can be read afterwards.
+                name = names[pull_request.after].removeprefix("structural/").replace("/", "--")
+                written[name] += 1
+                arguments.reports.mkdir(parents=True, exist_ok=True)
+                (arguments.reports / f"{name}.{written[name]}.json").write_text(report.to_json())
+            return report
 
         evaluation = evaluate(
             cases, model, repetitions=arguments.repetitions, entry_point=classified_run
