@@ -162,6 +162,8 @@ def main() -> None:
             budget=budget,
             models=models,
         )
+        # A run can take a long time, so each is shown as it ends, apart from the comparison.
+        print(Comparison({label: evaluations[label]}).to_json(), file=sys.stderr, flush=True)
 
     with tempfile.TemporaryDirectory() as directory, shown_within(limits):
         hand_made = Path(directory) / "hand-made"

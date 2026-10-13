@@ -121,6 +121,22 @@ comparison could be run. What was checked that day:
 - `PR_VERIFICATION_CONFIGURATION=ceiling` and `=baseline` each exit with code 2, no report,
   and one line naming the variable.
 
+- Ollama was given `pr-verification-qwen`, built from `ollama/Modelfile` on `qwen3.8:27b`
+  with its MLX runner, and `--run self-hosted/pipeline --run self-hosted/supervisor --baseline
+  self-hosted --repetitions 1` was started with `PR_VERIFICATION_DECISION=small_llm`. It was
+  stopped by hand after 7 minutes, during the first of its four runs, so that the model could
+  be served another way. The model answered and a Sandbox was running when it was stopped. The
+  tool printed nothing until every run had ended, so no number came of it. It now prints each
+  run's scores as that run ends.
+- An earlier start of the same command waited two hours behind another measurement that held
+  Ollama, which answers one request at a time, and was stopped before it made a request.
+
+Qwen is next to be served by vLLM on another machine. `self-hosted` names
+`http://localhost:11434/v1` and the model `pr-verification-qwen`, so it measures that server
+unchanged only when the server is reached at that address, as through a forwarded port, and
+serves the model under that name. A request then leaves the machine, which is not what
+`self-hosted` is named for, and the write-up of that run must say so.
+
 Still to run and record here, each with the command above:
 
 - the supervisor against the fixed pipeline;
