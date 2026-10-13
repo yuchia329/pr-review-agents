@@ -162,9 +162,13 @@ class LineEcosystem:
 
 
 class FileEcosystem(LineEcosystem):
-    """The stand-in as a `ResultsFileEcosystem`."""
+    """The stand-in as a `ResultsFileEcosystem`. It keeps what it was asked to read."""
+
+    def __init__(self) -> None:
+        self.read: list[tuple[RunResult, RunResult]] = []
 
     def read_results_file(self, ran: RunResult, taken: RunResult) -> Results | Unreadable:
+        self.read.append((ran, taken))
         if ran.limit_hit is not None or taken.exit_status != 0:
             return Unreadable("There is no results file to read.")
         return read_lines(taken.output)
@@ -210,7 +214,10 @@ class ThenNoRuntime:
 
 
 def write_standing_in(
-    pricing: FixtureRepository, *texts: str, sandbox: Sandbox | None = None
+    pricing: FixtureRepository,
+    *texts: str,
+    sandbox: Sandbox | None = None,
+    ecosystem: FileEcosystem | None = None,
 ) -> tuple[ReproductionRun, ScriptedModel]:
     return write(
         pricing.path,
@@ -218,7 +225,7 @@ def write_standing_in(
         pricing.after,
         *texts,
         sandbox=sandbox or StandInSandbox(pricing),
-        ecosystem=FileEcosystem(),
+        ecosystem=ecosystem or FileEcosystem(),
     )
 
 
@@ -236,6 +243,21 @@ def test_results_are_taken_on_before_then_after_once_the_reproduction_has_run_on
         (("run-reproduction",), pricing.after, Phase.TEST, LIMITS),
         (("take-results",), pricing.before, Phase.TEST, LIMITS),
         (("take-results",), pricing.after, Phase.TEST, LIMITS),
+    ]
+
+
+def test_each_commits_run_is_read_together_with_what_was_taken_for_that_commit(
+    pricing: FixtureRepository,
+) -> None:
+    ecosystem = FileEcosystem()
+
+    write_standing_in(pricing, "fixed", ecosystem=ecosystem)
+
+    printed, filed = BEHAVIOUR["fixed"].printed, BEHAVIOUR["fixed"].filed
+    # The contract does not say which commit is read first.
+    assert sorted(ecosystem.read, key=lambda read: read[0].output == printed[1]) == [
+        (ended(printed[0]), ended(filed[0])),
+        (ended(printed[1]), ended(filed[1])),
     ]
 
 
@@ -291,13 +313,14 @@ def test_results_naming_none_of_the_reproductions_tests_on_one_commit_are_never_
 
 
 @pytest.mark.parametrize("unwritable", ["before", "after"])
-def test_results_are_taken_on_both_commits_straight_after_a_placing_that_failed(
+def test_results_are_taken_on_both_commits_straight_after_a_placing_that_failed_and_not_read(
     pricing: FixtureRepository, unwritable: str
 ) -> None:
     commits = {"before": pricing.before, "after": pricing.after}
     sandbox = StandInSandbox(pricing, unwritable=commits[unwritable])
+    ecosystem = FileEcosystem()
 
-    run, _ = write_standing_in(pricing, "fixed", sandbox=sandbox)
+    run, _ = write_standing_in(pricing, "fixed", sandbox=sandbox, ecosystem=ecosystem)
 
     assert [(command, commit) for command, commit, *_ in sandbox.runs] == [
         (("write", "fixed"), pricing.before),
@@ -309,6 +332,7 @@ def test_results_are_taken_on_both_commits_straight_after_a_placing_that_failed(
     placing = {"before": ended(""), "after": ended(""), unwritable: WRITE_FAILED}
     assert attempt.result is COULD_NOT_RUN
     assert {"before": attempt.before, "after": attempt.after} == placing
+    assert ecosystem.read == []
 
 
 def test_each_attempt_has_its_results_taken_before_the_next_is_placed(
@@ -475,9 +499,22 @@ def shop(tmp_path_factory: pytest.TempPathFactory) -> Shop:
 Installed = tuple[Sandbox, ResultsFileEcosystem, Commands]
 
 
+def run_in_test_phase(sandbox: Sandbox, command: Command | None, commit: str) -> RunResult:
+    assert command is not None
+    return sandbox.run(command, commit=commit, phase=Phase.TEST, limits=LIMITS)
+
+
+def held(sandbox: Sandbox, commit: str) -> str:
+    """Every file and directory in the working copy of a commit."""
+    listed = run_in_test_phase(sandbox, LIST, commit)
+    assert listed.exit_status == 0, listed.output
+    return listed.output
+
+
 @pytest.fixture(scope="module")
-def installed(shop: Shop) -> Iterator[Installed]:
-    """A Sandbox in which what the Python Ecosystem installs is there for every commit."""
+def sandboxed(shop: Shop) -> Iterator[tuple[Installed, Mapping[str, str]]]:
+    """A Sandbox in which what the Python Ecosystem installs is there for every commit, and what
+    the working copy of each commit held before any Reproduction was placed in it."""
     commands = find_commands(shop.path, shop.base)
     assert isinstance(commands, Commands), commands
     ecosystem = commands.ecosystem
@@ -489,19 +526,21 @@ def installed(shop: Shop) -> Iterator[Installed]:
                     install, commit=commit, phase=Phase.INSTALL, limits=INSTALL_LIMITS
                 )
                 assert done.exit_status == 0, done.output
-        yield sandbox, ecosystem, commands
+        untouched = {commit: held(sandbox, commit) for commit in shop.commits}
+        yield (sandbox, ecosystem, commands), untouched
 
 
-def run_in_test_phase(sandbox: Sandbox, command: Command | None, commit: str) -> RunResult:
-    assert command is not None
-    return sandbox.run(command, commit=commit, phase=Phase.TEST, limits=LIMITS)
+@pytest.fixture(scope="module")
+def installed(sandboxed: tuple[Installed, Mapping[str, str]]) -> Installed:
+    return sandboxed[0]
 
 
-def held(sandbox: Sandbox, commit: str) -> str:
-    """Every file and directory in the working copy of a commit."""
-    listed = run_in_test_phase(sandbox, LIST, commit)
-    assert listed.exit_status == 0, listed.output
-    return listed.output
+@pytest.fixture(scope="module")
+def untouched(sandboxed: tuple[Installed, Mapping[str, str]]) -> Mapping[str, str]:
+    """Every file and directory in the working copy of each commit, listed once everything was
+    installed and before any Reproduction was placed. The tests share one Sandbox, so a listing
+    made inside a test could already hold what an earlier test left."""
+    return sandboxed[1]
 
 
 def place_run_and_take(installed: Installed, commit: str, text: str) -> tuple[RunResult, RunResult]:
@@ -543,28 +582,52 @@ def test_python_reproduction_that_cannot_be_collected_is_named_by_its_path_as_co
 
     ran, taken = place_run_and_take(installed, shop.adds_tax, CANNOT_IMPORT)
 
+    assert taken.exit_status == 0, taken.output
     assert ecosystem.read_results_file(ran, taken) == Results(
         passed=(), failed=(), could_not_run=(REPRODUCTION_PATH,)
     )
 
 
-def test_python_working_copy_holds_nothing_the_placement_added_once_results_are_taken(
+def test_python_results_file_names_no_test_from_any_other_file(
     shop: Shop, installed: Installed
 ) -> None:
+    _, ecosystem, _ = installed
+
+    ran, taken = place_run_and_take(installed, shop.runs_its_own_test, SAME_ON_BOTH)
+
+    assert "tests/test_theirs.py::test_theirs" in ran.output
+    assert ecosystem.read_results_file(ran, taken) == Results(
+        passed=(f"{REPRODUCTION_PATH}::test_total_is_a_number",), failed=(), could_not_run=()
+    )
+
+
+def test_python_results_are_empty_when_settings_keep_the_reproduction_from_being_collected(
+    shop: Shop, installed: Installed
+) -> None:
+    _, ecosystem, _ = installed
+
+    ran, taken = place_run_and_take(installed, shop.hides_the_reproduction, ADDS_TAX)
+
+    assert ecosystem.read_results_file(ran, taken) == Results(
+        passed=(), failed=(), could_not_run=()
+    )
+
+
+def test_python_working_copy_holds_nothing_the_placement_added_once_results_are_taken(
+    shop: Shop, installed: Installed, untouched: Mapping[str, str]
+) -> None:
     sandbox, _, _ = installed
-    before_it = held(sandbox, shop.adds_tax)
 
     _, taken = place_run_and_take(installed, shop.adds_tax, ADDS_TAX)
 
     assert taken.exit_status == 0, taken.output
-    assert held(sandbox, shop.adds_tax) == before_it
+    assert held(sandbox, shop.adds_tax) == untouched[shop.adds_tax]
 
 
 def test_python_results_command_removes_a_reproduction_that_was_placed_and_never_run(
-    shop: Shop, installed: Installed
+    shop: Shop, installed: Installed, untouched: Mapping[str, str]
 ) -> None:
     sandbox, ecosystem, _ = installed
-    before_it = held(sandbox, shop.adds_tax)
     placement = ecosystem.place(ADDS_TAX)
 
     written = run_in_test_phase(sandbox, placement.write, shop.adds_tax)
@@ -573,7 +636,7 @@ def test_python_results_command_removes_a_reproduction_that_was_placed_and_never
 
     assert taken.exit_status not in (0, None), taken.output
     assert isinstance(ecosystem.read_results_file(ended(""), taken), Unreadable)
-    assert held(sandbox, shop.adds_tax) == before_it
+    assert held(sandbox, shop.adds_tax) == untouched[shop.adds_tax]
 
 
 def test_python_results_are_unreadable_when_either_run_was_stopped_or_taking_failed(
@@ -663,10 +726,9 @@ def test_repository_whose_settings_keep_the_reproduction_from_being_collected_co
 
 
 def test_true_claim_is_evidence_and_the_repositorys_own_tests_then_find_no_reproduction(
-    shop: Shop, installed: Installed
+    shop: Shop, installed: Installed, untouched: Mapping[str, str]
 ) -> None:
     sandbox, ecosystem, commands = installed
-    before_it = [held(sandbox, commit) for commit in (shop.base, shop.adds_tax)]
 
     run, _ = write_in(shop, installed, shop.adds_tax, ADDS_TAX)
 
@@ -675,7 +737,10 @@ def test_true_claim_is_evidence_and_the_repositorys_own_tests_then_find_no_repro
         passed=(), failed=(ADDS_TAX_ID,), could_not_run=()
     )
     assert run.evidence.after_results == Results(passed=(ADDS_TAX_ID,), failed=(), could_not_run=())
-    assert [held(sandbox, commit) for commit in (shop.base, shop.adds_tax)] == before_it
+    for commit in (shop.base, shop.adds_tax):
+        assert held(sandbox, commit) == untouched[commit]
+    # Kept last in this file: the repository's own tests leave a cache in the working copy, and
+    # the tests above compare it with `untouched`.
     for commit in (shop.base, shop.adds_tax):
         tested = ecosystem.read_results(run_in_test_phase(sandbox, commands.test, commit))
         assert tested == Results(
