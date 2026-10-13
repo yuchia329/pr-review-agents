@@ -47,6 +47,17 @@ credentials out of them.
 In the install phase the network is open, so code that runs while installing, such as a
 `setup.py`, can send out anything it can read. That is the files of the commit and nothing else.
 
+**The Sandbox does not keep the code under test apart from the test tooling.** It keeps a run
+apart from the machine and one commit apart from another. Inside a run, the pull request's code
+is in the same process as the test tooling and is the same user, so it can read and write
+whatever the tooling can. A Reproduction's results are read from a results file with a name
+chosen at random for each run, never from what the run printed, and only the tests of the
+Reproduction's own file count. That closes the pull request that prints an imitation of the
+tooling's results, that adds a test of its own to the run, or that writes to a name known before
+the run. It does not close the one that sets out to learn the name of the results file, write
+the file itself, or change what the tooling writes into it. The worst such a run gives is a
+false Confirmed, which is a False Assurance (ADR 0002).
+
 ## What is kept between runs
 
 Two things, each in a directory outside the repository that the caller names (ADR 0004). Both
@@ -170,4 +181,8 @@ The image is `python:<version>-slim`, for the newest of Python 3.14 to 3.10 that
 - Test results are read from the summary pytest prints. A failed test whose name holds ` - ` is
   named only up to there, because that is also how pytest sets off the error's message.
 - The summary is printed by a process the pull request's code runs in, so that code can write
-  what it likes there. Results are Untrusted Content like the rest of the output.
+  what it likes there. Results are Untrusted Content like the rest of the output. The results of
+  a Reproduction are not read from the summary but from its results file, and the repository's
+  own tests still are.
+- pytest imports the code under test into its own process, so that code can reach a
+  Reproduction's results file and pytest itself. See "Known limits" under "The Sandbox".
