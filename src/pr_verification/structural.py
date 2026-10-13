@@ -144,7 +144,12 @@ def verify_structural_claim(
         name="structural-verifier",
         instructions=_INSTRUCTIONS.format(cap=TEXT_CAP),
         tools=tuple(
-            Tool(f"{which}_{tool.name}", f"{_READS[which]}: {tool.description}", tool.run)
+            Tool(
+                f"{which}_{tool.name}",
+                f"{_READS[which]}: {tool.description}",
+                tool.run,
+                keeps=tool.keeps,
+            )
             for which, commit in commits.items()
             for tool in reading_tools(repository, commit)
         ),

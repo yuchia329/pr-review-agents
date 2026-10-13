@@ -41,7 +41,10 @@ The text is not a pattern, and letter case matters. Each line found is given as 
 
 _READ_FILE = """\
 Reads one file, named by its "path" from the root of the repository, as in \
-{"path": "billing/tax.py"}. Each line is given as <line number>:<line>."""
+{"path": "billing/tax.py"}. Each line is given as <line number>:<line>. Takes an optional \
+"first_line" and "last_line", to read only the lines numbered from the one to the other, as in \
+{"path": "billing/tax.py", "first_line": 200, "last_line": 400}. Read a long file in parts this \
+way: a result that is too long is cut, and says how much was left out."""
 
 _LOCATOR_INSTRUCTIONS = """\
 You find the code that a Claim concerns. A Claim is a checkable statement a pull request makes
@@ -301,19 +304,46 @@ def _tools(files: _Files) -> tuple[Tool, ...]:
         return "\n".join(found) if found else NOTHING_FOUND
 
     def read_file(arguments: Mapping[str, object]) -> str:
-        given = usable_arguments(arguments, needed=("path",))
-        if given is None:
+        line_numbers = arguments.keys() & _LINE_NUMBERS
+        others = {name: value for name, value in arguments.items() if name not in line_numbers}
+        given = usable_arguments(others, needed=("path",))
+        part = _part(arguments)
+        if given is None or part is None:
             return BAD_ARGUMENTS
         if given["path"] not in files.paths:
             return NO_SUCH_FILE
-        lines = files.lines(given["path"])
-        return "\n".join(f"{number}:{line}" for number, line in enumerate(lines, start=1))
+        first, last = part
+        numbered = list(enumerate(files.lines(given["path"]), start=1))[first - 1 : last]
+        # A file read whole may have no lines. A part that holds none is said to.
+        if line_numbers and not numbered:
+            return NO_SUCH_LINES
+        return "\n".join(f"{number}:{line}" for number, line in numbered)
 
     return (
         Tool("list_files", _LIST_FILES, list_files),
         Tool("search", _SEARCH, search),
         Tool("read_file", _READ_FILE, read_file),
     )
+
+
+_LINE_NUMBERS = frozenset({"first_line", "last_line"})
+"""The arguments of `read_file` that are line numbers."""
+
+
+def _part(arguments: Mapping[str, object]) -> tuple[int, int | None] | None:
+    """The first and the last line of the part of a file that a model asked `read_file` for,
+    the last being None when the part runs to the end of the file. None when the line numbers
+    are not ones the tool can use."""
+    first = arguments.get("first_line", 1)
+    # Asked whether it is an instance of `int`, `true` would pass for 1.
+    if type(first) is not int or first < 1:
+        return None
+    if "last_line" not in arguments:
+        return first, None
+    last = arguments["last_line"]
+    if type(last) is not int or last < first:
+        return None
+    return first, last
 
 
 def usable_arguments(

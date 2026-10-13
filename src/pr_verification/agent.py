@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from itertools import pairwise
 
-from pr_verification.context_bound import Keep
+from pr_verification.context_bound import Keep, bounded, limits_in_use
 from pr_verification.decision import NO, Decider, YesOrNo, ask_decider
 from pr_verification.model import Model, ModelRequest, ask
 from pr_verification.tracing import SpanKind, span
@@ -538,11 +538,15 @@ def _run_role(
     if len(tools) < len(role.tools):
         raise ValueError(f"two tools of the role {role.name!r} share a name")
     instructions = _instructions(role)
+    limit = limits_in_use().tool_result
+
+    def shown(step: Step) -> dict[str, str]:
+        return _shown(step, tools, limit)
 
     steps: list[Step] = []
     triggers: list[Trigger] = []
     while len(steps) < role.step_cap:
-        taken = [_shown(step) for step in steps]
+        taken = [shown(step) for step in steps]
         for trigger in triggers:
             taken[trigger.step - 1]["told"] = TOLD[trigger.kind]
         # Encoded as JSON so that nothing the role reads can end its own field and pose as
@@ -567,7 +571,7 @@ def _run_role(
             step = Step(response, StepOutcome.RAN_TOOL, tool=asked.tool, result=returned)
         steps.append(step)
         if len(steps) < role.step_cap:
-            found = _loop_found(task, steps, progress_guard)
+            found = _loop_found(task, steps, shown, progress_guard)
             if found is not None:
                 triggers.append(Trigger(found, step=len(steps)))
                 if len(triggers) == 2:
@@ -578,20 +582,30 @@ def _run_role(
     return RoleRun(role.name, tuple(steps), Stopped.STEP_CAP, answer=None, triggers=tuple(triggers))
 
 
-def _shown(step: Step) -> dict[str, str]:
-    """What the role, and the progress guard, are shown of a step."""
-    return {"response": step.response, "result": step.result}
+def _shown(step: Step, tools: Mapping[str, Tool], limit: int) -> dict[str, str]:
+    """What the role, and the progress guard, are shown of a step: of what its tool
+    returned, no more than `limit` characters. Every other step taken here has the loop's own
+    fixed text for a result, which is shown whole: no step asks for several tools yet, so
+    there is no `RAN_TOOLS` result to share the limit."""
+    result = step.result
+    if step.tool is not None:
+        result = bounded(result, limit, tools[step.tool].keeps)
+    return {"response": step.response, "result": result}
 
 
 def _loop_found(
-    task: Mapping[str, object], steps: Sequence[Step], progress_guard: Decider | None
+    task: Mapping[str, object],
+    steps: Sequence[Step],
+    shown: Callable[[Step], dict[str, str]],
+    progress_guard: Decider | None,
 ) -> LoopKind | None:
     """What loop detection finds in the steps of a run that is going on: a repeat, or, when
-    the progress guard is due and is asked, no progress."""
+    the progress guard is due and is asked, no progress. The guard is given each step as
+    `shown` gives it, which is as the role is shown it."""
     found = detect_repeat(steps)
     if found is not None or progress_guard is None or len(steps) % PROGRESS_INTERVAL != 0:
         return found
-    latest = [_shown(step) for step in steps[-PROGRESS_INTERVAL:]]
+    latest = [shown(step) for step in steps[-PROGRESS_INTERVAL:]]
     state = json.dumps({"task": dict(task), "steps": latest})
     decision = ask_decider(progress_guard, state, PROGRESS)
     return LoopKind.NO_PROGRESS if decision.top == NO else None

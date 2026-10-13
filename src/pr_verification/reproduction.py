@@ -13,6 +13,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from pr_verification.agent import Role, RoleRun, Stopped, _stopped_looping, run_role
+from pr_verification.context_bound import Keep, bounded, limits_in_use
 from pr_verification.decision import Decider
 from pr_verification.ecosystem import (
     LONGEST_REPRODUCTION,
@@ -306,12 +307,13 @@ def _write(
             sandbox, command, before=before, after=after, phase=Phase.TEST, limits=limits
         )
 
+    limit = limits_in_use().sandbox_output
     attempts: list[Attempt] = []
     try:
         while len(attempts) < attempt_cap:
             task = {
                 "claim": claim,
-                "attempts": [_shown(attempt) for attempt in attempts],
+                "attempts": [_shown(attempt, limit) for attempt in attempts],
                 **rejected_member,
             }
             run = run_role(role, task, model, progress_guard=progress_guard)
@@ -471,13 +473,18 @@ behaviour the Claim says the code has after the pull request.
 """What the writer's role is told of what the Reproduction judge rejected."""
 
 
-def _shown(attempt: Attempt) -> dict[str, object]:
-    """What the role is shown of an earlier attempt."""
+def _shown(attempt: Attempt, limit: int) -> dict[str, object]:
+    """What the role is shown of an earlier attempt: of each run, no more than `limit`
+    characters of its output, keeping the end."""
+
+    def output(run: RunResult | None) -> str | None:
+        return None if run is None else bounded(run.output, limit, Keep.END)
+
     return {
         "reproduction": attempt.reproduction,
         "result": attempt.result.value,
-        "before": attempt.before.output if attempt.before is not None else None,
-        "after": attempt.after.output if attempt.after is not None else None,
+        "before": output(attempt.before),
+        "after": output(attempt.after),
     }
 
 

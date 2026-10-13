@@ -10,6 +10,7 @@ Only what a model is shown is cut. The record of a run and the report keep every
 
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -69,7 +70,19 @@ def bounded(text: str, limit: int, keep: Keep) -> str:
 
     Raises `ValueError` when `limit` is less than `SMALLEST_LIMIT`.
     """
-    raise NotImplementedError
+    if limit < SMALLEST_LIMIT:
+        raise ValueError(f"the limit is {limit}: under {SMALLEST_LIMIT}")
+    whole = len(text)
+    if whole <= limit:
+        return text
+    said = CUT_AFTER if keep is Keep.START else CUT_BEFORE
+    # The words grow as more is left out, so the most that fits is found by trying. They are
+    # far shorter than the smallest limit, so some number of characters always fits.
+    kept = limit
+    while kept + len(said.format(left_out=whole - kept, whole=whole)) > limit:
+        kept -= 1
+    words = said.format(left_out=whole - kept, whole=whole)
+    return text[:kept] + words if keep is Keep.START else words + text[whole - kept :]
 
 
 @dataclass(frozen=True)
@@ -102,7 +115,33 @@ def limits_from_environment(environment: Mapping[str, str]) -> ContextLimits:
     Raises `InvalidContextLimits`, with a message that names the variable at fault, for a
     limit that is not a whole number, as `2.5` is not, or is less than `SMALLEST_LIMIT`.
     """
-    raise NotImplementedError
+    return ContextLimits(
+        tool_result=_limit(environment, TOOL_RESULT_VARIABLE, TOOL_RESULT_LIMIT),
+        sandbox_output=_limit(environment, SANDBOX_OUTPUT_VARIABLE, SANDBOX_OUTPUT_LIMIT),
+    )
+
+
+def _limit(environment: Mapping[str, str], variable: str, default: int) -> int:
+    """The limit `variable` sets, or `default` when it sets none."""
+    text = environment.get(variable, "")
+    if not text:
+        return default
+    try:
+        limit = int(text)
+    except ValueError:
+        limit = None
+    if limit is None or limit < SMALLEST_LIMIT:
+        raise InvalidContextLimits(
+            f"{variable} is set to {text!r}, and must be a whole number of characters, "
+            f"{SMALLEST_LIMIT} or more"
+        )
+    return limit
+
+
+_in_use: ContextVar[ContextLimits | None] = ContextVar("context limits", default=None)
+"""The limits in use on this thread, or None where none was set. It is a context variable, so
+a thread run in a copy of the context it was started from begins with the limits in use
+there, and what it sets is in use on that thread alone."""
 
 
 @contextmanager
@@ -120,8 +159,17 @@ def shown_within(limits: ContextLimits) -> Iterator[None]:
     Raises `ValueError`, before anything is set, when either limit is less than
     `SMALLEST_LIMIT`.
     """
-    raise NotImplementedError
-    yield
+    for name, limit in (
+        ("tool_result", limits.tool_result),
+        ("sandbox_output", limits.sandbox_output),
+    ):
+        if limit < SMALLEST_LIMIT:
+            raise ValueError(f"the limit {name} is {limit}: under {SMALLEST_LIMIT}")
+    before = _in_use.set(limits)
+    try:
+        yield
+    finally:
+        _in_use.reset(before)
 
 
 def limits_in_use() -> ContextLimits:
@@ -130,4 +178,4 @@ def limits_in_use() -> ContextLimits:
 
     So what a role is shown is bounded whether or not anything set a limit.
     """
-    raise NotImplementedError
+    return _in_use.get() or ContextLimits()

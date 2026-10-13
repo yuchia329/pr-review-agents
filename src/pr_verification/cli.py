@@ -18,6 +18,11 @@ import httpx
 from pr_verification.budget import Budget, InvalidBudget, budget_from_environment
 from pr_verification.claims import ClaimExtractionFailed
 from pr_verification.configuration import CONFIGURATION_VARIABLE
+from pr_verification.context_bound import (
+    InvalidContextLimits,
+    limits_from_environment,
+    shown_within,
+)
 from pr_verification.core import InvalidPullRequest, PullRequest, run
 from pr_verification.decision import (
     Decider,
@@ -175,7 +180,8 @@ def _main(
             decider = configured_decider(decision_configuration(os.environ), model)
         if budget is None:
             budget = budget_from_environment(os.environ)
-        with ExitStack() as kept:
+        limits = limits_from_environment(os.environ)
+        with shown_within(limits), ExitStack() as kept:
             if orchestration is None:
                 orchestration = _configured_orchestration(arguments.state_dir, decider, kept)
             report = run(
@@ -197,6 +203,7 @@ def _main(
     except (
         InvalidPullRequest,
         InvalidBudget,
+        InvalidContextLimits,
         InvalidDecisionConfiguration,
         InvalidOrchestration,
         ModelFailed,
