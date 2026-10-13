@@ -33,6 +33,57 @@ prints every asking of the guard with the steps it was about. An asking counts a
 that was getting there when it came in the attempt of the Reproduction writer that went on to
 show a difference in behaviour. That is a coarse rule, which is why the steps are printed.
 
+### After #66, 2026-10-13: no false trigger in four askings, none of a role getting there
+
+Since #66 the loop reads the object a response begins with and leaves unread what follows it.
+The measurement was run again on the commit that made the change (170c45f), with the same model
+and decider as on 2026-10-12, for one repetition of the two hand-made development cases. Each
+pull request was held to 60 steps of the Budget, which neither reached.
+
+| | Runs | Guard asked | Triggers | Asked of a role getting there | False triggers |
+| --- | --- | --- | --- | --- | --- |
+| 2026-10-12, one repetition | 2 | 3 | 2 | 1 | 0 |
+| 2026-10-13, one repetition | 2 | 4 | 1 | 0 | 0 |
+
+**The rate of false triggers is not known from this run**: the guard was never asked about a
+role that was getting there, so there is nothing to divide by. Both runs gave a report. Of the 4
+Claims, 2 were true and 2 false; 2 were decided and 2 Inconclusive, with no False Block and no
+False Assurance. A pull request took 222 seconds. The two runs made 49 requests, which sent
+69,701 tokens and were answered with 62,609.
+
+What reading the steps of the four askings showed:
+
+- **The guard was not asked about the true Claim.** On 2026-10-12 it was, because the writer's
+  finish for the median case was followed by a second object and could not be read. Here that
+  case ended before a fourth step. This is what #66 was to bring, seen once.
+- **All four askings were on the false Claim**, where no Reproduction can show a difference.
+  The guard said no once, at 0.85, and yes three times at 0.60 to 0.70 of a writer that was
+  listing and reading the same file again.
+- **No step shown to the guard was unreadable for what followed its object.** One response was
+  a request for a tool named `finish` followed by `{"finish": false}`. It was read as the
+  request for a tool it begins with and refused, as #66 decided.
+- **Responses that begin with the model's reasoning are still unreadable**, and were 4 of the
+  16 steps shown: the model wrote a paragraph that starts "Looking at this" and no object
+  first. #66 did not change that reading.
+
+Two runs are too few to compare the rows as rates. `PROGRESS_INTERVAL` is still kept at four.
+
+A local model, `qwen3.8:27b-mlx` through Ollama with its context size fixed at 32768, was also
+run on these cases the same day: one repetition on this commit and one on an earlier one. All
+four runs gave a report, so it can do the Reproduction writer's work, and a pull request took
+645 seconds on this commit. It never wrote anything
+after a request that could be read. What it wrote that could not be read was the answer with no
+`finish` around it, a finish that was never closed, and reasoning before the object.
+
+What is still to do:
+
+- Measure on the development cases made from SWE-bench Verified, which keep a role working
+  longer: on the hand-made cases a writer that is getting there now ends before the guard is
+  asked, so they give no rate of false triggers.
+- Decide how a response that begins with the model's reasoning is to be treated, and one that
+  holds the answer with no `finish` around it.
+- Measure with Laya as the decider, the default. Here the small LLM answered every asking.
+
 ### Results, 2026-10-12: one false trigger in three askings
 
 The model was MiniMax M3 on its hosted endpoint, in every role. The decider was the small LLM
@@ -78,13 +129,6 @@ What reading the steps of all 13 askings showed:
 three askings of a role getting there are too few to choose from, and most of the steps the
 guard was shown were responses that could not be read, which a change to the interval does not
 touch.
-
-What is still to do:
-
-- Measure again once #66 is settled. With every response read, the two hand-made cases will
-  likely end in under four steps and the guard will not be asked, so that run needs the
-  development cases made from SWE-bench Verified, which keep a role working longer.
-- Measure with Laya as the decider, the default. Here the small LLM answered every asking.
 
 ### Earlier, 2026-10-11: two local models, the guard never asked
 
