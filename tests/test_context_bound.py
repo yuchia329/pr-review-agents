@@ -7,7 +7,14 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
-from conftest import FixtureRepository, asks, commit_snapshots, finishes, model_listing
+from conftest import (
+    FixtureRepository,
+    GathersNothing,
+    asks,
+    commit_snapshots,
+    finishes,
+    model_listing,
+)
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -52,7 +59,14 @@ from pr_verification.reproduction import AttemptResult, ReproductionRun, write_r
 from pr_verification.sandbox import Command, Limits, Phase, RunResult
 
 LIMITS_TO_CUT_TO = st.integers(min_value=SMALLEST_LIMIT, max_value=600)
-TEXTS = st.text(max_size=1500)
+LONGER_THAN_ANY_LIMIT = st.builds(
+    lambda piece, times: piece * times,
+    st.text(min_size=7, max_size=30),
+    st.integers(min_value=90, max_value=100),
+)
+"""Texts that are cut whatever limit is drawn. Drawn one character at a time, a text is
+almost never long enough to be."""
+TEXTS = st.one_of(st.text(max_size=300), LONGER_THAN_ANY_LIMIT)
 KEEPS = st.sampled_from(Keep)
 
 
@@ -189,18 +203,21 @@ def test_thread_started_with_a_copy_of_the_context_has_the_same_limits_in_use() 
 
 
 def test_limits_set_in_one_thread_are_not_in_use_in_another() -> None:
-    seen = []
+    inside, looked = threading.Event(), threading.Event()
 
-    def set_and_look() -> None:
+    def set_and_wait() -> None:
         with shown_within(ContextLimits(300, 400)):
-            seen.append(limits_in_use())
+            inside.set()
+            looked.wait(timeout=5)
 
-    thread = threading.Thread(target=set_and_look)
+    thread = threading.Thread(target=set_and_wait)
     thread.start()
+    assert inside.wait(timeout=5)
+    in_use_here = limits_in_use()
+    looked.set()
     thread.join()
 
-    assert seen == [ContextLimits(300, 400)]
-    assert limits_in_use() == ContextLimits()
+    assert in_use_here == ContextLimits()
 
 
 # The limits the environment configures
@@ -242,14 +259,9 @@ class Returning:
     """A tool that returns one prepared text for each request made of it, in order, and the
     last of them from then on."""
 
-    def __init__(self, *returns: str, keeps: Keep | None = None) -> None:
+    def __init__(self, *returns: str, keeps: Keep = Keep.START) -> None:
         self._returns, self._calls = returns, 0
-        description = "Reads something."
-        self.tool = (
-            Tool("read", description, self._run)
-            if keeps is None
-            else Tool("read", description, self._run, keeps=keeps)
-        )
+        self.tool = Tool("read", "Reads something.", self._run, keeps=keeps)
 
     def _run(self, arguments: Mapping[str, object]) -> str:
         self._calls += 1
@@ -366,7 +378,7 @@ def test_progress_guard_is_shown_each_result_as_the_role_is_shown_it() -> None:
 
 
 @given(
-    returns=st.lists(st.text(max_size=1500), min_size=1, max_size=4),
+    returns=st.lists(TEXTS, min_size=1, max_size=4),
     limit=LIMITS_TO_CUT_TO,
     keep=KEEPS,
 )
@@ -459,6 +471,12 @@ def test_path_that_names_no_file_is_answered_before_the_part_is_looked_at(
     ledger: FixtureRepository,
 ) -> None:
     assert read_file(ledger, path="missing.txt", first_line=50) == NO_SUCH_FILE
+
+
+def test_line_numbers_read_file_cannot_use_are_answered_before_the_path_is_looked_at(
+    ledger: FixtureRepository,
+) -> None:
+    assert read_file(ledger, path="missing.txt", first_line=0) == BAD_ARGUMENTS
 
 
 @pytest.mark.parametrize(
@@ -615,17 +633,20 @@ def test_limit_on_a_tools_result_does_not_bound_what_the_writer_is_shown_of_a_ru
 # The limits a run from the command line is made within
 
 
-class SeesTheLimits:
+class SeesTheLimits(GathersNothing):
     """A stand-in orchestration that gathers nothing and records the limits in use."""
 
     def __init__(self) -> None:
+        super().__init__()
         self.seen: list[ContextLimits] = []
 
     def gather(
         self, claims: tuple[str, ...], *, repository: Path, before: str, after: str, model: Model
     ) -> tuple[Gathered, ...]:
         self.seen.append(limits_in_use())
-        return tuple(Gathered(()) for _ in claims)
+        return super().gather(
+            claims, repository=repository, before=before, after=after, model=model
+        )
 
 
 def run_from_the_command_line(
