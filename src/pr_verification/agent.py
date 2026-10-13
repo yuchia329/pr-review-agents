@@ -600,6 +600,9 @@ def _loop_found(
 _WHITESPACE = " \t\n\r"
 """The characters JSON has as whitespace."""
 
+_DECODER = json.JSONDecoder()
+"""Reads the JSON value a text begins with, and says where it ends."""
+
 _PART = re.compile(r'"(?:[^"\\]|\\.)*"|[{}\[\]]|[^ \t\n\r"{}\[\],:]+')
 """One part of a JSON text: a string, a bracket, or a number or other bare word. The commas,
 colons, and whitespace between one part and the next are in no part."""
@@ -664,9 +667,10 @@ class _Finish:
 
 
 def _read(response: str) -> _ToolRequest | _Finish | None:
-    """What a response asks for, or None when it cannot be read. No tool is looked up here."""
+    """What the first object of a response asks for, or None when it cannot be read. What
+    follows that object is not read. No tool is looked up here."""
     try:
-        said = json.loads(response)
+        said, _ = _DECODER.raw_decode(response.lstrip(_WHITESPACE))
     except (ValueError, RecursionError):
         return None
     if not isinstance(said, dict):
