@@ -170,6 +170,7 @@ def write_judged_reproduction(
     limits: Limits,
     round_cap: int = ROUND_CAP,
     progress_guard: Decider | None = None,
+    judge_step_cap: int = JUDGE_STEP_CAP,
 ) -> JudgedRun:
     """Write a Reproduction for `claim` and have the judge decide on it, for a capped number
     of rounds.
@@ -187,7 +188,7 @@ def write_judged_reproduction(
        When the `ReproductionRun` has no `evidence`, the work ends there. The judge is not
        asked, since there is nothing to judge, and `inconclusive` is the `ReproductionRun`'s.
     2. Judges. `judge_reproduction` is called with `claim`, the `reproduction` of that
-       `evidence`, `model`, `progress_guard`, and the step cap it has unless given another.
+       `evidence`, `model`, `progress_guard`, and `judge_step_cap` as its step cap.
        By then the Reproduction has run on both commits and shown a difference, and the
        judge is shown nothing of that.
 
@@ -219,11 +220,13 @@ def write_judged_reproduction(
 
     Every round is kept in the record, however it ended.
 
-    Raises `ValueError` before any request when `round_cap` is less than 1. Any other
-    exception is a fault in the system and is raised.
+    Raises `ValueError` before any request when `round_cap` or `judge_step_cap` is less than
+    1. Any other exception is a fault in the system and is raised.
     """
     if round_cap < 1:
         raise ValueError(f"the cap on rounds is {round_cap}: under 1")
+    if judge_step_cap != JUDGE_STEP_CAP:
+        raise NotImplementedError
     rounds: list[Round] = []
     rejected: list[Rejected] = []
 

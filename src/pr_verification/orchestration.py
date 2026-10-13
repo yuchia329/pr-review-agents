@@ -23,7 +23,7 @@ from pr_verification.budget import BUDGET_SPENT, BudgetSpent, Ledger
 from pr_verification.decision import Decider
 from pr_verification.ecosystem import ReproductionEcosystem, Unsupported, find_commands
 from pr_verification.evidence import ending
-from pr_verification.judge import ROUND_CAP, write_judged_reproduction
+from pr_verification.judge import JUDGE_STEP_CAP, ROUND_CAP, write_judged_reproduction
 from pr_verification.model import Model
 from pr_verification.repo_profile import (
     CommandFailed,
@@ -206,6 +206,9 @@ class FixedPipeline:
     """The most rounds between the Reproduction writer and the Reproduction judge for one
     Claim."""
 
+    judge_step_cap: int = JUDGE_STEP_CAP
+    """The step cap of the Reproduction judge, each time it is run."""
+
     def gather(
         self, claims: tuple[str, ...], *, repository: Path, before: str, after: str, model: Model
     ) -> tuple[Gathered, ...]:
@@ -227,9 +230,9 @@ class FixedPipeline:
            the Sandbox and with the Repo Profile that step 2 gave.
         4. For each Claim in turn, calls `write_judged_reproduction` with the Claim, `model`,
            that Sandbox, the Ecosystem, `repository`, `before`, `after`, and `limits`, and
-           with the pipeline's `round_cap` and `progress_guard`. The Claim is given the
-           `JudgedRun`'s `evidence` as its one piece of Evidence when there is one, and
-           otherwise no Evidence and the `JudgedRun`'s `inconclusive`.
+           with the pipeline's `round_cap`, `judge_step_cap`, and `progress_guard`. The
+           Claim is given the `JudgedRun`'s `evidence` as its one piece of Evidence when
+           there is one, and otherwise no Evidence and the `JudgedRun`'s `inconclusive`.
 
         When step 2 or step 3 answers `CommandFailed` or raises `SandboxFailed`, no
         Reproduction is written, no request is made to the model, and every Claim is given no
@@ -501,6 +504,8 @@ class FixedPipeline:
     ) -> Gathered:
         """Step 4 of `gather` for one Claim: what it is given, with every request made to
         `model` and every run made in `sandbox`."""
+        if self.judge_step_cap != JUDGE_STEP_CAP:
+            raise NotImplementedError
         judged = write_judged_reproduction(
             claim,
             model=model,
