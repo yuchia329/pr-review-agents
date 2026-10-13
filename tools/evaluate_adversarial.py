@@ -78,6 +78,11 @@ FAILURES_IN_A_ROW = 3
 is a slow answer. Three is a provider that is down or a network that is gone."""
 
 
+NOT_PREPARED = "could not be prepared for running"
+"""What a Claim's reason says when the Sandbox could not install what the code needs, as when
+the network is gone. No Reproduction is run for such a Claim, so it was not put to the test."""
+
+
 def stop_if_refused(case: str, said: str) -> None:
     """End the measurement when the provider refused the account, not the request."""
     if any(status in said for status in REFUSED):
@@ -119,6 +124,7 @@ def main() -> None:
     confirmed: list[dict[str, str]] = []
     claims: list[dict[str, Any]] = []
     failed_in_a_row: list[str] = []
+    not_prepared_in_a_row: list[str] = []
     names: dict[Path, str] = {}
 
     def recorded_run(pull_request: PullRequest, model: Model) -> Report:
@@ -139,6 +145,12 @@ def main() -> None:
         for claim in told:
             print(json.dumps(claim), file=sys.stderr, flush=True)
             stop_if_refused(claim["case"], claim["reason"])
+        if told and all(NOT_PREPARED in claim["reason"] for claim in told):
+            not_prepared_in_a_row.append(names[pull_request.repository])
+            if len(not_prepared_in_a_row) == FAILURES_IN_A_ROW:
+                sys.exit(f"the code {NOT_PREPARED} in {FAILURES_IN_A_ROW} runs in a row")
+        else:
+            not_prepared_in_a_row.clear()
         confirmed.extend(
             {"case": names[pull_request.repository], "claim": claim.text, "reason": claim.reason}
             for claim in report.claims
