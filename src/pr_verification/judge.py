@@ -14,7 +14,7 @@ from pathlib import Path
 from pr_verification.agent import Role, RoleRun, Stopped, _stopped_looping, run_role
 from pr_verification.decision import Decider
 from pr_verification.ecosystem import ReproductionEcosystem
-from pr_verification.model import Model, ModelFailed
+from pr_verification.model import Model, ModelFailed, RoleName, model_for
 from pr_verification.report import AcceptedReproduction, ReproductionEvidence
 from pr_verification.reproduction import (
     Rejected,
@@ -232,6 +232,8 @@ def write_judged_reproduction(
         raise ValueError(f"the cap on rounds is {round_cap}: under 1")
     if judge_step_cap < 1:
         raise ValueError(f"the step cap of the judge is {judge_step_cap}: under 1")
+    writer = model_for(model, RoleName.REPRODUCTION_WRITER)
+    judge = model_for(model, RoleName.REPRODUCTION_JUDGE)
     rounds: list[Round] = []
     rejected: list[Rejected] = []
 
@@ -243,7 +245,7 @@ def write_judged_reproduction(
             written = rewrite_reproduction(
                 claim,
                 tuple(rejected),
-                model=model,
+                model=writer,
                 sandbox=sandbox,
                 ecosystem=ecosystem,
                 repository=repository,
@@ -256,7 +258,7 @@ def write_judged_reproduction(
             written = write_reproduction(
                 claim,
                 progress_guard,
-                model=model,
+                model=writer,
                 sandbox=sandbox,
                 ecosystem=ecosystem,
                 repository=repository,
@@ -272,7 +274,7 @@ def write_judged_reproduction(
             judgement = judge_reproduction(
                 claim,
                 reproduction,
-                model=model,
+                model=judge,
                 step_cap=judge_step_cap,
                 progress_guard=progress_guard,
             )

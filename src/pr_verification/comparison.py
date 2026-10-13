@@ -5,17 +5,25 @@ what a configuration is worth: one model against another in the same roles, the 
 against the fixed pipeline, and the system against the reading-only baseline.
 """
 
+import json
+import os
+import tempfile
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 import httpx
 
 from pr_verification.budget import Budget
-from pr_verification.configuration import Configuration
+from pr_verification.configuration import Configuration, configured_models
+from pr_verification.core import PullRequest, run
 from pr_verification.decision import Decider
-from pr_verification.evaluation import Case, Evaluation
+from pr_verification.evaluation import Case, Evaluation, PartEvaluation, evaluate
 from pr_verification.model import Model
-from pr_verification.orchestration import OrchestrationChoice
+from pr_verification.orchestration import Orchestration, OrchestrationChoice, fixed_pipeline
+from pr_verification.report import Report
+from pr_verification.supervisor import supervisor
 
 BASELINE_LABEL = "reading-only baseline"
 """What the reading-only baseline is called in a comparison. No other evaluation may be."""
@@ -24,7 +32,7 @@ BASELINE_LABEL = "reading-only baseline"
 def label_of(configuration: Configuration, orchestration: OrchestrationChoice) -> str:
     """What a run of `configuration` under `orchestration` is called in a comparison:
     `<name>/<orchestration>`, as in `default/pipeline` and `ceiling/supervisor`."""
-    raise NotImplementedError
+    return f"{configuration.name}/{orchestration.value}"
 
 
 def evaluate_configured(
@@ -65,7 +73,24 @@ def evaluate_configured(
     case is run. A configuration that is `evaluation_only` is run like any other: this is
     the evaluation.
     """
-    raise NotImplementedError
+    if models is None:
+        models = configured_models(
+            configuration, os.environ if environment is None else environment, transport
+        )
+    if orchestration is None:
+        orchestration = configuration.orchestration
+    supervised = orchestration is OrchestrationChoice.SUPERVISOR
+
+    def run_once(pull_request: PullRequest, model: Model) -> Report:
+        with tempfile.TemporaryDirectory() as directory:
+            made: Orchestration
+            if supervised:
+                made = supervisor(Path(directory), progress_guard=decider)
+            else:
+                made = fixed_pipeline(Path(directory), progress_guard=decider)
+            return run(pull_request, model, decider, orchestration=made, budget=budget)
+
+    return evaluate(cases, models, repetitions=repetitions, entry_point=run_once)
 
 
 @dataclass(frozen=True)
@@ -97,4 +122,30 @@ class Comparison:
 
         Raises `ValueError` when one of `evaluations` is called `BASELINE_LABEL`.
         """
-        raise NotImplementedError
+        if BASELINE_LABEL in self.evaluations:
+            raise ValueError(f"only the reading-only baseline may be called {BASELINE_LABEL!r}")
+        shown = dict(self.evaluations)
+        if self.baseline is not None:
+            shown[BASELINE_LABEL] = self.baseline
+        printed = {
+            "development": {
+                name: _printed(evaluation.development) for name, evaluation in shown.items()
+            },
+            "held_out": {name: _printed(evaluation.held_out) for name, evaluation in shown.items()},
+        }
+        return json.dumps(printed, indent=2)
+
+
+def _printed(part: PartEvaluation) -> dict[str, Any]:
+    """What a comparison shows of one evaluation's part, as `Comparison.to_json` says."""
+    scores = part.scores
+    return {
+        "false_block_rate": scores.false_block_rate,
+        "false_assurance_rate": scores.false_assurance_rate,
+        "decided_rate": scores.decided_rate,
+        "seconds_per_pull_request": scores.seconds_per_pull_request,
+        "dollars_per_pull_request": scores.dollars_per_pull_request,
+        "claims": scores.claims,
+        "runs": scores.runs,
+        "runs_without_verdicts": scores.runs_without_verdicts,
+    }

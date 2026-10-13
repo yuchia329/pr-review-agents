@@ -162,20 +162,10 @@ def verify_structural_claim(
     Raises `ValueError` before any request when `step_cap` is less than 1. Any other
     exception is a fault in the system and is raised.
     """
-    commits = {"before": before, "after": after}
     role = Role(
         name="structural-verifier",
         instructions=_INSTRUCTIONS.format(cap=TEXT_CAP),
-        tools=tuple(
-            Tool(
-                f"{which}_{tool.name}",
-                f"{_READS[which]}: {_renamed(tool.description, tool.name, which)}",
-                tool.run,
-                keeps=tool.keeps,
-            )
-            for which, commit in commits.items()
-            for tool in reading_tools(repository, commit)
-        ),
+        tools=_tools_reading_both(repository, before, after),
         step_cap=step_cap,
     )
     try:
@@ -198,6 +188,22 @@ def verify_structural_claim(
         search_for(repository, before, after, text, change, path) for text, change, path in named
     )
     return StructuralRun(run, evidence, inconclusive=None, names=names)
+
+
+def _tools_reading_both(repository: Path, before: str, after: str) -> tuple[Tool, ...]:
+    """The six read-only tools `verify_structural_claim` says its role has: those of
+    `reading_tools` for each of the two commits, named and described for its commit."""
+    commits = {"before": before, "after": after}
+    return tuple(
+        Tool(
+            f"{which}_{tool.name}",
+            f"{_READS[which]}: {_renamed(tool.description, tool.name, which)}",
+            tool.run,
+            keeps=tool.keeps,
+        )
+        for which, commit in commits.items()
+        for tool in reading_tools(repository, commit)
+    )
 
 
 def _named(entry: object) -> tuple[str, TextChange, str | None] | None:

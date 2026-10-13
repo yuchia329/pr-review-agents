@@ -17,7 +17,12 @@ import httpx
 
 from pr_verification.budget import Budget, InvalidBudget, budget_from_environment
 from pr_verification.claims import ClaimExtractionFailed
-from pr_verification.configuration import CONFIGURATION_VARIABLE
+from pr_verification.configuration import (
+    Configuration,
+    InvalidConfiguration,
+    configuration_from_environment,
+    configured_models,
+)
 from pr_verification.context_bound import (
     InvalidContextLimits,
     limits_from_environment,
@@ -33,6 +38,7 @@ from pr_verification.decision import (
 from pr_verification.model import Model, ModelFailed
 from pr_verification.openai_compatible import model_from_environment
 from pr_verification.orchestration import (
+    ORCHESTRATION_VARIABLE,
     InvalidOrchestration,
     Orchestration,
     OrchestrationChoice,
@@ -163,11 +169,14 @@ def _main(
 ) -> int:
     """The run that `main` traces."""
     arguments = _parser().parse_args(argv)
-    if model is None and (transport is not None or os.environ.get(CONFIGURATION_VARIABLE)):
-        raise NotImplementedError
+    configuration: Configuration | None = None
     try:
         if model is None:
-            model = model_from_environment(os.environ)
+            configuration = configuration_from_environment(os.environ)
+            if configuration is None:
+                model = model_from_environment(os.environ, transport)
+            else:
+                model = configured_models(configuration, os.environ, transport)
         if model is None:
             print(
                 "pr-verification: no model is configured, so nothing can be verified: "
@@ -183,7 +192,9 @@ def _main(
         limits = limits_from_environment(os.environ)
         with shown_within(limits), ExitStack() as kept:
             if orchestration is None:
-                orchestration = _configured_orchestration(arguments.state_dir, decider, kept)
+                orchestration = _configured_orchestration(
+                    arguments.state_dir, decider, kept, configuration
+                )
             report = run(
                 PullRequest(
                     repository=arguments.repo,
@@ -203,6 +214,7 @@ def _main(
     except (
         InvalidPullRequest,
         InvalidBudget,
+        InvalidConfiguration,
         InvalidContextLimits,
         InvalidDecisionConfiguration,
         InvalidOrchestration,
@@ -221,11 +233,16 @@ def _main(
 
 
 def _configured_orchestration(
-    state_dir: Path | None, decider: Decider, kept: ExitStack
+    state_dir: Path | None, decider: Decider, kept: ExitStack, configuration: Configuration | None
 ) -> Orchestration | None:
-    """The orchestration the environment names, as `main` says, or None for `run` to bring
-    its own. A temporary directory made for it is left for `kept` to remove."""
-    if orchestration_choice(os.environ) is OrchestrationChoice.SUPERVISOR:
+    """The orchestration the environment names, or else the one `configuration` has, as
+    `main` says, or None for `run` to bring its own. A temporary directory made for it is
+    left for `kept` to remove."""
+    if configuration is not None and not os.environ.get(ORCHESTRATION_VARIABLE):
+        choice = configuration.orchestration
+    else:
+        choice = orchestration_choice(os.environ)
+    if choice is OrchestrationChoice.SUPERVISOR:
         if state_dir is None:
             state_dir = Path(kept.enter_context(tempfile.TemporaryDirectory()))
         return supervisor(state_dir, progress_guard=decider)

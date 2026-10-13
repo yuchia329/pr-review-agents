@@ -28,8 +28,15 @@ from pathlib import Path
 from pr_verification.agent import Loop
 from pr_verification.budget import BUDGET_SPENT, BudgetSpent, Ledger
 from pr_verification.decision import Decider
-from pr_verification.model import Model, ModelFailed, ModelRequest
-from pr_verification.orchestration import FixedPipeline, Gathered, _Ready, fixed_pipeline
+from pr_verification.model import Model, ModelFailed, ModelRequest, RoleName, model_for
+from pr_verification.orchestration import (
+    FixedPipeline,
+    Gathered,
+    _reading,
+    _Ready,
+    _reproducing,
+    fixed_pipeline,
+)
 from pr_verification.report import BudgetSpend, ClaimKind, Evidence, Verdict
 from pr_verification.sandbox import SandboxWithHomes
 from pr_verification.verdict import compute_verdict
@@ -771,13 +778,20 @@ class _Run:
     def _supervise(self) -> None:
         """Ask the supervising model for one step after another, until a finish is accepted,
         the Budget is spent, or the supervisor is stopped."""
-        supervising = self._ledger.model(self._supervisor.model or self._model)
+        supervising = self._ledger.model(
+            model_for(self._supervisor.model or self._model, RoleName.SUPERVISOR)
+        )
         results: tuple[ResultSummary, ...] = ()
         refused: str | None = None
         for steps_left in reversed(range(self._supervisor.step_cap)):
             if self._ledger.stopped_by() is not None:
                 return
-            request = ModelRequest(_INSTRUCTIONS, self._shown(steps_left, results, refused))
+            # The instructions are the same in every request, so they are worth keeping.
+            request = ModelRequest(
+                _INSTRUCTIONS,
+                self._shown(steps_left, results, refused),
+                cache_instructions=True,
+            )
             try:
                 response = supervising.complete(request)
             except ModelFailed:
@@ -966,7 +980,7 @@ class _Run:
         """A `Strategy.REPRODUCTION` for the Claim at `place`, in a Sandbox it has to itself."""
         return self._pipeline._reproduce(
             self._claims[place],
-            self._ledger.model(self._model, claim=place),
+            _reproducing(self._model, self._ledger, place),
             self._ledger.sandbox(ready.sandbox, claim=place),
             ready.ecosystem,
             self._repository,
@@ -978,7 +992,7 @@ class _Run:
         """A `Strategy.READING` for the Claim at `place`."""
         return self._pipeline._verify_by_reading(
             self._claims[place],
-            self._ledger.model(self._model, claim=place),
+            _reading(self._model, self._ledger, place),
             self._repository,
             self._before,
             self._after,

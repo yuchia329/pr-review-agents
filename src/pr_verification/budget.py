@@ -21,6 +21,7 @@ from pr_verification.model import (
     PricedResponse,
     ask,
     ask_priced,
+    offers_parallel_tool_calls,
 )
 from pr_verification.report import BudgetLimit, BudgetSpend
 from pr_verification.sandbox import (
@@ -501,6 +502,7 @@ class _ModelThroughLedger:
 
     def __init__(self, ledger: Ledger, model: Model, claim: int | None) -> None:
         self._ledger, self._model, self._claim = ledger, model, claim
+        self.parallel_tool_calls = offers_parallel_tool_calls(model)
 
     def complete(self, request: ModelRequest) -> str:
         def priced() -> PricedResponse:

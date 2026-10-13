@@ -18,12 +18,23 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from pr_verification.agent import RoleRun
+from pr_verification.agent import Role, RoleRun, Stopped, run_role
 from pr_verification.budget import Clock
-from pr_verification.core import PullRequest
-from pr_verification.model import Model
-from pr_verification.report import Report, Verdict
-from pr_verification.structural import VERIFIER_STEP_CAP
+from pr_verification.claims import extract_claims
+from pr_verification.core import PullRequest, _resolve_commit
+from pr_verification.model import (
+    Model,
+    ModelFailed,
+    ModelRequest,
+    PricedModel,
+    RoleName,
+    ask,
+    ask_priced,
+    model_for,
+    offers_parallel_tool_calls,
+)
+from pr_verification.report import BudgetSpend, Claim, Report, Verdict
+from pr_verification.structural import VERIFIER_STEP_CAP, _tools_reading_both
 
 BASELINE_PREFIX = "Reading-only baseline: "
 """What every reason the baseline gives starts with, so that no Verdict it stated can be
@@ -38,6 +49,26 @@ value of the run's `RoleRun.stopped`, as in `step_cap`."""
 
 BASELINE_COULD_NOT_FINISH = BASELINE_PREFIX + "the role could not finish its work: {failure}"
 """The reason when the model failed. `failure` is what the `ModelFailed` said."""
+
+
+_INSTRUCTIONS = """\
+You judge whether a Claim a pull request makes about its own changes is true, by reading the code.
+The Claim is the "claim" of your task.
+
+Your tools read the files of the repository as they were before the pull request and as they are
+after it. You cannot run anything. Read what the Claim is about in both, and decide whether the
+change does what the Claim says.
+
+Finish with {"verdict": "<verdict>", "reason": "<why>"}, where the verdict is one of:
+
+confirmed
+    the code after the pull request does what the Claim says, and the code before it did not.
+refuted
+    the code after the pull request does not do what the Claim says.
+inconclusive
+    reading the code does not settle it either way.
+
+The reason says in a sentence or two what in the code decided it."""
 
 
 @dataclass(frozen=True)
@@ -98,7 +129,30 @@ def state_verdict(
     Raises `ValueError` before any request when `step_cap` is less than 1. Any other
     exception is a fault in the system and is raised.
     """
-    raise NotImplementedError
+    _require_a_step(step_cap)
+    role = Role(
+        name="reading-only-baseline",
+        instructions=_INSTRUCTIONS,
+        tools=_tools_reading_both(repository, before, after),
+        step_cap=step_cap,
+    )
+    try:
+        run = run_role(role, {"claim": claim}, model)
+    except ModelFailed as failure:
+        reason = BASELINE_COULD_NOT_FINISH.format(failure=failure)
+        return StatedVerdict(Verdict.INCONCLUSIVE, reason, run=None)
+    if run.stopped is not Stopped.FINISHED or run.answer is None:
+        reason = BASELINE_DID_NOT_FINISH.format(stopped=run.stopped.value)
+        return StatedVerdict(Verdict.INCONCLUSIVE, reason, run)
+    verdict, why = run.answer.get("verdict"), run.answer.get("reason")
+    if not (isinstance(verdict, str) and verdict in set(Verdict) and isinstance(why, str)):
+        return StatedVerdict(Verdict.INCONCLUSIVE, BASELINE_GAVE_NO_VERDICT, run)
+    return StatedVerdict(Verdict(verdict), BASELINE_PREFIX + why, run)
+
+
+def _require_a_step(step_cap: int) -> None:
+    if step_cap < 1:
+        raise ValueError(f"the step cap of the reading-only baseline is {step_cap}: under 1")
 
 
 def reading_only_baseline(
@@ -149,4 +203,46 @@ def reading_only_baseline(
     Claim its Verdict and never the report. Raises `ValueError` as `state_verdict` does,
     before any request.
     """
-    raise NotImplementedError
+    started = clock()
+    _require_a_step(step_cap)
+    repository = pull_request.repository
+    before = _resolve_commit(repository, "before", pull_request.before)
+    after = _resolve_commit(repository, "after", pull_request.after)
+    extractor = _Counted(model_for(model, RoleName.CLAIM_EXTRACTOR))
+    reader = _Counted(model_for(model, RoleName.REPRODUCTION_WRITER))
+    texts = extract_claims(
+        extractor, pull_request.title, pull_request.description, pull_request.linked_issue
+    )
+    claims = []
+    for text in texts:
+        stated = state_verdict(
+            text, repository=repository, before=before, after=after, model=reader, step_cap=step_cap
+        )
+        claims.append(Claim(text, stated.verdict, stated.reason))
+    spend = BudgetSpend(
+        seconds=clock() - started,
+        dollars=extractor.dollars + reader.dollars,
+        steps=extractor.steps + reader.steps,
+    )
+    return Report(before=before, after=after, claims=tuple(claims), findings=(), budget_spend=spend)
+
+
+class _Counted:
+    """A model that asks the model it is given and counts what was asked of it: the requests
+    made, and what they cost at that model's price. It offers parallel tool calls when, and
+    only when, that model does."""
+
+    def __init__(self, model: Model) -> None:
+        self._model = model
+        self.parallel_tool_calls = offers_parallel_tool_calls(model)
+        self.steps = 0
+        self.dollars = 0.0
+
+    def complete(self, request: ModelRequest) -> str:
+        # Counted before it is asked, so a request that fails is a step that costs nothing.
+        self.steps += 1
+        if not isinstance(self._model, PricedModel):
+            return ask(self._model, request)
+        priced = ask_priced(self._model, request)
+        self.dollars += priced.dollars
+        return priced.response

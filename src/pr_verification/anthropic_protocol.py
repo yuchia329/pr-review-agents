@@ -11,6 +11,16 @@ a model it is told can be relied on for them.
 import httpx
 
 from pr_verification.model import ModelRequest, PricedResponse, TokenPrice
+from pr_verification.openai_compatible import (
+    _THINKING,
+    _TIMEOUT,
+    _TOKENS_PRICED,
+    _failed,
+    _is_integer,
+    _sendable,
+    _tokens,
+)
+from pr_verification.tracing import SpanKind, span
 
 ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1"
 """The endpoint of the protocol's own provider, up to and including `/v1`."""
@@ -62,7 +72,16 @@ class AnthropicModel:
         model's attribute of that name, false unless given as for the OpenAI-compatible
         client, and changes nothing about a request.
         """
-        raise NotImplementedError
+        self.parallel_tool_calls = parallel_tool_calls
+        self._price = price
+        self._url = endpoint.rstrip("/") + "/messages"
+        self._model = model
+        self._name = f"{model} at {endpoint}"
+        self._key = _sendable(key, self._name)
+        headers = {"anthropic-version": ANTHROPIC_VERSION}
+        if self._key:
+            headers["x-api-key"] = self._key
+        self._client = httpx.Client(headers=headers, timeout=_TIMEOUT, transport=transport)
 
     def complete(self, request: ModelRequest) -> str:
         """Make one request to the endpoint and return the text of its answer.
@@ -115,7 +134,7 @@ class AnthropicModel:
         `gen_ai.usage.output_tokens` when the answer's `usage` holds `input_tokens` and
         `output_tokens` as integers.
         """
-        raise NotImplementedError
+        return self._ask(request)[0]
 
     def complete_priced(self, request: ModelRequest) -> PricedResponse:
         """Make the one request `complete` makes, and say what it cost at the model's price.
@@ -139,4 +158,90 @@ class AnthropicModel:
         `usage` holding both of the first two counts as whole numbers that are 0 or more:
         what is not known is not charged for.
         """
-        raise NotImplementedError
+        answer, usage = self._ask(request)
+        if self._price is None or not isinstance(usage, dict):
+            return PricedResponse(answer, 0.0)
+        sent = _tokens(usage.get("input_tokens"))
+        returned = _tokens(usage.get("output_tokens"))
+        if sent is None or returned is None:
+            return PricedResponse(answer, 0.0)
+        kept = _tokens(usage.get("cache_creation_input_tokens")) or 0
+        read = _tokens(usage.get("cache_read_input_tokens")) or 0
+        at_input_price = sent + kept * CACHE_WRITE_MULTIPLE + read * CACHE_READ_MULTIPLE
+        dollars = (at_input_price * self._price.input + returned * self._price.output) / (
+            _TOKENS_PRICED
+        )
+        return PricedResponse(answer, dollars)
+
+    def _ask(self, request: ModelRequest) -> tuple[str, object]:
+        """Make one request. The answer's text, and its `usage` when it has one.
+
+        The request is recorded with the model's name, and with the tokens when `usage` holds
+        both counts as integers (`pr_verification.tracing`)."""
+        with span(SpanKind.MODEL_CALL, "model") as known:
+            known["gen_ai.request.model"] = self._model
+            answer, usage = self._post(request)
+            if isinstance(usage, dict):
+                sent, returned = usage.get("input_tokens"), usage.get("output_tokens")
+                if _is_integer(sent) and _is_integer(returned):
+                    known["gen_ai.usage.input_tokens"] = sent
+                    known["gen_ai.usage.output_tokens"] = returned
+            return answer, usage
+
+    def _post(self, request: ModelRequest) -> tuple[str, object]:
+        """Send one request to the endpoint, and read its answer as `_ask` gives it."""
+        system: str | list[dict[str, object]] = request.instructions
+        if request.cache_instructions:
+            system = [
+                {
+                    "type": "text",
+                    "text": request.instructions,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        # Instructions and data travel apart, so Untrusted Content stays data.
+        body = {
+            "model": self._model,
+            "max_tokens": MAX_TOKENS,
+            "system": system,
+            "messages": [{"role": "user", "content": request.data}],
+        }
+        try:
+            response = self._client.post(self._url, json=body)
+        except (httpx.HTTPError, httpx.InvalidURL) as error:
+            # Not chained: the cause would be printed with any traceback, unredacted.
+            raise _failed(self._name, self._key, f"could not be reached: {error}") from None
+        if not response.is_success:
+            raise _failed(
+                self._name,
+                self._key,
+                f"answered with HTTP {response.status_code}: {response.text}",
+            )
+        try:
+            answered = response.json()
+            text = _text_of(answered["content"])
+        except (ValueError, LookupError, TypeError, RecursionError):
+            text = ""
+        answer = _THINKING.sub("", text).strip()
+        if not answer:
+            raise _failed(
+                self._name, self._key, f"gave a response that holds no text: {response.text}"
+            )
+        return answer, answered.get("usage")
+
+
+def _text_of(content: object) -> str:
+    """The text of an answer's `content`: that of each of its text blocks, in order. Raises
+    `TypeError` when it is no list of blocks."""
+    if not isinstance(content, list):
+        raise TypeError("the content is no list")
+    texts = []
+    for block in content:
+        if not isinstance(block, dict):
+            raise TypeError("a block is no object")
+        if block.get("type") == "text":
+            text = block.get("text")
+            if not isinstance(text, str):
+                raise TypeError("a text block holds no text")
+            texts.append(text)
+    return "".join(texts)

@@ -85,7 +85,7 @@ def offers_parallel_tool_calls(model: Model) -> bool:
     The model `Ledger.model` gives offers them when, and only when, the model it asks does.
     What a role may do with the capability is said by `run_role` (`pr_verification.agent`).
     """
-    raise NotImplementedError
+    return getattr(model, "parallel_tool_calls", None) is True
 
 
 def ask(model: Model, request: ModelRequest) -> str:
@@ -152,7 +152,7 @@ class RoleModels:
     def complete(self, request: ModelRequest) -> str:
         """Ask `default` once, with the request exactly as given, and return its response
         exactly as given. Raises whatever `default` raises."""
-        raise NotImplementedError
+        return self.default.complete(request)
 
 
 def model_for(model: Model, role: RoleName) -> Model:
@@ -163,7 +163,10 @@ def model_for(model: Model, role: RoleName) -> Model:
     returned itself. So what is returned is never a `RoleModels`, and it has the price and
     the capabilities of the one model that will be asked.
     """
-    raise NotImplementedError
+    # A model held for a role may itself hold a model for each role.
+    while isinstance(model, RoleModels):
+        model = model.roles.get(role, model.default)
+    return model
 
 
 class ScriptExhausted(Exception):
@@ -190,8 +193,7 @@ class ScriptedModel:
         The stand-in does not offer prompt caching: a request is recorded in `requests`
         exactly as given, with its `cache_instructions`, and answered the same whichever
         that is."""
-        if parallel_tool_calls:
-            raise NotImplementedError
+        self.parallel_tool_calls = parallel_tool_calls
         self._responses = tuple(responses)
         self._dollars_per_request = dollars_per_request
         self.requests: list[ModelRequest] = []

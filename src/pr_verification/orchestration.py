@@ -24,7 +24,7 @@ from pr_verification.decision import Decider
 from pr_verification.ecosystem import ReproductionEcosystem, Unsupported, find_commands
 from pr_verification.evidence import ending
 from pr_verification.judge import JUDGE_STEP_CAP, ROUND_CAP, write_judged_reproduction
-from pr_verification.model import Model
+from pr_verification.model import Model, RoleModels, RoleName, model_for
 from pr_verification.repo_profile import (
     CommandFailed,
     DependencyCache,
@@ -449,7 +449,7 @@ class FixedPipeline:
                 if isinstance(ready, _Ready) and not structural[index]:
                     given = self._reproduce(
                         claim,
-                        ledger.model(model, claim=index),
+                        _reproducing(model, ledger, index),
                         ledger.sandbox(as_opened[ready.sandbox], claim=index),
                         ready.ecosystem,
                         repository,
@@ -458,7 +458,7 @@ class FixedPipeline:
                     )
                 else:
                     given = self._verify_by_reading(
-                        claim, ledger.model(model, claim=index), repository, before, after
+                        claim, _reading(model, ledger, index), repository, before, after
                     )
             except BudgetSpent as spent:
                 if spent.claim is None:
@@ -643,6 +643,23 @@ ORCHESTRATION_VARIABLE = "PR_VERIFICATION_ORCHESTRATION"
 class InvalidOrchestration(Exception):
     """The orchestration is configured as something it cannot be. Its message is safe to
     print: it names the variable at fault."""
+
+
+def _reproducing(model: Model, ledger: Ledger, claim: int) -> Model:
+    """The models that write and judge a Reproduction for the Claim at `claim`: the writer's
+    and the judge's among `model`, each asked through `ledger` on its own, as step 4 of
+    `FixedPipeline.gather_within` says."""
+    writer, judge = (
+        ledger.model(model_for(model, role), claim=claim)
+        for role in (RoleName.REPRODUCTION_WRITER, RoleName.REPRODUCTION_JUDGE)
+    )
+    return RoleModels(writer, {RoleName.REPRODUCTION_JUDGE: judge})
+
+
+def _reading(model: Model, ledger: Ledger, claim: int) -> Model:
+    """The model that verifies the Structural Claim at `claim` by reading: the Structural
+    verifier's among `model`, asked through `ledger`."""
+    return ledger.model(model_for(model, RoleName.STRUCTURAL_VERIFIER), claim=claim)
 
 
 def orchestration_choice(environment: Mapping[str, str]) -> OrchestrationChoice:

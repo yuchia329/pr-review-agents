@@ -161,5 +161,10 @@ Expect the report of the Ollama check, with `PR_VERIFICATION_ENDPOINT` and
 `PR_VERIFICATION_MODEL` unset. Then set the variable to `ceiling`, and to `baseline`, and expect
 exit code 2, no report, and one line naming `PR_VERIFICATION_CONFIGURATION` each time.
 
-Not run yet: none of this section, which was written with the tests, before the client and the
-configurations were implemented.
+Last run on 2026-10-13, the configurations only: `ceiling` and `baseline` each gave exit code 2,
+no report, and one line naming `PR_VERIFICATION_CONFIGURATION`. `self-hosted` reached Ollama
+with neither variable set and gave exit code 2 on its HTTP 404, since `pr-verification-qwen`
+was not on the machine.
+
+Not run yet: the check of the Anthropic-protocol client, for want of a key, and `self-hosted`
+with the model in place. `docs/model-comparisons.md` describes the configurations.

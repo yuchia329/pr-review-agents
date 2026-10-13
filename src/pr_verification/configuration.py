@@ -14,9 +14,14 @@ from enum import StrEnum
 
 import httpx
 
-from pr_verification.anthropic_protocol import ANTHROPIC_ENDPOINT
-from pr_verification.model import REASONING_ROLES, RoleModels, RoleName, TokenPrice
-from pr_verification.openai_compatible import DEFAULT_ENDPOINT, DEFAULT_MODEL
+from pr_verification.anthropic_protocol import ANTHROPIC_ENDPOINT, AnthropicModel
+from pr_verification.model import REASONING_ROLES, Model, RoleModels, RoleName, TokenPrice
+from pr_verification.openai_compatible import (
+    DEFAULT_ENDPOINT,
+    DEFAULT_MODEL,
+    OpenAICompatibleModel,
+    _price_from,
+)
 from pr_verification.orchestration import OrchestrationChoice
 
 
@@ -148,7 +153,12 @@ def configuration_named(name: str) -> Configuration:
     and lists the names there are. `baseline` is such a name, as is any other word for the
     reading-only baseline: it is not among the configurations.
     """
-    raise NotImplementedError
+    if name not in CONFIGURATIONS:
+        raise InvalidConfiguration(
+            f"there is no configuration named {name!r}: the configurations are "
+            + ", ".join(CONFIGURATIONS)
+        )
+    return CONFIGURATIONS[name]
 
 
 def configuration_from_environment(environment: Mapping[str, str]) -> Configuration | None:
@@ -167,7 +177,19 @@ def configuration_from_environment(environment: Mapping[str, str]) -> Configurat
     The command line reads it. The GitHub Action does not: it configures its one model as
     before, whatever the variable says.
     """
-    raise NotImplementedError
+    name = environment.get(CONFIGURATION_VARIABLE, "")
+    if not name:
+        return None
+    try:
+        configuration = configuration_named(name)
+    except InvalidConfiguration as invalid:
+        raise InvalidConfiguration(f"{CONFIGURATION_VARIABLE} cannot be used: {invalid}") from None
+    if configuration.evaluation_only:
+        raise InvalidConfiguration(
+            f"{CONFIGURATION_VARIABLE} is set to {name!r}, a configuration that only the "
+            "evaluation may run"
+        )
+    return configuration
 
 
 def configured_models(
@@ -197,4 +219,37 @@ def configured_models(
     as the empty string. Raises `ModelFailed` as the clients and `model_from_environment` do,
     for a key that cannot be sent and for a price that is not a number of 0 or more.
     """
-    raise NotImplementedError
+    clients: dict[ModelChoice, Model] = {}
+    for choice in (configuration.default, *configuration.roles.values()):
+        if choice not in clients:
+            clients[choice] = _client(choice, environment, transport)
+    return RoleModels(
+        clients[configuration.default],
+        {role: clients[choice] for role, choice in configuration.roles.items()},
+    )
+
+
+def _client(
+    choice: ModelChoice, environment: Mapping[str, str], transport: httpx.BaseTransport | None
+) -> Model:
+    """The client that reaches the model `choice` names, as `configured_models` says."""
+    key = ""
+    if choice.key_variable is not None:
+        key = environment.get(choice.key_variable, "")
+        if not key:
+            raise InvalidConfiguration(
+                f"{choice.key_variable} is not set, and {choice.model} at {choice.endpoint} "
+                "needs it for its key"
+            )
+    price = choice.price if choice.price is not None else _price_from(environment)
+    made: type[OpenAICompatibleModel] | type[AnthropicModel] = OpenAICompatibleModel
+    if choice.protocol is ModelProtocol.ANTHROPIC:
+        made = AnthropicModel
+    return made(
+        choice.endpoint,
+        choice.model,
+        key,
+        transport,
+        price,
+        parallel_tool_calls=choice.parallel_tool_calls,
+    )

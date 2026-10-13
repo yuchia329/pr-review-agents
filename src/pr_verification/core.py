@@ -12,7 +12,7 @@ from pr_verification.agent import Loop
 from pr_verification.budget import Budget, Clock, Ledger
 from pr_verification.claims import classify_claim, extract_claims
 from pr_verification.decision import Decider, Decision, Question
-from pr_verification.model import Model
+from pr_verification.model import Model, RoleName, model_for
 from pr_verification.orchestration import (
     BudgetedOrchestration,
     Gathered,
@@ -316,7 +316,7 @@ def _run(
     before = _resolve_commit(pull_request.repository, "before", pull_request.before)
     after = _resolve_commit(pull_request.repository, "after", pull_request.after)
     claims = extract_claims(
-        ledger.model(model),
+        ledger.model(model_for(model, RoleName.CLAIM_EXTRACTOR)),
         pull_request.title,
         pull_request.description,
         pull_request.linked_issue,
@@ -342,7 +342,7 @@ def _run(
             repository=pull_request.repository,
             before=before,
             after=after,
-            model=model,
+            model=model_for(model, RoleName.REVIEWER),
             decider=decider,
         ).findings
     return ReportWithLoops(

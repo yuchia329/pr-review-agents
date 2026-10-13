@@ -45,16 +45,12 @@ class OpenAICompatibleModel:
         `ModelRequest.cache_instructions` is, so on a provider that offers neither
         capability every request, and all that comes of it, is as it was before either
         existed."""
-        if parallel_tool_calls:
-            raise NotImplementedError
+        self.parallel_tool_calls = parallel_tool_calls
         self._price = price
         self._url = endpoint.rstrip("/") + "/chat/completions"
         self._model = model
         self._name = f"{model} at {endpoint}"
-        self._key = key.strip()
-        if not (self._key.isascii() and self._key.isprintable()):
-            # Sent as it is, the HTTP layer would refuse it with an error that quotes it.
-            raise ModelFailed(f"the key for {self._name} holds characters that cannot be sent")
+        self._key = _sendable(key, self._name)
         headers = {"Authorization": f"Bearer {self._key}"} if self._key else {}
         self._client = httpx.Client(headers=headers, timeout=_TIMEOUT, transport=transport)
 
@@ -114,9 +110,13 @@ class OpenAICompatibleModel:
             response = self._client.post(self._url, json=body)
         except (httpx.HTTPError, httpx.InvalidURL) as error:
             # Not chained: the cause would be printed with any traceback, unredacted.
-            raise self._failed(f"could not be reached: {error}") from None
+            raise _failed(self._name, self._key, f"could not be reached: {error}") from None
         if not response.is_success:
-            raise self._failed(f"answered with HTTP {response.status_code}: {response.text}")
+            raise _failed(
+                self._name,
+                self._key,
+                f"answered with HTTP {response.status_code}: {response.text}",
+            )
         try:
             answered = response.json()
             text = answered["choices"][0]["message"]["content"]
@@ -124,17 +124,10 @@ class OpenAICompatibleModel:
             text = None
         answer = _THINKING.sub("", text).strip() if isinstance(text, str) else ""
         if not answer:
-            raise self._failed(f"gave a response that holds no text: {response.text}")
+            raise _failed(
+                self._name, self._key, f"gave a response that holds no text: {response.text}"
+            )
         return answer, answered.get("usage")
-
-    def _failed(self, what: str) -> ModelFailed:
-        """One line, without the key: a provider may repeat the key back in its error."""
-        message = " ".join(f"{self._name} {what}".split())
-        if self._key:
-            message = message.replace(self._key, "[key removed]")
-        if len(message) > _LONGEST_FAILURE:
-            message = message[:_LONGEST_FAILURE] + " [cut short]"
-        return ModelFailed(message)
 
 
 def model_from_environment(
@@ -156,18 +149,43 @@ def model_from_environment(
     key = environment.get("PR_VERIFICATION_API_KEY", "")
     if not endpoint and not key:
         return None
-    sent = _price(environment, "PR_VERIFICATION_INPUT_PRICE")
-    returned = _price(environment, "PR_VERIFICATION_OUTPUT_PRICE")
-    price = None
-    if sent is not None or returned is not None:
-        price = TokenPrice(input=sent or 0.0, output=returned or 0.0)
     return OpenAICompatibleModel(
         endpoint=endpoint or DEFAULT_ENDPOINT,
         model=environment.get("PR_VERIFICATION_MODEL") or DEFAULT_MODEL,
         key=key,
         transport=transport,
-        price=price,
+        price=_price_from(environment),
     )
+
+
+def _price_from(environment: Mapping[str, str]) -> TokenPrice | None:
+    """The price the environment sets, as `model_from_environment` says, or None when it sets
+    none."""
+    sent = _price(environment, "PR_VERIFICATION_INPUT_PRICE")
+    returned = _price(environment, "PR_VERIFICATION_OUTPUT_PRICE")
+    if sent is None and returned is None:
+        return None
+    return TokenPrice(input=sent or 0.0, output=returned or 0.0)
+
+
+def _sendable(key: str, name: str) -> str:
+    """The key of the model called `name` as it is sent: without the whitespace around it."""
+    key = key.strip()
+    if not (key.isascii() and key.isprintable()):
+        # Sent as it is, the HTTP layer would refuse it with an error that quotes it.
+        raise ModelFailed(f"the key for {name} holds characters that cannot be sent")
+    return key
+
+
+def _failed(name: str, key: str, what: str) -> ModelFailed:
+    """What went wrong with a request to the model called `name`, in one line and without
+    the key: a provider may repeat the key back in its error."""
+    message = " ".join(f"{name} {what}".split())
+    if key:
+        message = message.replace(key, "[key removed]")
+    if len(message) > _LONGEST_FAILURE:
+        message = message[:_LONGEST_FAILURE] + " [cut short]"
+    return ModelFailed(message)
 
 
 def _price(environment: Mapping[str, str], variable: str) -> float | None:
