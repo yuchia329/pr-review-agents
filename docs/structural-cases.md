@@ -112,9 +112,8 @@ With these the keys bear out all 32 cases as before: 21 true cases Confirmed, 10
 Refuted, and the one false case the rule cannot Refute Inconclusive.
 
 What the rule does not reach: a verifier that names only the text a rename adds, with a path,
-is still Confirmed by a search of one file. The Structural cases have not been run again with
-a model since the rule, so its effect on the three False Assurances and on the Decided Rate is
-not yet measured.
+is still Confirmed by a search of one file. So is one that names a text narrower than the name,
+which is what the results of 2026-10-13 below found.
 
 ## Running the cases
 
@@ -182,10 +181,66 @@ could do the work. With `llava:7b`, 22 of the 32 runs ended in the Claim extract
 answer was not a list of Claims, and the 13 Claims of the other runs were all Inconclusive.
 `qwen3-vl:8b` was stopped by hand after 25 minutes on one case with no report.
 
-What is still to do:
+## Results with the rule, 2026-10-13
+
+The harness ran all 32 cases once, and the three renames that skip a file twice more, with
+`qwen3.8:27b-mlx` through Ollama 0.40.3 at a context of 32,768 tokens, and
+`PR_VERIFICATION_DECISION=small_llm`. It is not the model of the first results, so the two
+tables are not to be compared. Before and after are instead taken from the same runs: the rule
+changes only what `compute_verdict` reads, so the Verdict of each Claim was computed a second
+time from the Evidence in its report with `after_lines_elsewhere` left out, which is the rule
+as it was. The same texts, chosen once, are judged both ways.
+
+One run of 32 gave no report: for `documentation/httpx-readme-prompt@left-out` the Claim
+extractor's answer could not be read. The other 31 gave 50 Claims, 31 true and 19 false.
+
+| | Rule before | Rule now |
+| --- | --- | --- |
+| Decided | 36 | 34 |
+| Inconclusive | 12 | 14 |
+| False Blocks | 0 | 0 |
+| False Assurances | 2 | 2 |
+| Decided Rate | 0.72 | 0.68 |
+| False Assurance rate | 2 of 19, 0.11 | 2 of 19, 0.11 |
+
+The run took 1 hour 50 minutes, about 180 seconds for a pull request. Five loops were detected
+and every one ended after the role was told.
+
+The three renames that skip a file, in the six runs made of them alone:
+
+| Case | Confirmed, rule before | Confirmed, rule now |
+| --- | --- | --- |
+| `rename/attrs-post-init-hook@left-out` | 1 of 2 | 1 of 2 |
+| `rename/packaging-gil-disabled@left-out` | 1 of 2 | 1 of 2 |
+| `rename/httpx-url-pattern@left-out` | 1 of 2 | 1 of 2 |
+
+- **The rule took away no False Assurance.** Of the five Claims Confirmed falsely in these
+  runs, two in the run of 32 and three in the six, not one had a line in another file. The
+  verifier did not name the old name. It named whole lines that the pull request changed:
+  `"Py_NOGIL": 1,` in `tests/test_tags.py`, `class URLMatcher:` in `httpx/_utils.py`,
+  `def __post_init__(self):` in `docs/examples.rst`. No other file holds those lines, so the
+  search of the other files finds nothing, while `src/packaging/tags.py` still reads
+  `Py_NOGIL`. In the first results the verifier named the bare name with a path, which the rule
+  does catch. So the cause is wider than the path: a text narrower than what the Claim is about
+  is borne out by the lines the pull request did change.
+- **It cost two true Claims**, Confirmed before and Inconclusive now. One is
+  `configuration/flask-flit-core`, as expected: the old requirement is on five lines of the
+  examples and the documentation. The other is `removal/httpx-chinese-readme`: the verifier
+  named a line of the deleted file, `$ pip install httpx[http2]`, which `README.md` and
+  `docs/http2.md` hold too. A file that is deleted shares lines with the files that stay.
+- **No False Block**, before or now.
+- **The Verdict of each of the three renames still varies** from run to run: Confirmed in one
+  run and Inconclusive in the other, for all three.
+
+So with this model the rule gave up 0.04 of Decided Rate and bought nothing. What it guards
+against, a bare name searched for in one file, did not happen in these runs.
+
+## What is still to do
 
 - Repeat the run, to see how much the Verdicts vary, and set the model's prices so that the
   cost of a pull request is recorded.
-- Run the cases again now that a text removed from one file is searched for in the others,
-  and record the three renames that skip a file and the Decided Rate before and after.
+- Decide what a rename is searched for when the verifier names a line and not the name. The
+  search of the other files does not reach it, and it is where every False Assurance of
+  2026-10-13 came from.
+- Run the cases with the rule and MiniMax M3, whose verifier named the bare name.
 - Run with the default decider, Laya, which needs `uv sync --extra laya`.
