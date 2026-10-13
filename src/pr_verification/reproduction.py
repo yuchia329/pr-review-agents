@@ -18,6 +18,7 @@ from pr_verification.ecosystem import (
     LONGEST_REPRODUCTION,
     ReproductionEcosystem,
     Results,
+    ResultsFileEcosystem,
     Unreadable,
 )
 from pr_verification.evidence import run_on_both_commits
@@ -319,16 +320,30 @@ def _write(
                 attempts.append(Attempt(run, None, None, None, AttemptResult.NO_REPRODUCTION))
                 continue
             placement = ecosystem.place(text)
+            take = placement.take_results
+            if take is not None and not isinstance(ecosystem, ResultsFileEcosystem):
+                raise TypeError(
+                    f"{type(ecosystem).__name__} gave a command that takes results "
+                    "and cannot read a results file"
+                )
             ran = on_both_commits(placement.write)
+            placed = ran.before.exit_status == 0 and ran.after.exit_status == 0
+            if placed:
+                ran = on_both_commits(placement.run)
+            # Whether or not it ran: this is also what removes the Reproduction.
+            taken = on_both_commits(take) if take is not None else None
             read_before: Results | Unreadable | None = None
             read_after: Results | Unreadable | None = None
-            if ran.before.exit_status == 0 and ran.after.exit_status == 0:
-                ran = on_both_commits(placement.run)
-                read_before = ecosystem.read_results(ran.before)
-                read_after = ecosystem.read_results(ran.after)
-                result = compare_runs(read_before, read_after)
-            else:
+            if not placed:
                 result = AttemptResult.COULD_NOT_RUN
+            else:
+                if taken is not None and isinstance(ecosystem, ResultsFileEcosystem):
+                    read_before = ecosystem.read_results_file(ran.before, taken.before)
+                    read_after = ecosystem.read_results_file(ran.after, taken.after)
+                else:
+                    read_before = ecosystem.read_results(ran.before)
+                    read_after = ecosystem.read_results(ran.after)
+                result = compare_runs(read_before, read_after)
             attempts.append(Attempt(run, text, ran.before, ran.after, result))
             if result is AttemptResult.SHOWS_A_DIFFERENCE:
                 evidence = ReproductionEvidence(

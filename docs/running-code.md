@@ -184,5 +184,9 @@ The image is `python:<version>-slim`, for the newest of Python 3.14 to 3.10 that
   what it likes there. Results are Untrusted Content like the rest of the output. The results of
   a Reproduction are not read from the summary but from its results file, and the repository's
   own tests still are.
+- A Reproduction is run with pytest's cache switched off, so that the run leaves nothing in the
+  working copy. A repository whose own settings pass pytest an option of the cache, such as
+  `--lf` in `addopts`, makes that run end in a usage error: every Reproduction there "could not
+  run", and its Behavioural Claims stay Inconclusive.
 - pytest imports the code under test into its own process, so that code can reach a
   Reproduction's results file and pytest itself. See "Known limits" under "The Sandbox".

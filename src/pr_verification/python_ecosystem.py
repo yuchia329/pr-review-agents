@@ -1,9 +1,11 @@
 """The Python Ecosystem: pip to install, pytest to test."""
 
 import base64
+import json
 import os
 import posixpath
 import re
+import secrets
 import tomllib
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -57,7 +59,46 @@ _INSTALL = ("python", "-m", "pip", "install", "--user")
 # `-rA` has pytest end with one line for each test, which is what `read_results` reads, and
 # `--verbosity=0` keeps those lines as they are read whatever the repository's own settings ask.
 # One file that cannot be collected would otherwise stop every other file's tests from running.
-_TEST = ("python", "-m", "pytest", "-rA", "--verbosity=0", "--continue-on-collection-errors")
+_PYTEST_OPTIONS = ("-rA", "--verbosity=0", "--continue-on-collection-errors")
+_TEST = ("python", "-m", "pytest", *_PYTEST_OPTIONS)
+
+_CATEGORIES = ("passed", "failed", "error")
+"""What pytest calls the tests that `Results` names as passed, failed, and could not run."""
+
+# Runs pytest as `python -m pytest` does, with one plugin more. The plugin lives in this process
+# alone, so the working copy holds no file of it. For each report it keeps the category pytest
+# itself gives, which is the one the `-rA` summary is written from, and at the end of the session
+# writes them to the file named first. A run stopped before then writes no file.
+_RUN_KEEPING_RESULTS = f"""\
+import json
+import sys
+
+import pytest
+
+
+class KeepsResults:
+    def __init__(self):
+        self.named = {{category: [] for category in {_CATEGORIES!r}}}
+
+    def pytest_configure(self, config):
+        self.config = config
+
+    def pytest_collectreport(self, report):
+        if report.failed:
+            self.named["error"].append(report.nodeid)
+
+    def pytest_runtest_logreport(self, report):
+        category = self.config.hook.pytest_report_teststatus(report=report, config=self.config)[0]
+        if category in self.named:
+            self.named[category].append(report.nodeid)
+
+    def pytest_sessionfinish(self):
+        with open(sys.argv[1], "w", encoding="utf-8") as file:
+            json.dump(self.named, file)
+
+
+sys.exit(pytest.main(sys.argv[2:], plugins=[KeepsResults()]))
+"""
 
 # Run in isolated mode, so that no file of the repository can pose as a module of the standard
 # library. The text arrives as base64 in an argument of its own: no shell reads it, and Python
@@ -67,6 +108,30 @@ _WRITE = (
     "import base64, pathlib, sys; "
     "pathlib.Path(sys.argv[1]).write_bytes(base64.b64decode(sys.argv[2]))",
 )  # fmt: skip
+
+# Isolated as `_WRITE` is. Prints the file as bytes, so nothing is added to what it holds.
+_TAKE_RESULTS = """\
+import os
+import sys
+
+reproduction, results = sys.argv[1:]
+try:
+    with open(results, "rb") as file:
+        held = file.read()
+except OSError:
+    held = None
+left = False
+for path in (results, reproduction):
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        left = True
+if held is not None:
+    sys.stdout.buffer.write(held)
+sys.exit(held is None or left)
+"""
 
 _REPRODUCTION_FORM = """\
 A Reproduction here is one pytest test file: Python source that holds at least one test function
@@ -196,15 +261,7 @@ class PythonEcosystem:
             elif word in named:
                 # After a test that did not pass come ` - ` and the start of the error's message.
                 named[word].add(rest.split(" - ")[0])
-        # pytest can report one test twice, as when it passes and its tear-down then fails.
-        could_not_run = named["ERROR"]
-        failed = named["FAILED"] - could_not_run
-        passed = named["PASSED"] - failed - could_not_run
-        return Results(
-            passed=tuple(sorted(passed)),
-            failed=tuple(sorted(failed)),
-            could_not_run=tuple(sorted(could_not_run)),
-        )
+        return _results(named["PASSED"], named["FAILED"], named["ERROR"])
 
     def reproduction_form(self) -> str:
         """See `ReproductionEcosystem.reproduction_form`.
@@ -243,10 +300,26 @@ class PythonEcosystem:
         # Half of a character that takes two code units in UTF-16 has no UTF-8 of its own, and a
         # model can write one. It is written as it stands, and Python then refuses the file.
         content = base64.b64encode(reproduction.encode(errors="surrogatepass")).decode("ascii")
+        results = f".pr_verification_results_{secrets.token_hex(16)}.json"
         return Placement(
             path=REPRODUCTION_PATH,
             write=(*_WRITE, REPRODUCTION_PATH, content),
-            run=(*_TEST, REPRODUCTION_PATH),
+            # `-B` and no cache, so that the run leaves nothing but the results file. The options
+            # come after the repository's own `addopts`, so the root stays the working copy and
+            # a node ID that starts with the Reproduction's path is a test of that file.
+            run=(
+                "python",
+                "-B",
+                "-c",
+                _RUN_KEEPING_RESULTS,
+                results,
+                *_PYTEST_OPTIONS,
+                "-p",
+                "no:cacheprovider",
+                "--rootdir=.",
+                REPRODUCTION_PATH,
+            ),
+            take_results=("python", "-I", "-c", _TAKE_RESULTS, REPRODUCTION_PATH, results),
         )
 
     def read_results_file(self, ran: RunResult, taken: RunResult) -> Results | Unreadable:
@@ -265,7 +338,48 @@ class PythonEcosystem:
         test into its own process, so that code can reach the results file and pytest
         itself.
         """
-        raise NotImplementedError
+        if ran.limit_hit is not None:
+            return Unreadable(f"The run was stopped at the {ran.limit_hit} limit.")
+        if taken.limit_hit is not None:
+            return Unreadable(f"Taking the results was stopped at the {taken.limit_hit} limit.")
+        if taken.exit_status != 0:
+            return Unreadable("The run left no results file that could be taken.")
+        try:
+            held = json.loads(taken.output)
+            # A name that cannot be encoded, as half of a character can be written in JSON, is
+            # refused here and not where the report is written.
+            json.dumps(held, ensure_ascii=False).encode()
+        except (ValueError, RecursionError):
+            held = None
+        if not (
+            isinstance(held, dict)
+            and held.keys() == set(_CATEGORIES)
+            and all(isinstance(names, list) for names in held.values())
+            and all(isinstance(name, str) for names in held.values() for name in names)
+        ):
+            return Unreadable("What was taken is not a results file that pytest wrote whole.")
+        passed, failed, error = (
+            {name for name in held[category] if _of_the_reproduction(name)}
+            for category in _CATEGORIES
+        )
+        return _results(passed, failed, error)
+
+
+def _of_the_reproduction(node_id: str) -> bool:
+    """Whether a node ID names the Reproduction's file or a test in it."""
+    return node_id == REPRODUCTION_PATH or node_id.startswith(f"{REPRODUCTION_PATH}::")
+
+
+def _results(passed: set[str], failed: set[str], error: set[str]) -> Results:
+    """The tests pytest reported under each category, each named once."""
+    # pytest can report one test twice, as when it passes and its tear-down then fails.
+    failed = failed - error
+    passed = passed - failed - error
+    return Results(
+        passed=tuple(sorted(passed)),
+        failed=tuple(sorted(failed)),
+        could_not_run=tuple(sorted(error)),
+    )
 
 
 def _pyproject(repository: Path, commit: str) -> dict[str, Any]:
