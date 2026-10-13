@@ -276,7 +276,7 @@ def test_whatever_the_model_answers_a_role_never_takes_more_steps_than_its_cap(
 def asks_for_the_given_tool(response: str) -> bool:
     """Whether a response is a request the contract says can be read, for the tool `given`."""
     try:
-        asked = json.loads(response)
+        asked, _ = json.JSONDecoder().raw_decode(response.lstrip(" \t\n\r"))
     except ValueError:
         return False
     return (
