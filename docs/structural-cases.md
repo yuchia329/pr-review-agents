@@ -96,44 +96,61 @@ decider, so its Claims are classified and a Structural Claim is verified by read
 command prints what the harness scored for each part and the Verdicts of every run.
 `--part development` runs one part, and `--repetitions` runs each case more than once.
 
-## First results, 2026-10-12: nothing decided
+## First results, 2026-10-12
 
-The harness ran all 32 cases once. **No Claim was decided**, because neither model on the
-machine could do the work. Both were run through Ollama 0.40.3, each with its context size
-fixed at 32768, with `PR_VERIFICATION_DECISION=small_llm`, so the same model classified the
-Claims.
-
-`llava:7b`:
+The harness ran all 32 cases once with MiniMax M3 on its hosted endpoint, with
+`PR_VERIFICATION_DECISION=small_llm`, so the same model classified the Claims. Every run gave a
+report. The system splits a pull request's text into Claims in its own words, so there are more
+Claims than cases.
 
 | | Development | Held-out |
 | --- | --- | --- |
 | Runs | 18 | 14 |
-| Runs with no Verdict | 13 | 9 |
-| Claims given a Verdict | 8 (7 true, 1 false) | 5 (4 true, 1 false) |
-| Decided | 0 | 0 |
+| Runs with no Verdict | 0 | 0 |
+| Claims | 30 (18 true, 12 false) | 24 (16 true, 8 false) |
+| Decided | 21 | 17 |
 | False Blocks | 0 | 0 |
-| False Assurances | 0 | 0 |
-| Inconclusive | 8 | 5 |
-| Decided Rate | 0 | 0 |
-| Seconds for a pull request | 82 | 105 |
+| False Assurances | 2 | 1 |
+| Inconclusive | 7 | 6 |
+| Decided Rate | 0.70 | 0.71 |
+| False Block rate | 0 of 18 | 0 of 16 |
+| False Assurance rate | 2 of 12, 0.17 | 1 of 8, 0.13 |
+| Seconds for a pull request | 101 | 48 |
 
-- **22 of the 32 runs gave no report.** Each ended in the Claim extractor, whose answer was not
-  a list of Claims: the model wrapped its JSON in a code fence, wrote `\_` for an underscore,
-  which JSON does not allow, or gave one string where a list belongs.
-- **The other 10 runs gave 13 Claims, all Inconclusive.** No Claim was Confirmed or Refuted,
-  rightly or wrongly, so nothing is known yet of False Blocks or False Assurance on these
-  cases.
+No price was set for the model, so the cost of a pull request is not known. The whole run took
+45 minutes. One repetition says nothing of the variation between runs.
 
-The text of four entries was narrowed after this run, when a review found sentences in them
-that stayed true in their false cases. The run was not repeated, since it decided nothing.
+- **No False Block.** None of the 34 true Claims was Refuted, the three cases above where a
+  careless search would do so among them: the verifier named a text narrow enough each time.
+- **All three False Assurances are renames that skip a file**: `rename/attrs-post-init-hook`,
+  `rename/packaging-gil-disabled`, and `rename/httpx-url-pattern`, each `@left-out`. The three
+  were run once more to read their Evidence. In two the Claim was Confirmed again, and the
+  reason was the same: the verifier gave each text the path of a file where the rename was
+  made, so the code was never searched in the file that still holds the old name. For
+  `Py_NOGIL` it searched `tests/test_tags.py` alone, while `src/packaging/tags.py` kept the old
+  name. A rename is a Claim about every file, and a search of one file cannot bear it out. In
+  the third, the same Claim was searched for in every file and Refuted, so the Verdict of
+  these cases varies from run to run.
+- **7 of the 20 false Claims were Refuted**, and 10 were Inconclusive. Among the Inconclusive
+  are the false case the rule cannot Refute, and Claims that a value was set or a text added
+  that was not, where again there is no line to show.
+- **A Claim can be classified as Behavioural** and go to a Reproduction in the Sandbox. In a
+  trial of `rename/packaging-gil-disabled` before the run, the Claim that `tags.py` now reads
+  the variable under its new name did. So these cases measure the classifier as well as the
+  Structural verifier. The harness does not record the kind of each Claim, so how often is
+  not known.
+- **A removed file was Inconclusive.** `removal/httpx-chinese-readme` names a file and no text
+  of it, and the verifier found nothing to search for.
 
-`qwen3-vl:8b` was tried on one case, `rename/packaging-gil-disabled`, and stopped by hand after
-25 minutes with no report. It is the model that timed out in the Claim extractor in
-`docs/agent-loops.md`.
+Before this run the two models on the machine were tried through Ollama 0.40.3, and neither
+could do the work. With `llava:7b`, 22 of the 32 runs ended in the Claim extractor, whose
+answer was not a list of Claims, and the 13 Claims of the other runs were all Inconclusive.
+`qwen3-vl:8b` was stopped by hand after 25 minutes on one case with no report.
 
 What is still to do:
 
-- The measurement itself, with a model that can do the work: a hosted one, or a stronger local
-  one. Nothing but the environment needs to change to run it, and the numbers to compare it
-  with are those of the answer keys above.
-- The default decider, Laya, was not used. It needs `uv sync --extra laya`.
+- Repeat the run, to see how much the Verdicts vary, and set the model's prices so that the
+  cost of a pull request is recorded.
+- Decide what a rename is searched for. Confirmed on a search of one file is where every
+  False Assurance came from.
+- Run with the default decider, Laya, which needs `uv sync --extra laya`.
