@@ -9,3 +9,7 @@ Detection still runs, but only as an extra signal: suspected injection is report
 - The worst outcome of a successful injection is a false Confirmed Verdict, which is no worse than not running the system. It cannot leak the API key, write to the repository, or exceed the budget.
 - An LLM may never be given the final say on a Verdict or the Gate, and may never post output directly. Shortcuts that hand it either of these break the containment.
 - The separate judgement of each Reproduction costs one extra step per Behavioural Claim.
+
+## The reading-only baseline
+
+Recorded on 2026-10-12, with the contract for model comparisons (#45). The evaluation includes a reading-only baseline in which a role reads the code and states each Verdict itself, with no Reproduction and no Sandbox. It gives an LLM the final say on a Verdict on purpose, so that the difference running code makes is a measured number. This is the one exception to the consequence above, and it holds only inside the evaluation: the baseline is not an orchestration or a configuration, neither the command-line tool nor the GitHub Action can select it, its reasons and its numbers are named as the baseline's wherever they are shown, and its Gate is never reported to a pipeline.

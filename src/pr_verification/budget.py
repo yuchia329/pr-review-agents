@@ -374,6 +374,11 @@ class Ledger:
         price of the model that was asked, so the dollars recorded are summed across models at
         each model's price.
 
+        The model returned offers parallel tool calls when, and only when, `model` does, as
+        `offers_parallel_tool_calls` (`pr_verification.model`) reads it. Prompt caching needs
+        nothing here: the request reaches `model` exactly as given, with its
+        `cache_instructions`.
+
         Raises `ValueError`, from this call and not from a later request, when `claim` names
         no Claim a share was set aside for.
         """

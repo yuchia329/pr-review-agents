@@ -201,16 +201,25 @@ def _verified_as(kind: ClaimKind | None) -> ClaimKind:
 class Supervisor:
     """The `BudgetedOrchestration` in which a model decides how effort is spent on the Claims.
 
-    It does for a Claim the work the fixed pipeline does for it, with the same roles. What
-    the model decides is when that work is done, alongside what, and with how much of the
-    Budget.
+    It does for a Claim the work the fixed pipeline does for it, with the same roles, each
+    run on the model of that role as `FixedPipeline` says. What the model decides is when
+    that work is done, alongside what, and with how much of the Budget.
+
+    Prompt caching is used for what the supervisor sends again and again. Its instructions
+    are the same in every request of a run, and from one pull request to the next, so every
+    request to the supervising model has `cache_instructions` true (`ModelRequest`, in
+    `pr_verification.model`). A supervising model that offers prompt caching then pays less
+    for them from the second step on. One that does not ignores it, and every request, and
+    all that comes of it, is as it was before the capability existed.
     """
 
     pipeline: FixedPipeline
     """Prepares the two commits, and holds what every role is run with."""
 
     model: Model | None = None
-    """The supervising model. With None, the model `gather_within` is given supervises as well
+    """The supervising model. With None, it is the model of the supervisor among those
+    `gather_within` is given: `model_for(model, RoleName.SUPERVISOR)`
+    (`pr_verification.model`). So one model that is given for every role supervises as well
     as doing the roles' work."""
 
     step_cap: int = SUPERVISOR_STEP_CAP

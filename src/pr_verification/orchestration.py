@@ -174,7 +174,14 @@ class _Ready:
 
 @dataclass(frozen=True)
 class FixedPipeline:
-    """The `Orchestration` that does the same work for every Claim, in the order given."""
+    """The `Orchestration` that does the same work for every Claim, in the order given.
+
+    Each role it runs is run on the model of that role: `model_for(model, role)`
+    (`pr_verification.model`) of the `model` that `gather` or `gather_within` is given, with
+    `RoleName.REPRODUCTION_WRITER` for the Reproduction writer, `RoleName.REPRODUCTION_JUDGE`
+    for the Reproduction judge, and `RoleName.STRUCTURAL_VERIFIER` for the Structural
+    verifier. Wherever a method here says a role is given the model, that is the one meant.
+    """
 
     store: ProfileStore
     """Where the Repo Profile is kept between runs."""
@@ -625,7 +632,9 @@ def orchestration_choice(environment: Mapping[str, str]) -> OrchestrationChoice:
     it.
 
     Raises `InvalidOrchestration`, with a message that names the variable, when it is set to
-    anything else. The two values are matched exactly as written.
+    anything else. The two values are matched exactly as written. `baseline` is such a
+    value, as is any other word for the reading-only baseline (`pr_verification.baseline`):
+    it is not an orchestration, and cannot be chosen here.
 
     The command line reads it. The GitHub Action does not yet: it uses the fixed pipeline
     whatever the variable says.

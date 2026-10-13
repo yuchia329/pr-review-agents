@@ -38,6 +38,9 @@ ALTERNATION_LENGTH = 4
 """How many steps in a row must go back and forth between two steps to be an alternation:
 two rounds."""
 
+PARALLEL_CALL_CAP = 4
+"""The most tools one step may ask for, of a model that offers parallel tool calls."""
+
 PROGRESS_INTERVAL = 4
 """How many steps a run takes between one asking of the progress guard and the next. A
 starting value: it is to be chosen again from measurement, so nothing may rely on the number
@@ -110,6 +113,10 @@ class StepOutcome(StrEnum):
     RAN_TOOL = "ran_tool"
     """The response asked for one of the role's tools, and it was run."""
 
+    RAN_TOOLS = "ran_tools"
+    """The response asked for tools through the form that can ask for several at once, as
+    only a model that offers parallel tool calls may, and each was run: one tool or more."""
+
     REFUSED = "refused"
     """The response asked for a tool the role was not given. Nothing was run."""
 
@@ -136,8 +143,14 @@ class Step:
     result: str
     """What came of this step, whole: what the tool returned for `RAN_TOOL`, however long,
     the text `NO_SUCH_TOOL` for `REFUSED`, the text `UNREADABLE_RESPONSE` for `UNREADABLE`,
-    and the empty string for `FINISHED`. What the role is shown of it is bounded, as
-    `run_role` says, and may be less."""
+    and the empty string for `FINISHED`. For `RAN_TOOLS` it is a JSON list of strings: what
+    each tool returned, whole, in the order the tools were asked for. What the role is shown
+    of it is bounded, as `run_role` says, and may be less."""
+
+    tools: tuple[str, ...] = ()
+    """The names of the tools that were run, in the order asked for, when the outcome is
+    `RAN_TOOLS`: a name is there once for each time its tool was asked for. Empty for every
+    other outcome."""
 
 
 class LoopKind(StrEnum):
@@ -227,7 +240,9 @@ class RoleRun:
 
     answer: Mapping[str, object] | None
     """The JSON object the model finished with, or None when the run stopped any other way.
-    It is the model's word, shaped by whatever the role read: data to check, never a Verdict."""
+    It is the model's word, shaped by whatever the role read: data to check, never a Verdict.
+    The one exception is the reading-only baseline of the evaluation
+    (`pr_verification.baseline`), which exists to measure what taking that word costs."""
 
     triggers: tuple[Trigger, ...] = ()
     """Every time loop detection found something, in the order found. Empty when it never
@@ -351,6 +366,40 @@ def run_role(
     both `tool` and `finish`, a `tool` that is not a string, or `arguments` or `finish` that
     is not an object.
 
+    Several tools in one step
+        Parallel tool calls are an optional capability of the model interface, read once
+        before the first request with `offers_parallel_tool_calls(model)`
+        (`pr_verification.model`).
+
+        Without it, everything is as said above and nothing here applies. The role is asked
+        for one tool at a time, `instructions` are what they are for any such model, and a
+        response with a member `tools` is `UNREADABLE` like any other that has a member not
+        named above. That is the fallback, and it is how every run went before the
+        capability existed.
+
+        With it, the loop's fixed wording in `instructions` also names a third form, and a
+        response can be read when it is that form and has no other member:
+
+        - `{"tools": [{"tool": "<name>", "arguments": {...}}, ...]}` asks for several tools
+          at once. The list holds between 1 and `PARALLEL_CALL_CAP` entries, and each entry
+          is an object as the form that asks for one tool is: a `tool` that is a string,
+          `arguments` that are an object or are left out, and no other member. Anything
+          else under `tools` is `UNREADABLE`, as is a response with `tools` beside `tool`
+          or `finish`, and that is settled before any tool is looked up.
+        - When every name is that of one of `role.tools`, each tool asked for is run once
+          with its arguments, one after another in the order of the list, and the outcome
+          is `RAN_TOOLS`. The same tool may be asked for more than once, and is run each
+          time. No tool is run alongside another: what is saved is the requests to the
+          model, not the time the tools take.
+        - When any name is not, nothing is run, for any entry, and the outcome is `REFUSED`.
+
+        It is one step, whatever it holds: one request to the model, one `Step`, and one
+        towards `role.step_cap`. Its `result` in `data` is a string, as every step's is:
+        the text of a JSON list of strings, one for each tool in the order asked for, each
+        `bounded(returned, limit, tool.keeps)` with what that tool returned and that tool.
+        So each result is bounded on its own, as "What a role is shown of a result" below
+        says of one. The forms that ask for one tool and that finish are read as before.
+
     Every outcome counts as a step, and `Step` says what each records. After a step that
     does not finish, the role is asked again, unless the run has taken `role.step_cap`
     steps: then it stops with `Stopped.STEP_CAP` and makes no further request. The cap is
@@ -359,8 +408,11 @@ def run_role(
     triggers in it a second time, as said below.
 
     What a role is shown of a result
-        The `result` of a step in `data` is never longer than a fixed limit, enforced here,
-        by code, whatever a tool returns. The limit is the `tool_result` of
+        What a role is shown of what any one tool returned is never longer than a fixed
+        limit, enforced here, by code, whatever a tool returns. So the `result` of a step
+        in `data` is never longer than that limit, except for a `RAN_TOOLS` step, which
+        holds up to `PARALLEL_CALL_CAP` results, each within the limit, as "Several tools
+        in one step" above says. The limit is the `tool_result` of
         `limits_in_use()` (`pr_verification.context_bound`), read once before the first
         request, so it is the same on every step of a run.
 
@@ -368,8 +420,8 @@ def run_role(
         `bounded(step.result, limit, tool.keeps)`, with the tool that was run. So a result
         within the limit is shown whole, and a longer one is cut, keeps the part its tool
         says matters, and says that it was cut and how much was left out. For any other
-        step it is the step's `result`, which is a fixed text shorter than `SMALLEST_LIMIT`
-        and so always whole.
+        step but a `RAN_TOOLS` one it is the step's `result`, which is a fixed text shorter
+        than `SMALLEST_LIMIT` and so always whole.
 
         A step is shown the same way in every request after it. Only what the model is
         shown is cut: `Step.result` keeps what the tool returned whole, and `detect_repeat`

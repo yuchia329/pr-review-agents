@@ -160,7 +160,9 @@ def run(
         1. What the call spends is recorded in it as said here, and `clock` is read for
         nothing else:
 
-        - The Claim extractor's one request is made through `ledger.model(model)`, for no
+        - The Claim extractor's one request is made through `ledger.model` of the Claim
+          extractor's model, which Models below says is `model` unless that holds a model
+          for each role, for no
           Claim, so listing the Claims is one step.
         - Each decision that classifies a Claim is recorded for no Claim: the seconds
           `classify_claim` took, between a reading of `clock` just before it and one just
@@ -242,6 +244,31 @@ def run(
         Only the work the orchestration did for the Claims is counted. A loop found in the
         Reviewer's run in step 6 is in no Claim's `loops`, and is not counted. Nothing of
         the counts is read to compute a Verdict or the Gate.
+
+    Models
+        `model` does the work of every role, unless it is a `RoleModels`
+        (`pr_verification.model`), which holds a model for each role. Each role's requests
+        are made to `model_for(model, role)`, and to no other model:
+
+        - the Claim extractor's one request, in step 2, to that of
+          `RoleName.CLAIM_EXTRACTOR`;
+        - in step 4, by the fixed pipeline and by the supervisor alike, the Reproduction
+          writer's to that of `RoleName.REPRODUCTION_WRITER`, the Reproduction judge's to
+          that of `RoleName.REPRODUCTION_JUDGE`, and the Structural verifier's to that of
+          `RoleName.STRUCTURAL_VERIFIER`;
+        - the supervisor's own, to that of `RoleName.SUPERVISOR`, unless the `Supervisor`
+          was made with a supervising model, which is then the one asked;
+        - the Reviewer's, in step 6, to that of `RoleName.REVIEWER`.
+
+        The orchestration is given `model` as it was given here, and an orchestration that
+        is neither of the two reads it as it will. With a model that is no `RoleModels`,
+        every role is asked of that one model, as before there were models for each role.
+
+        Which model a role is asked of changes nothing of what is recorded. A request that
+        The Budget above says is made through the ledger is made through `ledger.model` of
+        that role's model, so it is charged at the price of the model asked. A Review's
+        requests are still recorded nowhere, as Reviewing says. `decider` is given already
+        made and asks whatever it asks: no role's model is chosen for it here.
 
     With `orchestration` None, the fixed pipeline is used and nothing is kept between runs: it
     is `fixed_pipeline` on a temporary directory, which is removed before the report is

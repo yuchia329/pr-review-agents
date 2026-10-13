@@ -30,9 +30,23 @@ class OpenAICompatibleModel:
         key: str,
         transport: httpx.BaseTransport | None = None,
         price: TokenPrice | None = None,
+        *,
+        parallel_tool_calls: bool = False,
     ) -> None:
         """`price` is what the provider charges for this model, or None for a model that has no
-        price, as a local one has none. It changes nothing about `complete`."""
+        price, as a local one has none. It changes nothing about `complete`.
+
+        `parallel_tool_calls` is the model's attribute of that name: whether it offers
+        parallel tool calls, as `offers_parallel_tool_calls` (`pr_verification.model`) reads
+        it. It is false unless given, since not every model behind this protocol can be
+        relied on to ask for several tools at once, and it changes nothing about a request.
+
+        This client does not offer prompt caching. It sends the same request whatever
+        `ModelRequest.cache_instructions` is, so on a provider that offers neither
+        capability every request, and all that comes of it, is as it was before either
+        existed."""
+        if parallel_tool_calls:
+            raise NotImplementedError
         self._price = price
         self._url = endpoint.rstrip("/") + "/chat/completions"
         self._model = model
