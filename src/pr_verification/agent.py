@@ -278,7 +278,16 @@ def loop_of(run: RoleRun) -> Loop | None:
     kind of the first trigger, and its `second` is the kind of the second trigger, or None
     when there is only one. Nothing else of the run is read.
     """
-    raise NotImplementedError
+    if not run.triggers:
+        return None
+    first, *again = run.triggers
+    return Loop(run.role, first.kind, again[0].kind if again else None)
+
+
+def _stopped_looping(run: RoleRun) -> str:
+    """`STOPPED_LOOPING` filled in for `run`, which stopped with `Stopped.LOOP`."""
+    first, second = run.triggers
+    return STOPPED_LOOPING.format(role=run.role, first=first.kind.value, second=second.kind.value)
 
 
 def detect_repeat(steps: Sequence[Step]) -> LoopKind | None:
@@ -561,6 +570,11 @@ def _run_role(
             found = _loop_found(task, steps, progress_guard)
             if found is not None:
                 triggers.append(Trigger(found, step=len(steps)))
+                if len(triggers) == 2:
+                    # The second rung of the ladder: the role is not asked again.
+                    return RoleRun(
+                        role.name, tuple(steps), Stopped.LOOP, answer=None, triggers=tuple(triggers)
+                    )
     return RoleRun(role.name, tuple(steps), Stopped.STEP_CAP, answer=None, triggers=tuple(triggers))
 
 

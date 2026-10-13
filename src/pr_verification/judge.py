@@ -11,7 +11,7 @@ Reproduction supports or contradicts its Claim is computed by code, from its run
 from dataclasses import dataclass, fields
 from pathlib import Path
 
-from pr_verification.agent import Role, RoleRun, run_role
+from pr_verification.agent import Role, RoleRun, Stopped, _stopped_looping, run_role
 from pr_verification.decision import Decider
 from pr_verification.ecosystem import ReproductionEcosystem
 from pr_verification.model import Model, ModelFailed
@@ -230,8 +230,8 @@ def write_judged_reproduction(
     """
     if round_cap < 1:
         raise ValueError(f"the cap on rounds is {round_cap}: under 1")
-    if judge_step_cap != JUDGE_STEP_CAP:
-        raise NotImplementedError
+    if judge_step_cap < 1:
+        raise ValueError(f"the step cap of the judge is {judge_step_cap}: under 1")
     rounds: list[Round] = []
     rejected: list[Rejected] = []
 
@@ -270,7 +270,11 @@ def write_judged_reproduction(
         reproduction = written.evidence.reproduction
         try:
             judgement = judge_reproduction(
-                claim, reproduction, model=model, progress_guard=progress_guard
+                claim,
+                reproduction,
+                model=model,
+                step_cap=judge_step_cap,
+                progress_guard=progress_guard,
             )
         except ModelFailed as failure:
             rounds.append(Round(written, judgement=None))
@@ -278,6 +282,8 @@ def write_judged_reproduction(
         rounds.append(Round(written, judgement))
         if judgement.accepted:
             return ended(_accepted(written.evidence), None)
+        if judgement.run.stopped is Stopped.LOOP:
+            return ended(None, _stopped_looping(judgement.run))
         rejected.append(Rejected(reproduction, judgement.reason or NO_REASON_GIVEN))
     reason = ROUND_CAP_REACHED.format(rounds=len(rounds), reason=rejected[-1].reason)
     return ended(None, reason)

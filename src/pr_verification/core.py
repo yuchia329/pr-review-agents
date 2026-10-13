@@ -29,6 +29,7 @@ from pr_verification.report import (
     LoopCounts,
     PullRequestSpend,
     Report,
+    ReportWithLoops,
     Verdict,
 )
 from pr_verification.repository import resolve_commit
@@ -78,7 +79,15 @@ def count_loops(found: Iterable[tuple[Sequence[Loop], Verdict]]) -> LoopCounts:
     Claim was decided only by work dispatched for it afterwards, is counted under
     `recovered_after_told`: the rung is the one the loop's own run reached.
     """
-    raise NotImplementedError
+    told = replanned = inconclusive = 0
+    for loops, verdict in found:
+        stopped = sum(loop.second is not None for loop in loops)
+        if verdict is Verdict.INCONCLUSIVE:
+            inconclusive += len(loops)
+        else:
+            told += len(loops) - stopped
+            replanned += stopped
+    return LoopCounts(told + replanned + inconclusive, told, replanned, inconclusive)
 
 
 def run(
@@ -315,8 +324,6 @@ def _run(
     gathered = _gather(
         orchestration, ledger, claims, kinds, pull_request.repository, before, after, model, decider
     )
-    if any(answer.loops for answer in gathered):
-        raise NotImplementedError
     verified = tuple(
         _verified(text, kind, answer)
         for text, kind, answer in zip(claims, kinds, gathered, strict=True)
@@ -337,12 +344,15 @@ def _run(
             model=model,
             decider=decider,
         ).findings
-    return Report(
+    return ReportWithLoops(
         before=before,
         after=after,
         claims=verified,
         findings=findings,
         budget_spend=_spend(ledger, len(claims)),
+        loops=count_loops(
+            (answer.loops, claim.verdict) for answer, claim in zip(gathered, verified, strict=True)
+        ),
     )
 
 

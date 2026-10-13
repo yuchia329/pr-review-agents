@@ -11,7 +11,7 @@ there is none.
 from dataclasses import dataclass
 from pathlib import Path
 
-from pr_verification.agent import Role, RoleRun, Stopped, Tool, run_role
+from pr_verification.agent import Role, RoleRun, Stopped, Tool, _stopped_looping, run_role
 from pr_verification.decision import Decider
 from pr_verification.model import Model, ModelFailed
 from pr_verification.reading import lines_holding, reading_tools
@@ -158,6 +158,8 @@ def verify_structural_claim(
     if run.stopped is Stopped.STEP_CAP:
         reason = VERIFIER_STEP_CAP_REACHED.format(steps=step_cap)
         return StructuralRun(run, evidence=(), inconclusive=reason)
+    if run.stopped is Stopped.LOOP:
+        return StructuralRun(run, evidence=(), inconclusive=_stopped_looping(run))
     texts = run.answer.get("texts") if run.answer is not None else None
     if not isinstance(texts, list) or len(texts) > TEXT_CAP:
         return StructuralRun(run, evidence=(), inconclusive=None)

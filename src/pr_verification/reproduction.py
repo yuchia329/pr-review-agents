@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from pr_verification.agent import Role, RoleRun, run_role
+from pr_verification.agent import Role, RoleRun, Stopped, _stopped_looping, run_role
 from pr_verification.decision import Decider
 from pr_verification.ecosystem import (
     LONGEST_REPRODUCTION,
@@ -315,6 +315,11 @@ def _write(
                 **rejected_member,
             }
             run = run_role(role, task, model, progress_guard=progress_guard)
+            if run.stopped is Stopped.LOOP:
+                # The writer does not try again by itself after its role was stopped.
+                attempts.append(Attempt(run, None, None, None, AttemptResult.NO_REPRODUCTION))
+                reason = _stopped_looping(run)
+                return ReproductionRun(tuple(attempts), evidence=None, inconclusive=reason)
             text = _reproduction_given(run)
             if text is None:
                 attempts.append(Attempt(run, None, None, None, AttemptResult.NO_REPRODUCTION))

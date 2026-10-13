@@ -16,7 +16,7 @@ from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from pr_verification.agent import Role, RoleRun, Stopped, Tool, run_role
+from pr_verification.agent import Role, RoleRun, Stopped, Tool, _stopped_looping, run_role
 from pr_verification.decision import YES, Decider, Decision, Question, YesOrNo
 from pr_verification.model import Model, ModelFailed
 from pr_verification.reading import BAD_ARGUMENTS, reading_tools, usable_arguments
@@ -367,6 +367,8 @@ def review_pull_request(
         return Reviewed(findings=(*made, _unfinished(str(error))), run=None)
     if run.stopped is Stopped.STEP_CAP:
         made.append(_unfinished(STEP_CAP_REACHED.format(steps=step_cap)))
+    elif run.stopped is Stopped.LOOP:
+        made.append(_unfinished(_stopped_looping(run)))
     named = _named(run.answer, change.paths, reportable)
     # Enforced here, whatever the Reviewer was told: what code made is kept whole.
     room = max(FINDING_CAP - len(made), 0)

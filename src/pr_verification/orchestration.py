@@ -11,14 +11,14 @@ An orchestration that is told the kind of each Claim routes by it: a Behavioural
 to a Reproduction, and a Structural Claim is verified by reading and is not sent to a Sandbox.
 """
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import AbstractContextManager, ExitStack
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from pr_verification.agent import Loop
+from pr_verification.agent import Loop, RoleRun, loop_of
 from pr_verification.budget import BUDGET_SPENT, BudgetSpent, Ledger
 from pr_verification.decision import Decider
 from pr_verification.ecosystem import ReproductionEcosystem, Unsupported, find_commands
@@ -507,8 +507,6 @@ class FixedPipeline:
     ) -> Gathered:
         """Step 4 of `gather` for one Claim: what it is given, with every request made to
         `model` and every run made in `sandbox`."""
-        if self.judge_step_cap != JUDGE_STEP_CAP:
-            raise NotImplementedError
         judged = write_judged_reproduction(
             claim,
             model=model,
@@ -520,9 +518,15 @@ class FixedPipeline:
             limits=self.limits,
             round_cap=self.round_cap,
             progress_guard=self.progress_guard,
+            judge_step_cap=self.judge_step_cap,
         )
         evidence = () if judged.evidence is None else (judged.evidence,)
-        return Gathered(evidence, judged.inconclusive)
+        runs: list[RoleRun] = []
+        for each in judged.rounds:
+            runs.extend(attempt.run for attempt in each.written.attempts)
+            if each.judgement is not None:
+                runs.append(each.judgement.run)
+        return Gathered(evidence, judged.inconclusive, loops=_loops(runs))
 
     def _verify_by_reading(
         self, claim: str, model: Model, repository: Path, before: str, after: str
@@ -537,7 +541,8 @@ class FixedPipeline:
             model=model,
             progress_guard=self.progress_guard,
         )
-        return Gathered(verified.evidence, verified.inconclusive)
+        runs = () if verified.run is None else (verified.run,)
+        return Gathered(verified.evidence, verified.inconclusive, loops=_loops(runs))
 
     def _prepare(
         self, repository: Path, before: str, after: str, sandbox_for: SandboxFor
@@ -591,6 +596,11 @@ class FixedPipeline:
         if failed is not None:
             return COULD_NOT_PREPARE.format(commit="after", failure=_failure(failed))
         return target.sandbox
+
+
+def _loops(runs: Iterable[RoleRun]) -> tuple[Loop, ...]:
+    """The loops of `runs`, in their order, without the runs loop detection found nothing in."""
+    return tuple(loop for loop in map(loop_of, runs) if loop is not None)
 
 
 def _failure(failed: CommandFailed) -> str:

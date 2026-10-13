@@ -8,7 +8,7 @@ runs so that variation between runs is not mistaken for improvement.
 import json
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from enum import StrEnum
 from pathlib import Path
 from statistics import fmean
@@ -240,7 +240,13 @@ class PartEvaluation:
         sum of that count over the runs whose `loops` is not None. Every count is 0 when
         there is no such run. So the loops of every case and every repetition of the part
         are totalled, and each loop is still counted under exactly one outcome."""
-        raise NotImplementedError
+        said = [case_run.loops for case_run in self.runs if case_run.loops is not None]
+        return LoopCounts(
+            **{
+                field.name: sum(getattr(loops, field.name) for loops in said)
+                for field in fields(LoopCounts)
+            }
+        )
 
 
 @dataclass(frozen=True)
@@ -278,6 +284,7 @@ def _printed_part(part: PartEvaluation) -> dict[str, Any]:
         "scores": _printed_scores(part.scores),
         "by_repetition": [_printed_scores(scores) for scores in part.by_repetition],
         "varying": list(part.varying),
+        "loops": asdict(part.loops),
     }
 
 
@@ -342,10 +349,10 @@ def _run_once(case: Case, repetition: int, model: Model, entry_point: EntryPoint
         report = entry_point(case.pull_request, model)
     except (InvalidPullRequest, ModelFailed, ClaimExtractionFailed) as error:
         return CaseRun(case.name, repetition, case.expected, (), None, str(error))
-    if isinstance(report, ReportWithLoops):
-        raise NotImplementedError
     verdicts = tuple(claim.verdict for claim in report.claims)
-    return CaseRun(case.name, repetition, case.expected, verdicts, report.budget_spend, None)
+    loops = report.loops if isinstance(report, ReportWithLoops) else None
+    spend = report.budget_spend
+    return CaseRun(case.name, repetition, case.expected, verdicts, spend, None, loops=loops)
 
 
 @dataclass(frozen=True)
