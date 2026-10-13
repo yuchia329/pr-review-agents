@@ -120,7 +120,15 @@ def main() -> None:
                 },
                 "largest_request": max(sized.sizes, default=0),
                 "development": json.loads(evaluation.to_json())["development"],
-                "runs": requests,
+                "runs": [
+                    {
+                        **made,
+                        "expected": case_run.expected,
+                        "verdicts": list(case_run.verdicts),
+                        "no_report": case_run.no_report,
+                    }
+                    for made, case_run in zip(requests, evaluation.development.runs, strict=True)
+                ],
             },
             indent=2,
         )
