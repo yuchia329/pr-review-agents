@@ -29,7 +29,9 @@ UNREADABLE_RESPONSE = (
     "The response could not be read. Reply with one JSON object and nothing else: "
     'either {"tool": "<name>", "arguments": {...}} or {"finish": {...}}.'
 )
-"""What a role is told when its response is neither a request for a tool nor a finish."""
+"""What a role is told when its response does not begin with a request for a tool or a
+finish. It asks for more than is needed to be read: a response that goes on after its first
+object is read, as `run_role` says, and the role is still asked for the object alone."""
 
 REPEAT_LENGTH = 3
 """How many steps in a row must be the same step to be an exact repeat."""
@@ -121,7 +123,7 @@ class StepOutcome(StrEnum):
     """The response asked for a tool the role was not given. Nothing was run."""
 
     UNREADABLE = "unreadable"
-    """The response was neither a request for a tool nor a finish. Nothing was run."""
+    """The response did not begin with a request for a tool or a finish. Nothing was run."""
 
     FINISHED = "finished"
     """The response was a finish, which ends the run."""
@@ -289,7 +291,9 @@ def detect_repeat(steps: Sequence[Step]) -> LoopKind | None:
       are the same action. So are two that are both JSON objects and differ only in the
       order of the members of an object or in the whitespace between one part and the next.
       Any other two are different actions, except that whether two numbers written
-      differently, as `1` and `1.0` are, make the same action is not stated here.
+      differently, as `1` and `1.0` are, make the same action is not stated here. A response
+      that goes on after its first object is not a JSON object here, though `run_role`
+      reads that object: it is the same action only as a response with exactly its text.
     - The result is `result`, whole, whatever the role was shown of it. Two are the same
       only when their text is exactly the same.
 
@@ -350,8 +354,15 @@ def run_role(
       The `result` here is the step's result as shown, which "What a role is shown of a
       result" below bounds.
 
-    The response is read as a JSON object and decides the step's outcome. A response can be
-    read when it is one of these and has no other member:
+    The response is read as a JSON object and decides the step's outcome. What is read is the
+    first JSON object of the response: the one the response begins with, after any whitespace
+    as JSON has it, up to the brace that closes it. What follows that object is not read,
+    whatever it is: more text, a code fence, or a second object, also one that asks for
+    something else. It changes nothing of the step: not its outcome, not which tool is run
+    or with what arguments, and not the `answer`. The role is not told that it was left
+    unread, and the step's `response` is still the whole of what the model wrote, here in
+    `data` as in `Step.response`. A response can be read when that first object is one of
+    these and has no other member:
 
     - `{"tool": "<name>", "arguments": {...}}` asks for a tool, where the name is a string
       and the arguments are an object. `arguments` may be left out, which gives the tool an
@@ -361,10 +372,18 @@ def run_role(
     - `{"finish": {...}}` ends the run, where what it finishes with is an object. The
       outcome is `FINISHED` and that object is the run's `answer`.
 
-    Anything else is `UNREADABLE`, and that is settled before any tool is looked up: text
-    that is not JSON, JSON that is not an object, an object with any other member or with
-    both `tool` and `finish`, a `tool` that is not a string, or `arguments` or `finish` that
-    is not an object.
+    Anything else is `UNREADABLE`, and that is settled before any tool is looked up: a
+    response that does not begin, after any whitespace, with a JSON object whole to its
+    closing brace, an object with any other member or with both `tool` and `finish`, a
+    `tool` that is not a string, or `arguments` or `finish` that is not an object. So
+    anything but whitespace before the object makes the response `UNREADABLE`, a code fence
+    as much as a sentence, as do text that is not JSON, JSON that is not an object, and an
+    object that is never closed. A request for a tool named `finish` is a request for a
+    tool, and is no finish.
+
+    Reading only the first object changes what is read and nothing of what is compared:
+    `detect_repeat` still takes the action of a step from its `response` whole, so two
+    responses that begin with the same object and go on differently are different actions.
 
     Several tools in one step
         Parallel tool calls are an optional capability of the model interface, read once
@@ -373,12 +392,12 @@ def run_role(
 
         Without it, everything is as said above and nothing here applies. The role is asked
         for one tool at a time, `instructions` are what they are for any such model, and a
-        response with a member `tools` is `UNREADABLE` like any other that has a member not
-        named above. That is the fallback, and it is how every run went before the
-        capability existed.
+        response whose first object has a member `tools` is `UNREADABLE` like any other
+        that has a member not named above. That is the fallback, and it is how every run
+        went before the capability existed.
 
         With it, the loop's fixed wording in `instructions` also names a third form, and a
-        response can be read when it is that form and has no other member:
+        response can be read when its first object is that form and has no other member:
 
         - `{"tools": [{"tool": "<name>", "arguments": {...}}, ...]}` asks for several tools
           at once. The list holds between 1 and `PARALLEL_CALL_CAP` entries, and each entry
