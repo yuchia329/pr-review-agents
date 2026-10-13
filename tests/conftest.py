@@ -86,6 +86,8 @@ def no_model_configured(monkeypatch: pytest.MonkeyPatch) -> None:
         "PR_VERIFICATION_ENDPOINT",
         "PR_VERIFICATION_MODEL",
         "PR_VERIFICATION_API_KEY",
+        "PR_VERIFICATION_CONFIGURATION",
+        "ANTHROPIC_API_KEY",
         "PR_VERIFICATION_DECISION",
         "PR_VERIFICATION_DECISION_THRESHOLD",
         "PR_VERIFICATION_JEV_API_KEY",

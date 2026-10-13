@@ -110,3 +110,56 @@ one on hand, built from the Modelfile with only its `FROM` line changed: two Cla
 instruction ignored, 32768 under `CONTEXT`, 115 seconds from a cold start.
 
 Not run yet: `qwen3.6` itself, and the hosted check against MiniMax M3, including step 5.
+
+## Manual check of the Anthropic-protocol client
+
+The command-line tool cannot reach this client: the one named configuration that uses it,
+`ceiling`, is for the evaluation only. So it is checked from Python, with the same description as
+above. Do it after changing `pr_verification/anthropic_protocol.py`.
+
+```sh
+export ANTHROPIC_API_KEY=...   # from the Anthropic console
+uv run python - <<'PY'
+import os
+from pathlib import Path
+
+from pr_verification.anthropic_protocol import ANTHROPIC_ENDPOINT, AnthropicModel
+from pr_verification.claims import INSTRUCTIONS, extract_claims
+from pr_verification.model import ModelFailed, ModelRequest, TokenPrice
+
+key = os.environ["ANTHROPIC_API_KEY"]
+price = TokenPrice(input=2.0, output=10.0)
+model = AnthropicModel(ANTHROPIC_ENDPOINT, "claude-sonnet-5-5", key, price=price)
+print(extract_claims(model, "Fix the crash on empty input", Path("description.md").read_text(), ""))
+
+kept = ModelRequest(INSTRUCTIONS * 40, '{"title": "Tidy up"}', cache_instructions=True)
+print([model.complete_priced(kept).dollars for _ in range(2)])
+
+for name, wrong_key in (("no-such-model", key), ("claude-sonnet-5-5", "wrong-key-123")):
+    try:
+        AnthropicModel(ANTHROPIC_ENDPOINT, name, wrong_key).complete(kept)
+    except ModelFailed as failure:
+        print(failure)
+PY
+```
+
+1. Expect two Claims on the first line, the fix and the rename, and the instruction ignored.
+2. Expect two costs on the second line, the second lower than the first: the instructions are
+   repeated there until they are long enough for the provider to keep, and the second request
+   reads them from what it kept.
+3. Expect two more lines, each naming the model, the endpoint, and the provider's error, and
+   `wrong-key-123` in neither.
+
+The named configurations are checked from the command line, with Ollama set up as above:
+
+```sh
+PR_VERIFICATION_CONFIGURATION=self-hosted uv run pr-verification --repo . --before HEAD~1 \
+  --after HEAD --title "Fix the crash on empty input" --description-file description.md
+```
+
+Expect the report of the Ollama check, with `PR_VERIFICATION_ENDPOINT` and
+`PR_VERIFICATION_MODEL` unset. Then set the variable to `ceiling`, and to `baseline`, and expect
+exit code 2, no report, and one line naming `PR_VERIFICATION_CONFIGURATION` each time.
+
+Not run yet: none of this section, which was written with the tests, before the client and the
+configurations were implemented.
