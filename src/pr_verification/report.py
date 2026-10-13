@@ -141,10 +141,10 @@ class SearchEvidence(Evidence):
     change: TextChange
     """What the Structural verifier took the Claim to say the pull request does to the text.
     It is a model's word about the Claim. What the code holds is not: that is in
-    `before_lines` and `after_lines`, which code found."""
+    `before_lines`, `after_lines`, and `after_lines_elsewhere`, which code found."""
     path: str | None
-    """The one file searched, by its path from the root of the repository, or None when
-    every file was searched."""
+    """The one file `before_lines` and `after_lines` were searched for in, by its path from
+    the root of the repository, or None when every file was searched."""
     before_lines: tuple[str, ...]
     """Every line that holds the text in the code before the pull request, `Report.before`,
     each as `<path>:<line number>:<line>`, by path and then by line number. Untrusted

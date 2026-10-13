@@ -220,9 +220,14 @@ def search_for(
 
     `text` is expected not to be empty, as `lines_holding` expects.
     """
-    # Contract only: `after_lines_elsewhere` is left empty until the search is implemented.
     before_lines = lines_holding(repository, before, text, path)
     after_lines = lines_holding(repository, after, text, path)
+    elsewhere: tuple[str, ...] = ()
+    if change is TextChange.REMOVED and path is not None:
+        in_the_file = set(after_lines)
+        elsewhere = tuple(
+            line for line in lines_holding(repository, after, text) if line not in in_the_file
+        )
     return SearchEvidence(
         source=EvidenceSource.READ_CODE,
         observation=(
@@ -233,4 +238,5 @@ def search_for(
         path=path,
         before_lines=before_lines,
         after_lines=after_lines,
+        after_lines_elsewhere=elsewhere,
     )

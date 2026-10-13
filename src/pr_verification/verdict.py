@@ -58,7 +58,7 @@ NOTHING_SEARCHED = (
 
 KEPT_ELSEWHERE = (
     "Searching the one file the Claim was taken to be about found the text removed from it, "
-    "and the code after the pull request still holds that text in other files, on the lines "
+    "and the code after the pull request holds that text in other files, on the lines "
     "the Evidence lists."
 )
 """The reason for Inconclusive when a text that a Structural Claim was taken to say is removed
@@ -169,7 +169,7 @@ def compute_verdict(
         - is kept elsewhere when its `change` is `TextChange.REMOVED`, at least one line
           holds the text before the pull request, none does after, and it has at least one
           of `after_lines_elsewhere`: the text is gone from the one file searched and
-          another file still holds it. It neither supports nor contradicts the Claim;
+          another file holds it. It neither supports nor contradicts the Claim;
         - otherwise does neither. So a text that is on neither commit does neither: the Claim
           may be false, or the text may be the wrong one to search for, and nothing recorded
           tells the two apart. So does a text said to be added that was already there before,
@@ -231,20 +231,28 @@ def _from_searches(searches: Sequence[SearchEvidence]) -> Computed:
     """The Verdict for a Structural Claim, from the searches among its Evidence."""
     if not searches:
         return Computed(Verdict.INCONCLUSIVE, NOTHING_SEARCHED)
-    # Only the change and how many lines hold the text on each commit are read.
+    # Only the change and how many lines hold the text are read.
     found = [
         (search.change, len(search.before_lines), len(search.after_lines)) for search in searches
     ]
     if any(change is TextChange.REMOVED and before and after for change, before, after in found):
         return Computed(Verdict.REFUTED, STRUCTURAL_REFUTED)
-    if all(_shows_the_change(change, before, after) for change, before, after in found):
+    changed = [_shows_the_change(change, before, after) for change, before, after in found]
+    # A text gone from the one file searched and held by another shows nothing of the Claim.
+    kept_elsewhere = [
+        shown and search.change is TextChange.REMOVED and bool(search.after_lines_elsewhere)
+        for shown, search in zip(changed, searches, strict=True)
+    ]
+    if any(kept_elsewhere):
+        return Computed(Verdict.INCONCLUSIVE, KEPT_ELSEWHERE)
+    if all(changed):
         return Computed(Verdict.CONFIRMED, STRUCTURAL_CONFIRMED)
     return Computed(Verdict.INCONCLUSIVE, SEARCH_DECIDES_NOTHING)
 
 
 def _shows_the_change(change: TextChange, before: int, after: int) -> bool:
-    """Whether a text held on this many lines of each commit was changed as `change` says: on
-    no line of the one commit and at least one of the other."""
+    """Whether a text held on this many lines of each commit was changed as `change` says, where
+    it was searched for: on no line of the one commit and at least one of the other."""
     if change is TextChange.ADDED:
         return not before and bool(after)
     return bool(before) and not after

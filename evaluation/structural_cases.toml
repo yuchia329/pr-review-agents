@@ -191,7 +191,7 @@ commit = "fa6dac8383541669f42086d4f07c71b0f8d6a279"
 title = "Remove the leading $ from the shell commands in the README"
 description = "No install command in `README.md` starts with the prompt character."
 key = [
-    { text = "$ pip install", change = "removed", path = "README.md" },
+    { text = "$ pip install 'httpx[cli]'  # The command line client", change = "removed", path = "README.md" },
 ]
 left_out_of_false_case = ["README.md"]
 
@@ -235,7 +235,9 @@ key = [
 ]
 left_out_of_false_case = ["pyproject.toml"]
 
-# The examples and the docs keep the old requirement, so a search of every file still finds it.
+# The examples and the docs keep the old requirement, so a search of every file still finds it,
+# and the old line said to be removed from the one file is kept elsewhere. The key names what
+# was added.
 [[commit]]
 name = "structural/configuration/flask-flit-core"
 part = "development"
@@ -243,7 +245,6 @@ repository = "pallets/flask"
 commit = "fe3b215d3ade4db68262dae1a3cdc464a1fc524f"
 title = "Increase the required flit_core version to 3.11"
 key = [
-    { text = 'requires = ["flit_core<4"]', change = "removed", path = "pyproject.toml" },
     { text = 'requires = ["flit_core>=3.11,<4"]', change = "added", path = "pyproject.toml" },
 ]
 

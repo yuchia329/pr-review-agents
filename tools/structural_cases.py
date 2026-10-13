@@ -40,16 +40,9 @@ from pr_verification.decision import configured_decider, decision_configuration
 from pr_verification.evaluation import Case, Part, evaluate
 from pr_verification.model import Model
 from pr_verification.openai_compatible import model_from_environment
-from pr_verification.reading import lines_holding
-from pr_verification.report import (
-    ClaimKind,
-    EvidenceSource,
-    Report,
-    SearchEvidence,
-    TextChange,
-    Verdict,
-)
+from pr_verification.report import ClaimKind, Report, TextChange, Verdict
 from pr_verification.repository import commit_staged, git, repository_at, resolve_commit
+from pr_verification.structural import search_for
 from pr_verification.verdict import compute_verdict
 
 CASES = Path(__file__).parent.parent / "evaluation" / "structural_cases.toml"
@@ -182,21 +175,10 @@ def key_verdict(case: Case, key: tuple[KeyText, ...]) -> Verdict:
     """The Verdict the code computes when a case's two commits are searched for the texts of
     `key`: what the Structural verifier's Evidence would give had it named exactly those."""
     shown = case.pull_request
-    evidence = []
-    for text in key:
-        before = lines_holding(shown.repository, shown.before, text.text, text.path)
-        after = lines_holding(shown.repository, shown.after, text.text, text.path)
-        evidence.append(
-            SearchEvidence(
-                source=EvidenceSource.READ_CODE,
-                observation=f"lines holding the text: {len(before)} before, {len(after)} after",
-                text=text.text,
-                change=text.change,
-                path=text.path,
-                before_lines=before,
-                after_lines=after,
-            )
-        )
+    evidence = [
+        search_for(shown.repository, shown.before, shown.after, text.text, text.change, text.path)
+        for text in key
+    ]
     return compute_verdict(evidence, ClaimKind.STRUCTURAL).verdict
 
 

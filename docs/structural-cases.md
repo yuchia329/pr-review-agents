@@ -74,7 +74,8 @@ Four cases were kept because of what the keys showed while they were written:
   Block. The key searches for `def format_full_version(`.
 - **A text with good reason to stay.** `configuration/flask-flit-core` changes a requirement in
   `pyproject.toml`. The examples and the documentation of the same repository keep the old
-  line, so a search of every file gives Refuted for a true Claim. The key names the one file.
+  line, so a search of every file gives Refuted for a true Claim. The key names the one file,
+  and since the rule below, only the line that was added.
 
 - **A text the pull request itself adds elsewhere.** `removal/attrs-validators-provides` removes
   a function and adds a changelog entry that names it. A search for the name the Claim gives
@@ -83,6 +84,37 @@ Four cases were kept because of what the keys showed while they were written:
 
 The last three are the limit that `compute_verdict` states for Structural Claims, found in real
 commits.
+
+## A text removed from one file is searched for in the others
+
+Decided on 2026-10-12, after the first results below (#67). A rename or a removal is a Claim
+about every file, and the verifier chooses the path of each text. So for a text said to be
+removed from one file, code also searches every other file of the code after the pull request,
+whatever path the verifier gave, and records the lines in `after_lines_elsewhere`. A line found
+there stops Confirmed: the Claim is Inconclusive, with the reason `KEPT_ELSEWHERE`. It is never
+Refuted for it, because of the Flask case above, where the old line has good reason to stay
+elsewhere and Refuted would be a False Block. The rule is stated in `compute_verdict`.
+
+Two other courses were turned down. Telling the verifier to give a rename no path rests on a
+model doing as told, and the Verdict is to rest on code (ADR 0002). Leaving the rule alone
+keeps a False Assurance that changes from run to run.
+
+The price is Decided Rate: a true Claim whose removed text another file keeps is Inconclusive
+where it was Confirmed. Two answer keys showed it, and were rewritten so that each still names
+what a careful reader would search for under the rule:
+
+| Case | Key before | Key now |
+| --- | --- | --- |
+| `configuration/flask-flit-core` | the old line removed from `pyproject.toml`, the new one added | the new line added to `pyproject.toml` |
+| `documentation/httpx-readme-prompt` | `$ pip install` removed from `README.md`, which `docs/advanced/text-encodings.md` keeps | the one install line with its comment, which only `README.md` held |
+
+With these the keys bear out all 32 cases as before: 21 true cases Confirmed, 10 false cases
+Refuted, and the one false case the rule cannot Refute Inconclusive.
+
+What the rule does not reach: a verifier that names only the text a rename adds, with a path,
+is still Confirmed by a search of one file. The Structural cases have not been run again with
+a model since the rule, so its effect on the three False Assurances and on the Decided Rate is
+not yet measured.
 
 ## Running the cases
 
@@ -151,6 +183,6 @@ What is still to do:
 
 - Repeat the run, to see how much the Verdicts vary, and set the model's prices so that the
   cost of a pull request is recorded.
-- Decide what a rename is searched for. Confirmed on a search of one file is where every
-  False Assurance came from.
+- Run the cases again now that a text removed from one file is searched for in the others,
+  and record the three renames that skip a file and the Decided Rate before and after.
 - Run with the default decider, Laya, which needs `uv sync --extra laya`.
