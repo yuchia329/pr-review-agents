@@ -63,6 +63,7 @@ from pr_verification.report import (
     ClassifiedClaim,
     GateDecision,
     PullRequestSpend,
+    RemovedNameEvidence,
     Report,
     ReproductionEvidence,
     SearchEvidence,
@@ -757,7 +758,7 @@ def test_structural_claim_is_verified_by_reading_with_no_sandbox_and_decided_by_
     assert (claim.verdict, claim.reason, report.gate.decision) == (expected, reason, gate)
     assert (sandboxes.opened, discovery.asked) == ([], [])
     assert model.tasks(RENAMES) == [{"claim": RENAMES}]
-    old_name, new_name = json.loads(report.to_json())["claims"][0]["evidence"]
+    old_name, new_name, name = json.loads(report.to_json())["claims"][0]["evidence"]
     assert old_name == {
         "source": "read_code",
         "observation": f"lines holding the text: 2 before, {len(still_there)} after",
@@ -773,6 +774,13 @@ def test_structural_claim_is_verified_by_reading_with_no_sandbox_and_decided_by_
     }
     assert (new_name["path"], new_name["before_lines"]) == ("accounts.txt", [])
     assert new_name["after_lines"][0] == "accounts.txt:1:class AccountManager:"
+    # After the searches comes the name that code found in what the pull request removes.
+    assert name == {
+        "source": "read_code",
+        "observation": f"lines holding the name: {len(still_there)} after",
+        "name": "UserManager",
+        "after_lines": still_there,
+    }
 
 
 def test_each_claim_is_worked_on_in_its_turn_as_its_kind_calls_for_and_only_a_reproduction_is_run(
@@ -797,8 +805,14 @@ def test_each_claim_is_worked_on_in_its_turn_as_its_kind_calls_for_and_only_a_re
         (Verdict.CONFIRMED, verdict.STRUCTURAL_CONFIRMED),
     ]
     renamed, taxed, dropped = (claim.evidence for claim in report.claims)
-    assert all(isinstance(evidence, SearchEvidence) for evidence in (*renamed, *dropped))
-    assert [len(renamed), len(taxed), len(dropped)] == [2, 1, 2]
+    # The first Claim names the class the pull request renames, and the third names nothing.
+    assert [type(evidence) for evidence in renamed] == [
+        SearchEvidence,
+        SearchEvidence,
+        RemovedNameEvidence,
+    ]
+    assert [type(evidence) for evidence in dropped] == [SearchEvidence, SearchEvidence]
+    assert len(taxed) == 1
     assert isinstance(taxed[0], AcceptedReproduction)
     asked = [json.loads(request.data)["task"] for request in model.requests[1:]]
     assert asked == [
@@ -879,7 +893,7 @@ def test_structural_claim_the_verifier_did_not_finish_is_inconclusive_and_the_ne
 
     assert [(claim.verdict, claim.reason, len(claim.evidence)) for claim in report.claims] == [
         (Verdict.INCONCLUSIVE, reason, 0),
-        (Verdict.CONFIRMED, verdict.STRUCTURAL_CONFIRMED, 2),
+        (Verdict.CONFIRMED, verdict.STRUCTURAL_CONFIRMED, 3),
     ]
 
 

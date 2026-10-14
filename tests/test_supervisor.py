@@ -611,7 +611,7 @@ def test_supervisor_is_shown_no_more_than_the_caps_allow_however_many_claims_the
     # the rest.
     in_turn = [*range(DISPATCH_CAP, MANY), 1, 0, *range(2, DISPATCH_CAP)]
     assert [shown["claim"] for shown in second["claims"]] == in_turn[:CLAIMS_SHOWN_CAP]
-    assert [len(given.evidence) for given in gathered] == [2, 0, *[2] * (MANY - 2)]
+    assert [len(given.evidence) for given in gathered] == [3, 0, *[3] * (MANY - 2)]
 
 
 # What the supervisor cannot do
@@ -955,7 +955,7 @@ def test_dispatches_of_one_step_run_at_the_same_time_each_reproduction_in_a_sand
     # The results come back as summaries, in the order they were dispatched in.
     assert requests_of(supervising)[1]["results"] == [
         result(2, 1, *REFUTES),
-        result(0, 2, Verdict.CONFIRMED, verdict.STRUCTURAL_CONFIRMED, "reading"),
+        result(0, 3, Verdict.CONFIRMED, verdict.STRUCTURAL_CONFIRMED, "reading"),
         result(1, 1, *CONFIRMS),
     ]
     # The first Reproduction listed has the Sandbox made ready before, and the next a further
