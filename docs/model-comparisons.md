@@ -104,7 +104,7 @@ The threshold is a proposal made with this write-up, and no run has been held to
 
 | Provider | Status | Why |
 | --- | --- | --- |
-| MiniMax M3, hosted | Experimental | Not yet run three times. One repetition on 2026-10-12 gave no False Block and a Decided Rate of 0.72 (`docs/context-bound.md`) |
+| MiniMax M3, hosted | Experimental | Three repetitions on the two hand-made cases on 2026-10-13 gave no False Block and a Decided Rate of 0.36. One repetition of 20 cases on 2026-10-12 gave 0.72 (`docs/context-bound.md`). Not yet run on the cases the threshold names |
 | Qwen 3.8, through Ollama or vLLM | Experimental | One repetition on two cases on 2026-10-13, through vLLM, gave no False Block and a Decided Rate of 0.50, under the 0.6 asked |
 | Claude Sonnet 5.5, through the Anthropic protocol | Experimental | Never evaluated: no request has been made to it |
 
@@ -137,6 +137,48 @@ Qwen is next to be served by vLLM on another machine. `self-hosted` names
 unchanged only when the server is reached at that address, as through a forwarded port, and
 serves the model under that name. A request then leaves the machine, which is not what
 `self-hosted` is named for, and the write-up of that run must say so.
+
+### The default configuration, 2026-10-13
+
+MiniMax M3 on its hosted endpoint in every role and behind the decider
+(`PR_VERIFICATION_DECISION=small_llm`), priced at 0.30 and 1.20 dollars for a million tokens.
+The Budget was 900 seconds, 0.50 dollars, and 300 steps for a pull request. The Sandbox was
+Docker 28.4.0 on an Apple M4 Pro.
+
+```sh
+uv run python tools/compare_configurations.py --repetitions 3 \
+  --run default/pipeline --run default/supervisor --baseline default
+```
+
+The two hand-made development cases, three times each: `median-of-an-even-count`, whose
+Claims are true, and `initials-of-a-hyphenated-name`, whose Claims are false. Every run gave a
+report.
+
+| | Fixed pipeline | Supervisor | Reading-only baseline |
+| --- | --- | --- | --- |
+| Claims | 11 | 8 | 12 |
+| Decided Rate | 0.36 | 0.38 | 0.83 |
+| False Block rate | 0 | 0 | 0.33 |
+| False Assurance rate | 0 | 0 | 0 |
+| Seconds for a pull request | 475 | 495 | 23 |
+| Dollars for a pull request | 0.039 | 0.079 | 0.006 |
+| Runs stopped by the time limit | 0 of 6 | 3 of 6 | 0 of 6 |
+
+- **The baseline blocked a sound pull request; the system never did.** In two of its three
+  runs of the true case, the baseline gave a true Claim Refuted, so the Gate would have
+  blocked. That is the error the system exists to keep down, and neither orchestration made
+  it once.
+- **The baseline decided more, and faster.** It decided 10 of 12 Claims in 23 seconds a pull
+  request, where the system decided 4 of 11 and 3 of 8 in about 8 minutes. On cases this small
+  reading is enough, and a wrong Refuted is the price of it here.
+- **The system never decided the false case.** Every one of its Claims there was
+  Inconclusive, in all six runs. With the fixed pipeline those runs took 591 to 874 seconds,
+  near the limit without reaching it. With the supervisor all three were stopped by the time
+  limit. Why no Reproduction there was accepted was not looked into.
+- **The supervisor cost twice what the fixed pipeline did** and decided about the same: 50 to
+  64 steps on the false case against 15 to 24.
+- **The dollars count only requests made through the ledger.** The decider's requests are not
+  among them, so the bill is somewhat more. All 18 runs counted 0.75 dollars together.
 
 ### Qwen 3.8 on another machine, 2026-10-13
 
@@ -185,14 +227,13 @@ Qwen 3.8 stays experimental: one repetition, and a Decided Rate of 0.5 against t
 
 Still to run and record here, each with the command above:
 
-- the supervisor against the fixed pipeline, on the default configuration and more than once;
 - the ceiling against the default;
 - self-hosted against the default;
 - GPT-6 Luna (`gpt-6-luna`, 0.10 and 0.50 dollars for a million tokens) against Gemini 3.5
   Flash-Lite (`gemini-3.5-flash-lite`, 0.30 and 2.50) in the light roles. The project owner
   chose GPT-6 Luna over the GPT-5.6 Luna the spec names, as newer and cheaper;
-- the reading-only baseline against the system on the Behavioural cases, on the default
-  configuration and more than once;
+- the reading-only baseline against the system on more Behavioural cases than the two
+  hand-made ones;
 - the effect of prompt caching and of parallel tool calls on time and cost.
 
 ## What to keep in mind when reading the results
