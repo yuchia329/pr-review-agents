@@ -32,19 +32,21 @@ LOCATOR_STEP_CAP = 12
 
 _LIST_FILES = """\
 Lists the path of every file, one to a line. Takes an optional "directory", to list only the \
-files under it, as in {"directory": "billing"}."""
+files under it, as in {"tool": "list_files", "arguments": {"directory": "billing"}}."""
 
 _SEARCH = """\
-Finds every line of every file that holds "text" exactly as written, as in {"text": "tax_rate"}. \
-The text is not a pattern, and letter case matters. Each line found is given as \
-<path>:<line number>:<line>."""
+Finds every line of every file that holds "text" exactly as written, as in \
+{"tool": "search", "arguments": {"text": "tax_rate"}}. The text is not a pattern, and letter \
+case matters. Each line found is given as <path>:<line number>:<line>."""
 
 _READ_FILE = """\
 Reads one file, named by its "path" from the root of the repository, as in \
-{"path": "billing/tax.py"}. Each line is given as <line number>:<line>. Takes an optional \
-"first_line" and "last_line", to read only the lines numbered from the one to the other, as in \
-{"path": "billing/tax.py", "first_line": 200, "last_line": 400}. Read a long file in parts this \
-way: a result that is too long is cut, and says how much was left out."""
+{"tool": "read_file", "arguments": {"path": "billing/tax.py"}}. Each line is given as \
+<line number>:<line>. Takes an optional "first_line" and "last_line", to read only the lines \
+numbered from the one to the other, as in \
+{"tool": "read_file", "arguments": {"path": "billing/tax.py", "first_line": 200, \
+"last_line": 400}}. Read a long file in parts this way: a result that is too long is cut, and \
+says how much was left out."""
 
 _LOCATOR_INSTRUCTIONS = """\
 You find the code that a Claim concerns. A Claim is a checkable statement a pull request makes
@@ -56,8 +58,8 @@ lines you have read, and as few of them as show what the Claim concerns.
 
 Do not judge whether the Claim is true. Finish with the places you found, each as a file's path
 and the first and last of its lines, counted from 1, in this form:
-{"places": [{"path": "billing/tax.py", "first_line": 3, "last_line": 9}]}
-When you find none, finish with {"places": []}."""
+{"finish": {"places": [{"path": "billing/tax.py", "first_line": 3, "last_line": 9}]}}
+When you find none, finish with {"finish": {"places": []}}."""
 
 
 def reading_tools(repository: Path, commit: str) -> tuple[Tool, ...]:

@@ -89,8 +89,8 @@ NOT_CHANGED = "The pull request does not change a file at that path."
 
 _READ_CHANGE = """\
 Shows what the pull request changes in one of its changed files, named by its "path", as in \
-{"path": "billing/tax.py"}. The change is given as a unified diff: each line added follows a +, \
-and each line removed follows a -."""
+{"tool": "read_change", "arguments": {"path": "billing/tax.py"}}. The change is given as a \
+unified diff: each line added follows a +, and each line removed follows a -."""
 
 _REVIEWER_INSTRUCTIONS = f"""\
 You review the quality of the changes a pull request makes. Your task holds its "claims", the
@@ -114,9 +114,9 @@ Do not judge whether a Claim is true. Report only what is worth a person's atten
 "path" and states its "concern" in at most {LONGEST_CONCERN} characters.
 
 Finish with your Findings in this form:
-{{"findings": [{{"kind": "undeclared_change", "path": "auth/session.py", "concern": "The session \
-timeout is raised, and no Claim says so."}}]}}
-When you have none, finish with {{"findings": []}}."""
+{{"finish": {{"findings": [{{"kind": "undeclared_change", "path": "auth/session.py", "concern": \
+"The session timeout is raised, and no Claim says so."}}]}}}}
+When you have none, finish with {{"finish": {{"findings": []}}}}."""
 
 # The difference is settled by the two commits alone, whatever git is set up to do on this
 # machine and whatever attributes the working copy gives a file: no colour, no program of the

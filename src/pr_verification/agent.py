@@ -59,6 +59,9 @@ You work in steps. At each step, reply with one JSON object and nothing else, in
 {"finish": {...}}
     ends your work. The object is your answer.
 
+Whatever your instructions say you finish with goes inside "finish", never on its own. Told to
+finish with an empty list of "places", you reply {"finish": {"places": []}}.
+
 The input is a JSON object. Its "task" is what you are asked to work on. Its "steps" lists the
 steps you have taken so far, in order: each "response" is what you replied, and each "result" is
 what came of it. A step may also have "told": a note from the system that runs you, written when it

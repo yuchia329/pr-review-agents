@@ -458,7 +458,7 @@ When there are attempts, write a Reproduction that mends what the last one's res
 show to be wrong with it.
 {_REJECTED if rewrites else ""}
 Finish with the whole text of the Reproduction, in this form:
-{{"reproduction": "<text>"}}"""
+{{"finish": {{"reproduction": "<text>"}}}}"""
 
 
 _REJECTED = """

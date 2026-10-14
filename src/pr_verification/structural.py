@@ -57,12 +57,19 @@ file the Claim is about.
 
 Finish with each text and whether the Claim says the pull request "added" it or "removed" it, in
 this form:
-{{"texts": [{{"text": "UserManager", "change": "removed"}},
-{{"text": "retries = 3", "change": "added", "path": "settings.toml"}}]}}
-When the Claim names no text that is added or removed, finish with {{"texts": []}}."""
+{{"finish": {{"texts": [{{"text": "UserManager", "change": "removed"}},
+{{"text": "retries = 3", "change": "added", "path": "settings.toml"}}]}}}}
+When the Claim names no text that is added or removed, finish with {{"finish": {{"texts": []}}}}."""
 
 _READS = {"before": "In the code before the pull request", "after": "In the code after it"}
 """Which code a tool reads, by what stands in front of its name: how its description starts."""
+
+
+def _renamed(description: str, name: str, which: str) -> str:
+    """A reading tool's description, with each request it shows for the tool under its own
+    name made under the name the verifier gives it for `which` commit."""
+    return description.replace(f'"tool": "{name}"', f'"tool": "{which}_{name}"')
+
 
 _MEMBERS = {"text", "change", "path"}
 """The members an entry of the role's answer may have."""
@@ -162,7 +169,7 @@ def verify_structural_claim(
         tools=tuple(
             Tool(
                 f"{which}_{tool.name}",
-                f"{_READS[which]}: {tool.description}",
+                f"{_READS[which]}: {_renamed(tool.description, tool.name, which)}",
                 tool.run,
                 keeps=tool.keeps,
             )

@@ -59,9 +59,9 @@ not say, or checks only that the code exists or can be called.
 Do not judge whether the Claim is true. You are shown the Claim and the Reproduction and nothing
 else, and you have no tools: judge from the two alone.
 
-Finish with {"accepted": true} when the Reproduction tests what the Claim says. Otherwise finish
-with why it does not, in one or two sentences, in this form:
-{"accepted": false, "reason": "<why>"}"""
+Finish with {"finish": {"accepted": true}} when the Reproduction tests what the Claim says.
+Otherwise finish with why it does not, in one or two sentences, in this form:
+{"finish": {"accepted": false, "reason": "<why>"}}"""
 
 
 @dataclass(frozen=True)
