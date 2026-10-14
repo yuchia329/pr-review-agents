@@ -35,6 +35,7 @@ not looked at while the system is being tuned. `--clones`, the directory
 """
 
 import argparse
+import json
 import os
 import sys
 import tempfile
@@ -106,6 +107,28 @@ def every_role(name: str, endpoint: str, model: str, key_variable: str) -> Confi
     return Configuration(name, choice)
 
 
+def each_run(label: str, evaluation: Evaluation) -> None:
+    """Print to standard error what each run of the evaluation gave and spent, and which
+    limit of the Budget stopped it, if one did: a Claim left Inconclusive by a limit is the
+    limit's doing, not the model's."""
+    for part in (evaluation.development, evaluation.held_out):
+        for case_run in part.runs:
+            spend = case_run.spend
+            shown = {
+                "run": label,
+                "case": case_run.name,
+                "repetition": case_run.repetition,
+                "expected": case_run.expected.value,
+                "verdicts": [verdict.value for verdict in case_run.verdicts],
+                "seconds": None if spend is None else round(spend.seconds, 1),
+                "dollars": None if spend is None else round(spend.dollars, 4),
+                "steps": None if spend is None else spend.steps,
+                "stopped_by": getattr(spend, "stopped_by", None),
+                "no_report": case_run.no_report,
+            }
+            print(json.dumps(shown), file=sys.stderr, flush=True)
+
+
 def without_parallel_tool_calls(configuration: Configuration) -> Configuration:
     """The configuration with no model relied on to ask for several tools at once."""
     return replace(
@@ -175,6 +198,7 @@ def main() -> None:
             models=models,
         )
         # A run can take a long time, so each is shown as it ends, apart from the comparison.
+        each_run(label, evaluations[label])
         print(Comparison({label: evaluations[label]}).to_json(), file=sys.stderr, flush=True)
 
     with tempfile.TemporaryDirectory() as directory, shown_within(limits):
@@ -211,12 +235,8 @@ def main() -> None:
                 repetitions=arguments.repetitions,
                 entry_point=partial(reading_only_baseline, step_cap=WRITER_STEP_CAP),
             )
+            each_run(BASELINE_LABEL, baseline)
 
-    for label, evaluation in {**evaluations, BASELINE_LABEL: baseline}.items():
-        for part in (evaluation.development, evaluation.held_out) if evaluation else ():
-            for case_run in part.runs:
-                if case_run.no_report is not None:
-                    print(f"{label}: {case_run.name}: {case_run.no_report}", file=sys.stderr)
     print(Comparison(evaluations, baseline).to_json())
 
 
