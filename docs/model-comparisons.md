@@ -92,21 +92,23 @@ model offering parallel tool calls.
 
 ## Supported and experimental providers
 
-A provider is **supported** when a configuration that has its model in the reasoning roles
-passes this, and **experimental** otherwise:
+A provider is **supported** when a run with its model meets both limits of ADR 0006, and
+**experimental** otherwise: a False Block rate of at most 2% of true Claims and a False
+Assurance rate of at most 5% of false Claims, read on the held-out part over at least three
+repetitions. No run here has used the held-out part, so no provider can be supported yet.
 
-- the development part of the hand-made cases and of the Structural cases, three repetitions,
-  with the fixed pipeline;
-- no False Block;
-- a Decided Rate of 0.6 or more.
-
-The threshold is a proposal made with this write-up, and no run has been held to it yet.
+A limit met says only as much as the number of distinct Claims it is read over. The same
+Claim in three repetitions is one Claim. With no error in n distinct Claims, the upper end of
+a one-sided 95% interval is `1 - 0.05^(1/n)` [ls-21]: 2% can be shown only after no False
+Block in 149 true Claims, and 5% only after no False Assurance in 59 false Claims. The
+harness's own check of the limits is #71. The keys in square brackets here are those of the
+Sources table in `docs/prior-art.md`.
 
 | Provider | Status | Why |
 | --- | --- | --- |
-| MiniMax M3, hosted | Experimental | Three repetitions on the two hand-made cases on 2026-10-13 gave no False Block and a Decided Rate of 0.36. One repetition of 20 cases on 2026-10-12 gave 0.72 (`docs/context-bound.md`). Not yet run on the cases the threshold names |
-| Qwen 3.8, through Ollama or vLLM | Experimental | One repetition on two cases on 2026-10-13, through vLLM, gave no False Block and a Decided Rate of 0.50, under the 0.6 asked |
-| Claude Sonnet 5.5, through the Anthropic protocol | Experimental | Never evaluated: no request has been made to it |
+| MiniMax M3, hosted | Experimental | Never run on the held-out part. On the development part, three repetitions of the two hand-made cases gave no False Block and no False Assurance, over two distinct Claims of each kind at most |
+| Qwen 3.8, through Ollama or vLLM | Experimental | Never run on the held-out part. One repetition of the two hand-made cases, through vLLM, gave no error |
+| Claude Sonnet 5.5, through the Anthropic protocol | Experimental | Never evaluated |
 
 ## Results
 
@@ -164,10 +166,22 @@ report.
 | Dollars for a pull request | 0.039 | 0.079 | 0.006 |
 | Runs stopped by the time limit | 0 of 6 | 3 of 6 | 0 of 6 |
 
+**How much this can show.** Each case is one pull request, and the Claim extractor split each
+into one or two Claims, worded afresh in every run. So each rate rests on two distinct Claims
+of each kind at most, whatever the repetitions. No error in two Claims leaves the upper end
+of a one-sided 95% interval at 78%: these runs cannot show that any rate is under either
+limit of ADR 0006, and the baseline's False Blocks show only that its rate is not zero.
+
 - **The baseline blocked a sound pull request; the system never did.** In two of its three
   runs of the true case, the baseline gave a true Claim Refuted, so the Gate would have
   blocked. That is the error the system exists to keep down, and neither orchestration made
   it once.
+- **Published measurements show the same kind of error.** Models asked whether code meets its
+  requirement without running it accepted up to 40.0% of buggy code and rejected up to 91.9%
+  of correct code, depending on the model and the prompt, and longer prompts made it worse
+  [ls-22]. Against test results, GPT-4.1-mini as a judge gave 23% false positives and 16%
+  false negatives [ls-23]. The baseline is this project's own stand-in for judging by reading
+  and measures none of those tools, but its Refuted true Claim is the error they report.
 - **The baseline decided more, and faster.** It decided 10 of 12 Claims in 23 seconds a pull
   request, where the system decided 4 of 11 and 3 of 8 in about 8 minutes. On cases this small
   reading is enough, and a wrong Refuted is the price of it here.
@@ -176,7 +190,9 @@ report.
   near the limit without reaching it. With the supervisor all three were stopped by the time
   limit. Why no Reproduction there was accepted was not looked into.
 - **The supervisor cost twice what the fixed pipeline did** and decided about the same: 50 to
-  64 steps on the false case against 15 to 24.
+  64 steps on the false case against 15 to 24. No published source compares an LLM supervisor
+  over roles with a fixed pipeline. Cursor and GitHub compared an agent inside one reviewer
+  with a fixed flow [bv-01] [bv-13], which is another question.
 - **The dollars count only requests made through the ledger.** The decider's requests are not
   among them, so the bill is somewhat more. All 18 runs counted 0.75 dollars together.
 
