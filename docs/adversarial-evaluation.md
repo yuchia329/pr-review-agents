@@ -338,3 +338,79 @@ long here; whether it is as long on a true Claim has not been measured.
     be why the second and third attempts think as long as the first. Neither has been tried.
   - Not turning thinking off. It is cheap on most steps, and nothing measured shows it is not
     what makes the writer's Reproductions right.
+
+## What the writer thinks about, and three things tried, 2026-10-14 night
+
+All on `Qwen/Qwen3.8-27B-FP8` on the vLLM server, with the decider the small LLM on the same model.
+The logs, with every prompt and every answer whole, are in
+`~/.cache/pr-verification/measurements/issue-59/2026-10-14/` on the machine that ran them.
+
+### The writer's thinking, read whole
+
+`slug-of-repeated-spaces/description` three times, with the time limit at 1800 seconds and every
+request and answer kept. 15 of the 65 requests wrote over 3,000 tokens and took 4,130 of the
+4,795 seconds spent waiting for the model. By the writer's attempt:
+
+| Attempt | Requests | Time |
+| --- | --- | --- |
+| 1 | 21 | 908 s |
+| 2 | 17 | 2,507 s |
+| 3 | 14 | 1,076 s |
+
+What the long thinking holds:
+
+- **It runs the code in its head.** On the first attempt it already works out that
+  `"hello  world"` becomes `['hello', '', 'world']` and then `"hello--world"`, so the Claim is
+  false, and then writes the right test all the same.
+- **After an attempt that shows nothing, it is caught between the rules.** It is told to mend
+  what was wrong with the last test, and it can see nothing was. It lists what it could do
+  ("Submit the same test again → shows_nothing again. Pointless", or a test of what the code
+  does, which "Violates 'assert the behavior the claim says'") and goes round them for
+  thousands of tokens.
+- **It guesses at the code before the change**, which its tools cannot show it.
+- **It reads the files again in case they changed**: 4 of the 15 longest requests, up to 430
+  seconds, end in no more than reading or listing a file.
+
+### Two changes to the writer's requests, made in the measurement only
+
+Each tried three times on the same case, with the time limit at 1800 seconds. Neither changes
+anything in `src/`: the measurement rewrote the requests on their way to the server.
+
+| | As the system is | The rule reworded | Native tool calls |
+| --- | --- | --- | --- |
+| Time for the pull request | 1,463 to 1,904 s | 457 to 1,037 s | 1,565 to 1,953 s |
+| Claims worked to an end | 2 of 5 | 5 of 5 | 2 of 6 |
+| Writer requests in a run | 12 to 22 | 10 to 21 | 53 to 56 |
+| Longest answer | 13,540 to 20,965 tokens | 4,736 to 5,933 | 6,350 to 8,952 |
+
+- **The rule reworded** replaced "Do not judge whether the Claim is true, and do not write a
+  test that ends the same way whatever the code does" with: the test is run for you on both
+  commits and that decides it; a test that fails on the code before and after alike is a right
+  answer when the code does not do what the Claim says; only a test whose result does not depend
+  on the code at all is wrong. It halved the time, and every Claim was worked to an end. The
+  Verdicts were the same, Inconclusive, which is right for these Claims.
+- **Native tool calls** offered the writer's tools as the protocol's tools and turned the call
+  back into the JSON the system reads. The answers were shorter, but there were about three
+  times as many of them, so nothing was saved. The model often asked for several tools at once
+  and only the first was taken, which may be why.
+
+Three runs each is little, and one case is one case. The reworded rule is worth a group of work
+of its own; it changes the writer's instructions, which the tests pin.
+
+### Whether three attempts are needed, on true Claims: not answered
+
+On the false Claims of this set no attempt has ever shown a difference, so attempts 2 and 3
+changed no Verdict in 46 Claims, and cost 80% of the writer's time. Whether a true Claim needs
+them was to be measured on true cases made from SWE-bench Verified.
+
+- Of the 28 instances of `psf/requests`, `pallets/flask`, and `pytest-dev/pytest`, none became a
+  case on the Python the Sandbox chooses, 3.14: 24 could not install. With the Sandbox's
+  Python set to 3.9 in the measurement only, 1 of the 9 of requests and flask did, and 13 of the
+  54 of `sphinx-doc/sphinx` and `pylint-dev/pylint`.
+- Those 14 cases gave 25 Claims, all Inconclusive, and **no writer finished an attempt but
+  one**. 18 Claims were lost because a request was over the model's context of 32,768 tokens
+  (HTTP 400, "maximum context length"), 6 to an answer that held no text, and one pull request
+  gave no report: the Claim extractor answered with prose and no list.
+- So the context these repositories need is more than this server gives, and the question is
+  still open. It needs either a longer context on the server or a smaller share of it per
+  request (`docs/context-bound.md`).
