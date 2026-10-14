@@ -13,6 +13,7 @@ from conftest import (
     FixtureRepository,
     UnreachableModel,
     asks,
+    assert_shows_only_whole_responses,
     commit_snapshots,
     model_listing,
 )
@@ -159,9 +160,13 @@ def test_role_is_told_of_each_of_its_six_tools_by_its_name_and_what_the_reading_
     stated(accounts, model)
 
     instructions = model.requests[0].instructions
-    for tool in reading_tools(accounts.path, accounts.after):
-        assert tool.description in instructions
-        assert f"before_{tool.name}" in instructions and f"after_{tool.name}" in instructions
+    for which in ("before", "after"):
+        for tool in reading_tools(accounts.path, accounts.after):
+            # Each request the description shows is one the role can make: under its own name.
+            asked_as = f'"tool": "{which}_{tool.name}"'
+            described = tool.description.replace(f'"tool": "{tool.name}"', asked_as)
+            assert described in instructions
+    assert_shows_only_whole_responses(instructions)
 
 
 @pytest.mark.parametrize(
