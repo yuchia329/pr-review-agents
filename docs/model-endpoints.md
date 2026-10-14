@@ -81,6 +81,50 @@ ollama ps   # the CONTEXT column must read 32768
 Always name the model created from the Modelfile, not `qwen3.8:27b` itself, which would run with
 Ollama's default.
 
+## Remote endpoint: vLLM
+
+vLLM serves the same protocol. On a machine with two NVIDIA RTX A4500 cards (20 GB each, sm86),
+`Qwen/Qwen3.8-27B-FP8` is served across both:
+
+```sh
+export VLLM_API_KEY=...   # the key clients send
+vllm serve Qwen/Qwen3.8-27B-FP8 \
+  --host 0.0.0.0 --port 8000 \
+  --tensor-parallel-size 2 \
+  --max-model-len 32768 \
+  --gpu-memory-utilization 0.92 \
+  --max-num-batched-tokens 4096 --max-num-seqs 32 \
+  --limit-mm-per-prompt '{"image":0,"video":0}' \
+  --kv-cache-dtype fp8 \
+  --reasoning-parser qwen3
+
+export PR_VERIFICATION_ENDPOINT=http://<host>:8000/v1
+export PR_VERIFICATION_MODEL=Qwen/Qwen3.8-27B-FP8
+export PR_VERIFICATION_API_KEY=...   # the same key
+```
+
+`--reasoning-parser` puts the model's thinking in a field of its own, so the answer the client
+reads holds none of it.
+
+**Do not pass `--enforce-eager`.** It turns off CUDA graphs and `torch.compile`, and every token
+then costs the same time however many requests share it. Measured on 2026-10-14, with a 300-token
+answer and the network adding under half a second:
+
+| Requests at once | With `--enforce-eager` | Without |
+| --- | --- | --- |
+| 1 | 13 tokens a second | 37 tokens a second |
+| 4 | 14 each | 34 each |
+| 10 | 14 each | 31 each |
+
+Without it the start-up needs more memory. With `--gpu-memory-utilization 0.95` and nothing
+else limited, the start-up ran out of memory; the four flags after `--max-model-len` above are
+what made it fit, the last of them because only text is sent. The server then holds about
+150,000 tokens of context, room for about twelve pull requests at once.
+
+Even at 37 tokens a second, a request that thinks at length takes minutes: an answer of 10,000
+tokens takes four and a half. The client waits five minutes for one answer, and the Reproduction
+writer can need more (see "Why the runs are slow" in `docs/adversarial-evaluation.md`).
+
 ## Manual check against a real endpoint
 
 The automated tests replace the HTTP exchange and never open a connection, so they cannot show
