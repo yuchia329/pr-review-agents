@@ -193,6 +193,9 @@ limit of ADR 0006, and the baseline's False Blocks show only that its rate is no
   64 steps on the false case against 15 to 24. No published source compares an LLM supervisor
   over roles with a fixed pipeline. Cursor and GitHub compared an agent inside one reviewer
   with a fixed flow [bv-01] [bv-13], which is another question.
+- **The baseline's prompt changed after this run.** It showed its answer as the bare
+  `{"verdict": ..., "reason": ...}`, not inside `{"finish": ...}` as the loop reads it, the
+  mistake #66 removed from the other roles. It is now shown whole. A rerun may differ.
 - **The dollars count only requests made through the ledger.** The decider's requests are not
   among them, so the bill is somewhat more. All 18 runs counted 0.75 dollars together.
 

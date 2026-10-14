@@ -59,7 +59,8 @@ Your tools read the files of the repository as they were before the pull request
 after it. You cannot run anything. Read what the Claim is about in both, and decide whether the
 change does what the Claim says.
 
-Finish with {"verdict": "<verdict>", "reason": "<why>"}, where the verdict is one of:
+Finish with {"finish": {"verdict": "<verdict>", "reason": "<why>"}}, where the verdict is one
+of:
 
 confirmed
     the code after the pull request does what the Claim says, and the code before it did not.
