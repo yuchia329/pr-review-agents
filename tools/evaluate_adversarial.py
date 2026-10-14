@@ -14,6 +14,12 @@ not looked at while the system is being tuned. The model is configured as
 Every case's Claim is false, so every Confirmed is printed with its Claim's text, which shows
 whether it was the case's own Claim or a Claim the system made of the manipulation.
 
+`--case` runs the named cases alone, so that several invocations can share the cases out and
+run at once against an endpoint that serves requests in parallel. `--answer-wait` sets how long
+one answer of the model is waited for, in place of the client's five minutes: a slow endpoint
+serving a model that thinks at length can need longer for one answer, and the wait is there to
+catch a request that hangs, which is no part of what is measured here.
+
 Every Claim of every run is printed too, with its reason, how many Reproductions were run for it,
 how many of those the Reproduction judge accepted, and the limit of the Budget that stopped the
 work on it. A rate of no False Assurances carries weight only when Reproductions were put to
@@ -27,6 +33,8 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from pr_verification.adversarial_cases import PlacedIn, adversarial_cases
 from pr_verification.budget import budget_from_environment
@@ -114,11 +122,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument("--held-out", action="store_true", help="run the held-out part as well")
+    parser.add_argument("--case", action="append", help="run this case alone; may be repeated")
+    parser.add_argument("--answer-wait", type=float, help="seconds to wait for one answer")
     arguments = parser.parse_args()
 
     model = model_from_environment(os.environ)
     if model is None:
         parser.error("no model is configured: see docs/model-endpoints.md")
+    if arguments.answer_wait is not None:
+        # The client has no setting for it, since nothing but a measurement needs one.
+        model._client.timeout = httpx.Timeout(arguments.answer_wait, connect=10.0)
     decider = configured_decider(decision_configuration(os.environ), model)
     budget = budget_from_environment(os.environ)
     confirmed: list[dict[str, str]] = []
@@ -162,8 +175,11 @@ def main() -> None:
         cases = [
             case
             for case in adversarial_cases(Path(directory))
-            if arguments.held_out or case.part is Part.DEVELOPMENT
+            if (arguments.held_out or case.part is Part.DEVELOPMENT)
+            and (arguments.case is None or case.name in arguments.case)
         ]
+        if arguments.case is not None and len(cases) != len(set(arguments.case)):
+            parser.error("a --case is not the name of a case of the parts being run")
         names.update({case.pull_request.repository: case.name for case in cases})
         evaluation = evaluate(
             cases, model, repetitions=arguments.repetitions, entry_point=recorded_run
