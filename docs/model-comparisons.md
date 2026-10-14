@@ -105,14 +105,15 @@ The threshold is a proposal made with this write-up, and no run has been held to
 | Provider | Status | Why |
 | --- | --- | --- |
 | MiniMax M3, hosted | Experimental | Not yet run three times. One repetition on 2026-10-12 gave no False Block and a Decided Rate of 0.72 (`docs/context-bound.md`) |
-| Qwen 3.8, through Ollama | Experimental | Never evaluated: the model is not on the machine |
+| Qwen 3.8, through Ollama or vLLM | Experimental | One repetition on two cases on 2026-10-13, through vLLM, gave no False Block and a Decided Rate of 0.50, under the 0.6 asked |
 | Claude Sonnet 5.5, through the Anthropic protocol | Experimental | Never evaluated: no request has been made to it |
 
 ## Results
 
-**None yet.** On 2026-10-13, when the clients and the configurations were implemented, the
-machine held no key for any hosted model and Ollama had no `pr-verification-qwen`, so no
-comparison could be run. What was checked that day:
+**One small run so far, below.** On 2026-10-13, when the clients and the configurations were
+implemented, the machine held no key for any hosted model and Ollama had no
+`pr-verification-qwen`, so no comparison could be run on the named configurations. What was
+checked that day:
 
 - `tools/compare_configurations.py --run self-hosted/pipeline --baseline self-hosted
   --capabilities` ran to the end against Ollama. Every run ended with no report, on the
@@ -137,13 +138,59 @@ unchanged only when the server is reached at that address, as through a forwarde
 serves the model under that name. A request then leaves the machine, which is not what
 `self-hosted` is named for, and the write-up of that run must say so.
 
+### Qwen 3.8 on another machine, 2026-10-13
+
+Qwen 3.8 (`Qwen/Qwen3.8-27B-FP8`) served by vLLM on two RTX A4500 cards, with a window of
+32768 tokens, reached through a forwarded port. It was in every role and behind the decider
+(`PR_VERIFICATION_DECISION=small_llm`), under a configuration made with `--every-role`. This is
+not `self-hosted`: every request left the machine. The Sandbox was Docker 28.4.0 on an Apple
+M4 Pro.
+
+```sh
+PR_VERIFICATION_DECISION=small_llm uv run python tools/compare_configurations.py \
+  --every-role qwen-remote http://localhost:18000/v1 Qwen/Qwen3.8-27B-FP8 QWEN_REMOTE_KEY \
+  --run qwen-remote/pipeline --run qwen-remote/supervisor --baseline qwen-remote
+```
+
+The two hand-made development cases, once each. Every run gave a report.
+
+| | Fixed pipeline | Supervisor | Reading-only baseline |
+| --- | --- | --- | --- |
+| Claims | 4 | 4 | 5 |
+| Decided Rate | 0.50 | 0.50 | 1.00 |
+| False Block rate | 0 | 0 | 0 |
+| False Assurance rate | 0 | 0 | 0 |
+| Seconds for a pull request | 587 | 824 | 165 |
+| Dollars for a pull request | 0 | 0 | 0 |
+
+- **Two pull requests are too few to rank anything.** Each rate is a share of four or five
+  Claims from one repetition, and `docs/structural-cases.md` records that a Verdict varies
+  from run to run.
+- **The baseline decided every Claim and the system half of them, on these two cases.** The
+  baseline states a Verdict from the model's word, so it is Inconclusive only when the model
+  says so. The system is Inconclusive whenever no Reproduction was written, run, and accepted.
+  Nobody was wrong here: no run gave a False Block or a False Assurance. These cases are small
+  enough to judge by reading, which is not where a Reproduction is expected to earn its time.
+- **Why the system's two Claims were Inconclusive is not known.** The tool prints scores and
+  not reasons. A pull request took 587 and 824 seconds against a Budget of 900, so the time
+  limit may have ended the work: that was not checked.
+- **The supervisor took 1.4 times as long as the fixed pipeline and decided the same.** The
+  server was shared with at least one other user's requests, so the times are not clean.
+- **The runs did not score the same Claims.** The Claim extractor split the two pull requests
+  into four Claims in two runs and five in the third.
+- **Not measured:** more than one repetition, the held-out part, the Structural cases, and the
+  model through Ollama on this machine.
+
+Qwen 3.8 stays experimental: one repetition, and a Decided Rate of 0.5 against the 0.6 asked.
+
 Still to run and record here, each with the command above:
 
-- the supervisor against the fixed pipeline;
+- the supervisor against the fixed pipeline, on the default configuration and more than once;
 - the ceiling against the default;
 - self-hosted against the default;
 - GPT-5.6 Luna against Gemini 3.5 Flash-Lite in the light roles;
-- the reading-only baseline against the system on the Behavioural cases;
+- the reading-only baseline against the system on the Behavioural cases, on the default
+  configuration and more than once;
 - the effect of prompt caching and of parallel tool calls on time and cost.
 
 ## What to keep in mind when reading the results

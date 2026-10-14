@@ -18,6 +18,10 @@ models name, as `docs/model-endpoints.md` describes, and the decider is configur
 called NAME that has that model in the light roles, which are the Claim extractor and the small
 LLM behind the decider, and what the default has in the reasoning roles.
 
+`--every-role NAME ENDPOINT MODEL KEY_VARIABLE` makes a configuration called NAME that has
+that model in every role and behind the decider, as `self-hosted` has its own, for a model
+served somewhere `self-hosted` does not name. It has no price but the environment's.
+
 `--baseline CONFIGURATION` adds the reading-only baseline (`pr_verification.baseline`), run on
 that configuration's models with the step cap of the Reproduction writer.
 
@@ -96,6 +100,12 @@ def light(name: str, endpoint: str, model: str, key_variable: str, *price: str) 
     return Configuration(name, choice, roles=dict.fromkeys(REASONING_ROLES, DEFAULT.default))
 
 
+def every_role(name: str, endpoint: str, model: str, key_variable: str) -> Configuration:
+    """The configuration `--every-role` makes."""
+    choice = ModelChoice(ModelProtocol.OPENAI_COMPATIBLE, endpoint, model, key_variable)
+    return Configuration(name, choice)
+
+
 def without_parallel_tool_calls(configuration: Configuration) -> Configuration:
     """The configuration with no model relied on to ask for several tools at once."""
     return replace(
@@ -124,6 +134,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--run", action="append", default=[], metavar="CONFIGURATION/ORCHESTRATION")
     parser.add_argument("--light", action="append", default=[], nargs=6)
+    parser.add_argument("--every-role", action="append", default=[], nargs=4)
     parser.add_argument("--baseline", metavar="CONFIGURATION")
     parser.add_argument("--capabilities", action="store_true")
     parser.add_argument("--repetitions", type=int, default=1)
@@ -133,6 +144,7 @@ def main() -> None:
 
     named = dict(CONFIGURATIONS)
     named.update({given[0]: light(*given) for given in arguments.light})
+    named.update({given[0]: every_role(*given) for given in arguments.every_role})
     runs: list[tuple[Configuration, OrchestrationChoice]] = []
     for asked in arguments.run:
         name, _, how = asked.partition("/")
