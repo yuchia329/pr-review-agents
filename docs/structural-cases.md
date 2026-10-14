@@ -128,7 +128,9 @@ command prints what the harness scored for each part and the Verdicts of every r
 `--part development` runs one part, `--case` runs the cases whose name holds a text and can be
 given more than once, and `--repetitions` runs each case more than once. `--reports` names a
 directory that the report of every run is written into, so that the Evidence behind a Verdict
-can be read afterwards.
+can be read afterwards. The Budget is the one the environment sets, as `docs/model-endpoints.md`
+says, and `--no-request-limit` lifts the client's limit of five minutes on one request, for a
+measurement on a server too busy to answer within it.
 
 ## First results, 2026-10-12
 

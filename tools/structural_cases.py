@@ -36,6 +36,10 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+import httpx
+
+from pr_verification import openai_compatible
+from pr_verification.budget import budget_from_environment
 from pr_verification.core import PullRequest, run
 from pr_verification.decision import configured_decider, decision_configuration
 from pr_verification.evaluation import Case, Part, evaluate
@@ -198,6 +202,7 @@ def main() -> None:
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument("--case", action="append", default=[], metavar="TEXT")
     parser.add_argument("--reports", type=Path, metavar="DIRECTORY")
+    parser.add_argument("--no-request-limit", action="store_true")
     arguments = parser.parse_args()
 
     wanted = [
@@ -221,16 +226,22 @@ def main() -> None:
                 sys.exit(1)
             return
 
+        if arguments.no_request_limit:
+            # For a measurement on a slow or shared server only: the client's limit on how long
+            # one request may take is a guardrail of production, and here it would make a
+            # Claim Inconclusive for the server's load rather than for anything in the code.
+            openai_compatible._TIMEOUT = httpx.Timeout(None, connect=10.0)
         model = model_from_environment(os.environ)
         if model is None:
             parser.error("no model is configured: see docs/model-endpoints.md")
         decider = configured_decider(decision_configuration(os.environ), model)
+        budget = budget_from_environment(os.environ)
 
         names = {case.pull_request.after: case.name for case in cases}
         written: Counter[str] = Counter()
 
         def classified_run(pull_request: PullRequest, model: Model) -> Report:
-            report = run(pull_request, model, decider)
+            report = run(pull_request, model, decider, budget=budget)
             if arguments.reports is not None:
                 # One file for each run, so the Evidence behind a Verdict can be read afterwards.
                 name = names[pull_request.after].removeprefix("structural/").replace("/", "--")
