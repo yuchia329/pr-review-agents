@@ -362,9 +362,10 @@ for a timeout or a spent Budget. They took 4 hours 45 minutes.
   and code found the old name in no file after them.
 - **No False Block.**
 
-The ten false Claims of these runs that are not the rename, such as "Nothing in
-`src/attr/_make.py` uses the old name", were Refuted in six runs and Inconclusive in four, two
-of them Behavioural Claims whose Reproduction writer gave an answer that could not be read.
+The nine other false Claims of these runs, such as "Nothing in `src/attr/_make.py` uses the old
+name", were Refuted five times and Inconclusive four: three Behavioural Claims, two whose
+Reproduction writer gave an answer that could not be read and one whose share of the Budget ran
+out, and one Structural Claim whose verifier did not finish within its 12 steps.
 
 ## What is still to do
 
