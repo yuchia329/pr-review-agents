@@ -33,6 +33,83 @@ prints every asking of the guard with the steps it was about. An asking counts a
 that was getting there when it came in the attempt of the Reproduction writer that went on to
 show a difference in behaviour. That is a coarse rule, which is why the steps are printed.
 
+### Why responses could not be read, 2026-10-13: the instructions showed bare answers
+
+After #66 the responses left unreadable were looked at again, with every response of every role
+recorded and sorted. Most came from the wording roles were given. Each role's own instructions
+showed what it finishes with as a bare object, such as `{"accepted": true}`, while the loop's
+wording asked for `{"finish": {...}}`, and the reading tools showed their arguments bare. A model
+given both had to put them together itself, and often did not.
+
+The wording was replaced in memory, on the code of #66, and the two hand-made development cases
+were run through the core's entry point with each variant. The decider was the small LLM. The
+variants:
+
+- `baseline`: the wording as it was.
+- `whole_form`: the writer told to finish with `{"finish": {"reproduction": "<text>"}}`.
+- `rule`: `whole_form`, and a sentence that the reply starts with `{` and ends with `}`, with no
+  reasoning before it, no code fence, and nothing after it.
+- `one_shot`: `whole_form`, and one example of a step that asks for a tool and one that finishes.
+- `few_shot_rule`: `whole_form`, four example replies, and the rule.
+- `wrap`: the loop's wording saying that what a role's instructions say it finishes with goes
+  inside `finish`, with an example. No role's instructions changed.
+- `wrap_one_shot` and `wrap_rule`: `wrap` with the example, or with the rule.
+
+Only the Reproduction writer and the Reproduction judge run through the agent loop on these cases,
+so only they are counted. A response is unreadable as `run_role` reads it.
+
+**Qwen3.8 27B (FP8, served by vLLM, which keeps the model's reasoning out of the response), four
+pull requests a variant:**
+
+| Variant | Writer unreadable | Judge unreadable | Claims decided |
+| --- | --- | --- | --- |
+| `baseline` | 3 of 38 | 8 of 13 | 5 of 10 |
+| `whole_form` | 0 of 41 | 9 of 12 | 3 of 9 |
+| `rule` | 0 of 37 | 3 of 8 | 5 of 9 |
+| `one_shot` | 0 of 33 | 1 of 6 | 5 of 9 |
+| `few_shot_rule` | 1 of 34 | 5 of 8 | 3 of 9 |
+| `wrap` | 1 of 35 | 0 of 4 | 4 of 8 |
+| `wrap_one_shot` | 2 of 34 | 1 of 5 | 4 of 8 |
+
+Every unreadable response under `baseline` was the answer with no `finish` around it.
+
+**MiniMax M3, two pull requests a variant:**
+
+| Variant | Writer unreadable | Judge unreadable | Claims decided | Requests | Tokens sent / received | Seconds a pull request |
+| --- | --- | --- | --- | --- | --- | --- |
+| `baseline` | 8 of 33 | 2 of 4 | 2 of 5 | 48 | 66,942 / 61,252 | 713 |
+| `wrap` | 0 of 18 | 1 of 2 | 1 of 3 | 25 | 32,989 / 18,392 | 368 |
+| `wrap_rule` | 1 of 14 | 1 of 2 | 1 of 2 | 20 | 27,945 / 11,878 | 277 |
+
+Under `baseline` all 8 of the writer's unreadable responses began with the model's reasoning, and 3
+more were read only because of #66. Under `wrap` none began with reasoning. Every unreadable
+response of the judge was the bare `{"accepted": true}` its own instructions showed.
+
+What this showed:
+
+- **The conflict between the two forms caused most unreadable responses.** Showing the writer its
+  finish whole took its bare answers to none on Qwen3.8. Saying it once in the loop's wording, with
+  an example, did the same for the judge on Qwen3.8 and stopped MiniMax M3 beginning with its
+  reasoning, which had looked like a habit of the model.
+- **Fewer wasted steps made the runs shorter.** Under `wrap` MiniMax M3 made half the requests and
+  received under a third of the tokens.
+- **More examples and a stricter rule added nothing** that these runs could show.
+- **The judge's own example outweighed the loop's sentence**: `{"accepted": true}` stayed bare on
+  both models whatever the loop said.
+- **No variant changed a Verdict for the worse**: there was no False Block and no False Assurance.
+  The number of Claims found and decided moved between runs as much as between variants.
+
+Two to four pull requests a variant are too few for rates. Both models point the same way.
+
+So every example a role is shown is now a whole response: each role's finish inside `finish`, each
+tool's arguments inside a request for it, and the loop's wording says so with an example
+(`Role.instructions`, `Tool.description`, and `run_role`, under #66).
+
+The wording as shipped (c4fbd02) was run the same way on Qwen3.8, four pull requests: none of the
+writer's 41 responses and none of the judge's 5 were unreadable, against 3 of 38 and 8 of 13 under
+`baseline`. All four runs gave a report, 5 of 9 Claims were decided, and there was no False Block
+and no False Assurance. It was not run again on MiniMax M3.
+
 ### After #66, 2026-10-13: no false trigger in four askings, none of a role getting there
 
 Since #66 the loop reads the object a response begins with and leaves unread what follows it.
@@ -80,8 +157,8 @@ What is still to do:
 - Measure on the development cases made from SWE-bench Verified, which keep a role working
   longer: on the hand-made cases a writer that is getting there now ends before the guard is
   asked, so they give no rate of false triggers.
-- Decide how a response that begins with the model's reasoning is to be treated, and one that
-  holds the answer with no `finish` around it.
+- Measure the progress guard again with the wording that shows every finish whole, described
+  above: with fewer unreadable steps, a writer that is getting there ends sooner still.
 - Measure with Laya as the decider, the default. Here the small LLM answered every asking.
 
 ### Results, 2026-10-12: one false trigger in three askings
