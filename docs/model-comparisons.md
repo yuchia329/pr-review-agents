@@ -239,7 +239,7 @@ The two hand-made development cases, once each. Every run gave a report.
 - **Not measured:** more than one repetition, the held-out part, the Structural cases, and the
   model through Ollama on this machine.
 
-Qwen 3.8 stays experimental: one repetition, and a Decided Rate of 0.5 against the 0.6 asked.
+Qwen 3.8 stays experimental: it has not been run on the held-out part that ADR 0006 reads.
 
 Still to run and record here, each with the command above:
 
