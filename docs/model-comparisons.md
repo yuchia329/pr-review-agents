@@ -185,10 +185,16 @@ limit of ADR 0006, and the baseline's False Blocks show only that its rate is no
 - **The baseline decided more, and faster.** It decided 10 of 12 Claims in 23 seconds a pull
   request, where the system decided 4 of 11 and 3 of 8 in about 8 minutes. On cases this small
   reading is enough, and a wrong Refuted is the price of it here.
-- **The system never decided the false case.** Every one of its Claims there was
-  Inconclusive, in all six runs. With the fixed pipeline those runs took 591 to 874 seconds,
-  near the limit without reaching it. With the supervisor all three were stopped by the time
-  limit. Why no Reproduction there was accepted was not looked into.
+- **The system never decided the false case, and by its own rule it cannot.** Every one of its
+  Claims there was Inconclusive, in all six runs. The pull request claims
+  `initials("Mary-Jane Watson")` now returns `"MJW"`, and changes nothing of what the code
+  does, so a Reproduction of the Claim fails on both commits. `compute_verdict` gives Refuted
+  only for a regression, a test that passed before and fails after, and says that one failing
+  on both commits "does neither: the Claim may be false, or the Reproduction may be wrong".
+  That rule is the control on False Blocks. Its price is that a false Claim about a change
+  that did nothing is never Refuted, whatever the model, and the writer and the judge go round
+  until the round cap or the Budget ends them: 591 to 874 seconds with the fixed pipeline,
+  and the time limit in all three runs with the supervisor.
 - **The supervisor cost twice what the fixed pipeline did** and decided about the same: 50 to
   64 steps on the false case against 15 to 24. No published source compares an LLM supervisor
   over roles with a fixed pipeline. Cursor and GitHub compared an agent inside one reviewer
@@ -198,6 +204,30 @@ limit of ADR 0006, and the baseline's False Blocks show only that its rate is no
   mistake #66 removed from the other roles. It is now shown whole. A rerun may differ.
 - **The dollars count only requests made through the ledger.** The decider's requests are not
   among them, so the bill is somewhat more. All 18 runs counted 0.75 dollars together.
+
+### The ceiling, 2026-10-14
+
+Claude Sonnet 5.5 in the reasoning roles and MiniMax M3 in the Claim extractor and behind the
+decider, with the fixed pipeline, once on each of the two hand-made cases. The Budget was 1.50
+dollars a pull request, raised from 0.50 so that the money limit would not stand in for the
+model; the rest as above.
+
+```sh
+PR_VERIFICATION_BUDGET_DOLLARS=1.50 uv run python tools/compare_configurations.py \
+  --run ceiling/pipeline --repetitions 1
+```
+
+| Case | Expected | Verdicts | Seconds | Dollars | Steps | Stopped by |
+| --- | --- | --- | --- | --- | --- | --- |
+| `median-of-an-even-count` | Confirmed | Confirmed, Confirmed | 49 | 0.05 | 14 | nothing |
+| `initials-of-a-hyphenated-name` | Refuted | Inconclusive, Inconclusive | 367 | 1.08 | 33 | nothing |
+
+- **Claude did on the true case what MiniMax did, faster.** Both Claims Confirmed in 49
+  seconds, where MiniMax took 54 to 423.
+- **The false case stayed Inconclusive, as the rule above says it must.** A stronger model
+  does not change it: it spent 1.08 dollars, 95% of the run's cost, on a Claim the system
+  cannot Refute. At the 0.50 cap the run would have been stopped by money.
+- **One run on two cases**, so nothing here compares the ceiling with the default beyond that.
 
 ### Qwen 3.8 on another machine, 2026-10-13
 
@@ -246,7 +276,7 @@ Qwen 3.8 stays experimental: it has not been run on the held-out part that ADR 0
 
 Still to run and record here, each with the command above:
 
-- the ceiling against the default;
+- the ceiling against the default, more than once and on more cases;
 - self-hosted against the default;
 - GPT-6 Luna (`gpt-6-luna`, 0.10 and 0.50 dollars for a million tokens) against Gemini 3.5
   Flash-Lite (`gemini-3.5-flash-lite`, 0.30 and 2.50) in the light roles. The project owner
