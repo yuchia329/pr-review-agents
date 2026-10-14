@@ -8,6 +8,7 @@ from pr_verification.report import (
     AcceptedReproduction,
     ClaimKind,
     Evidence,
+    RemovedNameEvidence,
     ReproductionEvidence,
     SearchEvidence,
     TextChange,
@@ -231,7 +232,12 @@ def compute_verdict(
         is for the Structural cases of the evaluation to measure.
     """
     if kind is ClaimKind.STRUCTURAL:
-        return _from_searches([piece for piece in evidence if isinstance(piece, SearchEvidence)])
+        searches = [piece for piece in evidence if isinstance(piece, SearchEvidence)]
+        # Of a name, only whether the code after the pull request holds it is read.
+        name_kept = any(
+            isinstance(piece, RemovedNameEvidence) and piece.after_lines for piece in evidence
+        )
+        return _from_searches(searches, name_kept)
     ran = [
         (piece, results)
         for piece in evidence
@@ -250,8 +256,9 @@ def compute_verdict(
     return Computed(Verdict.INCONCLUSIVE, DECIDES_NOTHING)
 
 
-def _from_searches(searches: Sequence[SearchEvidence]) -> Computed:
-    """The Verdict for a Structural Claim, from the searches among its Evidence."""
+def _from_searches(searches: Sequence[SearchEvidence], name_kept: bool) -> Computed:
+    """The Verdict for a Structural Claim, from the searches among its Evidence and whether a
+    name it names is kept."""
     if not searches:
         return Computed(Verdict.INCONCLUSIVE, NOTHING_SEARCHED)
     # Only the change and how many lines hold the text are read.
@@ -266,6 +273,8 @@ def _from_searches(searches: Sequence[SearchEvidence]) -> Computed:
         shown and search.change is TextChange.REMOVED and bool(search.after_lines_elsewhere)
         for shown, search in zip(changed, searches, strict=True)
     ]
+    if name_kept:
+        return Computed(Verdict.INCONCLUSIVE, NAME_KEPT)
     if any(kept_elsewhere):
         return Computed(Verdict.INCONCLUSIVE, KEPT_ELSEWHERE)
     if all(changed):

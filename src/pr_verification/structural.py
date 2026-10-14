@@ -15,6 +15,7 @@ from pr_verification.agent import Role, RoleRun, Stopped, Tool, _stopped_looping
 from pr_verification.decision import Decider
 from pr_verification.model import Model, ModelFailed
 from pr_verification.reading import lines_holding, reading_tools
+from pr_verification.removed_names import names_removed
 from pr_verification.report import (
     EvidenceSource,
     RemovedNameEvidence,
@@ -139,7 +140,7 @@ def verify_structural_claim(
     An entry is left out when it is not an object, when it has no `text`, no `change`, or a
     member other than those and `path`, when its `text` is not a string, is blank, or holds a
     line feed, when its `change` is not one of the two values, and when its `path` is not a
-    string or is empty. There is no Evidence at all when the answer has no list under
+    string or is empty. `evidence` is empty when the answer has no list under
     `texts`, or when that list has more than `TEXT_CAP` entries, counting those that would be
     left out: the cap is enforced here, by code, and a longer list is searched for nothing.
 
@@ -180,14 +181,16 @@ def verify_structural_claim(
         return StructuralRun(run, evidence=(), inconclusive=reason)
     if run.stopped is Stopped.LOOP:
         return StructuralRun(run, evidence=(), inconclusive=_stopped_looping(run))
+    # The role finished. Code finds the names itself, whatever the role finished with.
+    names = names_removed(claim, repository=repository, before=before, after=after)
     texts = run.answer.get("texts") if run.answer is not None else None
     if not isinstance(texts, list) or len(texts) > TEXT_CAP:
-        return StructuralRun(run, evidence=(), inconclusive=None)
+        return StructuralRun(run, evidence=(), inconclusive=None, names=names)
     named = [entry for entry in map(_named, texts) if entry is not None]
     evidence = tuple(
         search_for(repository, before, after, text, change, path) for text, change, path in named
     )
-    return StructuralRun(run, evidence, inconclusive=None)
+    return StructuralRun(run, evidence, inconclusive=None, names=names)
 
 
 def _named(entry: object) -> tuple[str, TextChange, str | None] | None:

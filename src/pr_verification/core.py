@@ -155,7 +155,8 @@ def run(
     Claim, the reason is that. So the report of a Claim with a Reproduction shows the
     Reproduction and its output on the code before and after the pull request, as
     `ReproductionEvidence` is printed, and the report of a Structural Claim shows each text
-    searched for and the lines that hold it, as `SearchEvidence` is printed.
+    searched for and the lines that hold it, as `SearchEvidence` is printed, and then each
+    name code found in what the pull request removes, as `RemovedNameEvidence` is printed.
 
     Neither a model nor the orchestration can give a Verdict. Whatever a model says, and
     whatever `inconclusive` holds, a Behavioural Claim is Inconclusive unless a Reproduction

@@ -112,8 +112,8 @@ With these the keys bear out all 32 cases as before: 21 true cases Confirmed, 10
 Refuted, and the one false case the rule cannot Refute Inconclusive.
 
 What the rule does not reach: a verifier that names only the text a rename adds, with a path,
-is still Confirmed by a search of one file. So is one that names a text narrower than the name,
-which is what the results of 2026-10-13 below found.
+or a text narrower than the name, which is what the results of 2026-10-13 below found. The
+search for the name itself, further down, is for those.
 
 ## Running the cases
 
@@ -265,12 +265,56 @@ again taken from the same runs.
 So the rule earns its place with this model and is not enough: half of the False Assurances of
 a rename that skips a file are left, and all of them come from a text narrower than the name.
 
+## Code finds the name the Claim names
+
+Decided on 2026-10-13, after the two sets of results above (#67). Every False Assurance left
+came from a text narrower than the name the Claim is about, and no search for a text a model
+chose can catch that. So code now looks for the name itself, with no model, the way an engineer
+would look a word up:
+
+1. It takes the names on the lines the pull request's files lose, less those on the lines they
+   gain. A setting whose value changes is on both, and is left out.
+2. It keeps those the Claim names, compared with letter case, spaces, underscores, and other
+   punctuation set aside, so that `py nogil`, `PYNOGIL`, and `py-nogil` all name `Py_NOGIL`.
+3. Of those it keeps the most specific, the longest, since a shorter one is most often an
+   ordinary word of the sentence, and sets a name aside as too general when more than 100
+   lines held it before the pull request.
+4. It searches every file of the code after the pull request for each name left, as a whole
+   name.
+
+A name still held stops Confirmed: the Claim is Inconclusive, with the reason `NAME_KEPT`. It
+is never Refuted for it, because a name can have good reason to stay, as in a changelog. What
+is found is in the report as Evidence of its own. The rule is stated in `names_removed` and
+`compute_verdict`.
+
+The rule was first tried on the reports already kept, with no model asked: the 61 runs of
+2026-10-13 with both models, 82 Claims. The Verdict of each Claim was computed again with the
+names code finds for it.
+
+| | Without the names | With them |
+| --- | --- | --- |
+| Decided | 46 | 46 |
+| Inconclusive | 28 | 36 |
+| False Blocks | 0 | 0 |
+| False Assurances | 8 | 0 |
+
+All eight False Assurances were the three renames that skip a file, and for each code found
+the old name, `Py_NOGIL`, `URLMatcher`, or `__post_init__`, in the file left out. No true Claim
+changed its Verdict. A first try without step 3 took the same eight away and cost five true
+Claims, for words such as `from`, `class`, and `docs`.
+
+These numbers flatter the rule. Step 3 and its limit of 100 lines were settled while looking
+at these same cases, the held-out part among them, so they say what the rule does on the
+cases it was made for and not on others.
+
+What it does not reach: a Claim that does not write the name at all, as "the GIL flag" for
+`Py_NOGIL`, and a Claim that names two things the pull request removes, of which only the
+longer name is searched for.
+
 ## What is still to do
 
 - Repeat the run, to see how much the Verdicts vary, and set the model's prices so that the
   cost of a pull request is recorded.
-- Decide what a rename is searched for when the verifier names a line and not the name. The
-  search of the other files does not reach it, and it is where every False Assurance of
-  2026-10-13 came from.
+- Try the search for the name on cases it was not made for.
 - Run all 32 cases with the rule and MiniMax M3, for what the rule costs it in Decided Rate.
 - Run with the default decider, Laya, which needs `uv sync --extra laya`.

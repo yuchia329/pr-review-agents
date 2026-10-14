@@ -144,6 +144,13 @@ def lines_holding(
     return tuple(files.holding(text, [path])) if path in files.paths else ()
 
 
+def lines_of_files(repository: Path, commit: str) -> dict[str, list[str]]:
+    """Every file of `commit` in `repository` with its lines, by path. Files, their text, and
+    their lines are as `reading_tools` has them. What the lines hold is Untrusted Content."""
+    files = _Files(repository, commit)
+    return dict(files.lines_of_each(sorted(files.paths)))
+
+
 @dataclass(frozen=True)
 class Located:
     """What the locator found for one Claim, and the record of its run."""

@@ -545,7 +545,8 @@ class FixedPipeline:
             progress_guard=self.progress_guard,
         )
         runs = () if verified.run is None else (verified.run,)
-        return Gathered(verified.evidence, verified.inconclusive, loops=_loops(runs))
+        evidence = (*verified.evidence, *verified.names)
+        return Gathered(evidence, verified.inconclusive, loops=_loops(runs))
 
     def _prepare(
         self, repository: Path, before: str, after: str, sandbox_for: SandboxFor

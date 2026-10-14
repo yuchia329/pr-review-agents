@@ -18,10 +18,11 @@ the part its true case is in.
 
 Each entry also holds an answer key: texts a careful reader of the Claim would have the code
 searched for. The system is never shown it. `--check-keys` asks no model: it searches each
-case's two commits for the texts of its key, as the Structural verifier would, and computes the
-Verdict. A true case whose key does not give Confirmed, or a false case whose key gives
-Confirmed, is a case whose answer the code does not bear out, and the command exits with 1.
-A false case whose key gives Inconclusive is one the rule for Refuted cannot reach.
+case's two commits for the texts of its key, as the Structural verifier would for texts its
+role named, and computes the Verdict. A true case whose key does not give Confirmed, or a
+false case whose key gives Confirmed, is a case whose answer the code does not bear out, and
+the command exits with 1. A false case whose key gives Inconclusive is one the rule for
+Refuted cannot reach.
 """
 
 import argparse
@@ -173,7 +174,8 @@ def built(case: StructuralCase, clone: Path, directory: Path) -> Case:
 
 def key_verdict(case: Case, key: tuple[KeyText, ...]) -> Verdict:
     """The Verdict the code computes when a case's two commits are searched for the texts of
-    `key`: what the Structural verifier's Evidence would give had it named exactly those."""
+    `key`: what the searches of the Structural verifier would give had it named exactly those.
+    The names code finds for a Claim are not among this Evidence."""
     shown = case.pull_request
     evidence = [
         search_for(shown.repository, shown.before, shown.after, text.text, text.change, text.path)

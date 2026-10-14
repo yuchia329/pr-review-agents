@@ -8,13 +8,23 @@ mean anything, and searches every file of the code after the pull request for wh
 model is asked (ADR 0002).
 """
 
+import re
+from collections import Counter
+from collections.abc import Mapping
 from pathlib import Path
 
-from pr_verification.report import RemovedNameEvidence
+from pr_verification.reading import lines_of_files
+from pr_verification.report import EvidenceSource, RemovedNameEvidence
 
 GENERAL_NAME_LINES = 100
 """The most lines of the code before the pull request that may hold a name as a whole name
 before it is too general to be searched for."""
+
+_RUN = re.compile(r"[A-Za-z0-9_]+")
+"""A run of the characters a name is made of, as long as it can be."""
+
+_LETTER = re.compile(r"[A-Za-z]")
+_NOT_FOLDED = re.compile(r"[^A-Za-z0-9]")
 
 
 def names_removed(
@@ -73,5 +83,75 @@ def names_removed(
     The answer is empty when the Claim names no such name, which includes a pull request
     that removes no line.
     """
-    # Contract only: no name is looked for until this is implemented.
-    return ()
+    before_lines = lines_of_files(repository, before)
+    after_lines = lines_of_files(repository, after)
+    named = _named(claim, _removed(before_lines, after_lines))
+    longest = max((len(_folded(name)) for name in named), default=0)
+    most_specific = sorted(name for name in named if len(_folded(name)) == longest)
+    evidence = []
+    for name in most_specific:
+        if len(_holding(name, before_lines)) > GENERAL_NAME_LINES:
+            continue
+        found = _holding(name, after_lines)
+        evidence.append(
+            RemovedNameEvidence(
+                source=EvidenceSource.READ_CODE,
+                observation=f"lines holding the name: {len(found)} after",
+                name=name,
+                after_lines=found,
+            )
+        )
+    return tuple(evidence)
+
+
+def _names(line: str) -> set[str]:
+    """The names on a line."""
+    return {run for run in _RUN.findall(line) if _LETTER.search(run)}
+
+
+def _folded(text: str) -> str:
+    """A text in lower case with every character that is not an ASCII letter or digit taken
+    out."""
+    return _NOT_FOLDED.sub("", text).lower()
+
+
+def _removed(before: Mapping[str, list[str]], after: Mapping[str, list[str]]) -> set[str]:
+    """The names the pull request removes lines of: on a line some file loses and on no line
+    any file gains."""
+    lost: set[str] = set()
+    gained: set[str] = set()
+    for path in before.keys() | after.keys():
+        was, now = Counter(before.get(path, ())), Counter(after.get(path, ()))
+        lost.update(*(_names(line) for line in was - now))
+        gained.update(*(_names(line) for line in now - was))
+    return lost - gained
+
+
+def _named(claim: str, names: set[str]) -> set[str]:
+    """Those of `names` that the Claim names: the same, folded, as one word of the Claim or
+    several adjacent ones put together."""
+    folds = {_folded(name) for name in names}
+    longest = max(map(len, folds), default=0)
+    words = [_folded(word) for word in claim.split()]
+    said = set()
+    for start in range(len(words)):
+        together = ""
+        # Words put together only grow, so one already longer than every name ends the run.
+        for word in words[start:]:
+            together += word
+            if len(together) > longest:
+                break
+            said.add(together)
+    return {name for name in names if _folded(name) in said}
+
+
+def _holding(name: str, files: Mapping[str, list[str]]) -> tuple[str, ...]:
+    """Every line of these files that holds `name` as a whole name, each as
+    `<path>:<line number>:<line>`, by path and then by line number."""
+    whole = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])")
+    return tuple(
+        f"{path}:{number}:{line}"
+        for path in sorted(files)
+        for number, line in enumerate(files[path], start=1)
+        if whole.search(line)
+    )
