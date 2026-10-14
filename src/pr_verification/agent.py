@@ -77,7 +77,12 @@ class Tool:
     """What the model calls the tool by."""
 
     description: str
-    """What the tool does and the arguments it takes, written by the project for the model."""
+    """What the tool does and the arguments it takes, written by the project for the model.
+
+    Every JSON object it shows is a whole response, as `Role.instructions` has it: arguments
+    are shown inside a request for the tool, as
+    `{"tool": "read_file", "arguments": {"path": "billing/tax.py"}}`, and never as the bare
+    `{"path": "billing/tax.py"}`."""
 
     run: Callable[[Mapping[str, object]], str]
     """Does the work for the arguments the model gave and returns what the model is shown.
