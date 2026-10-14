@@ -188,7 +188,9 @@ Still to run and record here, each with the command above:
 - the supervisor against the fixed pipeline, on the default configuration and more than once;
 - the ceiling against the default;
 - self-hosted against the default;
-- GPT-5.6 Luna against Gemini 3.5 Flash-Lite in the light roles;
+- GPT-6 Luna (`gpt-6-luna`, 0.10 and 0.50 dollars for a million tokens) against Gemini 3.5
+  Flash-Lite (`gemini-3.5-flash-lite`, 0.30 and 2.50) in the light roles. The project owner
+  chose GPT-6 Luna over the GPT-5.6 Luna the spec names, as newer and cheaper;
 - the reading-only baseline against the system on the Behavioural cases, on the default
   configuration and more than once;
 - the effect of prompt caching and of parallel tool calls on time and cost.
