@@ -262,3 +262,69 @@ minutes.
   `version-numbers-compared-as-numbers`. If no Reproduction ever shows a difference there, the
   judge is not being tested by this set, and the set needs a case that gets one to it.
 - Then the held-out part, once, on the same model and Budget.
+
+## Why the runs are slow, 2026-10-14: the writer thinks at length, on every model
+
+Every model tried so far has let the time limit stop most Claims. To see whether the machines
+were the cause, one case was traced on two models side by side, each request timed and its
+tokens counted: `slug-of-repeated-spaces/description`, the Budget's time limit at 900 seconds,
+the decider the small LLM on the same model.
+
+| | MiniMax M3, hosted | qwen3.8 27B FP8, vLLM on 2 RTX A4500 |
+| --- | --- | --- |
+| Time for the pull request | 977 s, stopped by the time limit | 1,145 s, stopped by the time limit |
+| Waiting for the model | 954 s, 98% | 1,134 s, 99% |
+| Everything else: Sandbox, containers, the network | 23 s | 11 s |
+| Requests | 21 | 12 |
+| Tokens written | 61,837 | 40,308 |
+| Writing speed | 65 tokens a second | 36 tokens a second |
+| Longest answer | 23,065 tokens | 30,986 tokens |
+| Answers over 4,000 tokens, and their time | 3, 773 s | 2, 1,001 s |
+| Claims | 2, both Inconclusive at the time limit | 2, both Inconclusive: one at the time limit, one with an answer that held no text |
+| Cost | $0.08 | none |
+
+- **The machines are not the cause.** Running the code, the containers, and the network took 1
+  to 2% of the time. The rest was the model writing.
+- **Speed matters less than length.** MiniMax M3 writes nearly twice as fast and still reached
+  the time limit. Most answers take seconds. A few take minutes, and those few use the Budget.
+- **The long answers are thinking.** Both models think before they answer: qwen3.8 in a field
+  of its own, MiniMax M3 in the answer's text, which the client removes. qwen3.8's answer of
+  30,986 tokens filled the context and held no text after the thinking, so that Claim was lost
+  to the model and not to the clock.
+
+The vLLM server was at first started with `--enforce-eager`, and wrote 14 tokens a second
+whether it served 1 request or 11. Without it, so with CUDA graphs, it writes 37 a second for
+one request and 31 each for ten. The numbers above are with that fix.
+
+### Which role thinks at length
+
+The same case on qwen3.8 again, with the time limit at 1800 seconds and the role of each
+request logged. Both Claims were worked to an end, in 1,347 seconds.
+
+| Role | Requests | Time | Tokens written | Longest |
+| --- | --- | --- | --- | --- |
+| Claim extractor | 1 | 13 s | 458 | 458 |
+| Claim classifier (the decider) | 2 | 6 s | 222 | 117 |
+| Reproduction writer | 21 | 1,299 s | 46,419 | 9,465 |
+
+Five of the writer's 21 requests wrote over 4,000 tokens and took 996 of the 1,347 seconds. They
+come at the same point of each attempt: after the writer has listed the files and read the
+module, on the step where it writes the Reproduction. The end of the thinking shows what it
+spends them on. It works out by hand what `slugify("big  news")` returns before and after the
+change, finds that it is the same, and goes over that again before it writes the test. Running
+the Reproduction on both commits is what settles that, so the thinking decides nothing the
+system does not find out anyway.
+
+Every Claim of this set is false, and the code shows it. That may be why this writer step is so
+long here; whether it is as long on a true Claim has not been measured.
+
+### What is still to do
+
+- Run the development part on qwen3.8 on the vLLM server with a time limit long enough for that
+  thinking: 1800 seconds was enough for one case with the server to itself, and nine cases at
+  once each get about 31 tokens a second, not 37. A run of the 18 cases at 1800 seconds, nine at
+  once, had 14 of 18 Claims stopped by the time limit in its first nine runs. 7200 seconds is the
+  next try. It is not the default Budget, and the results will say so.
+- The long writer step is a property of the system, not of this measurement. Shortening it
+  changes what the writer is asked or allowed to write, which the tests pin, so it is a group of
+  work of its own and not part of this one.
