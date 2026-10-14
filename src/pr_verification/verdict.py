@@ -56,6 +56,13 @@ NOTHING_SEARCHED = (
 """The reason for Inconclusive when the Evidence for a Structural Claim holds no
 `SearchEvidence`."""
 
+NAME_KEPT = (
+    "The pull request removes lines that hold a name this Claim names, and the code after "
+    "the pull request holds that name, on the lines the Evidence lists."
+)
+"""The reason for Inconclusive when the searches for a Structural Claim would not refute it and
+a name the Claim names, which the pull request removes lines of, is in the code after it."""
+
 KEPT_ELSEWHERE = (
     "Searching the one file the Claim was taken to be about found the text removed from it, "
     "and the code after the pull request holds that text in other files, on the lines "
@@ -82,8 +89,9 @@ class Computed:
     reason: str
     """Word for word, one of `CONFIRMED`, `REFUTED`, `NO_REPRODUCTION_RAN`, and
     `DECIDES_NOTHING` for a Behavioural Claim, and one of `STRUCTURAL_CONFIRMED`,
-    `STRUCTURAL_REFUTED`, `NOTHING_SEARCHED`, `KEPT_ELSEWHERE`, and `SEARCH_DECIDES_NOTHING`
-    for a Structural Claim. It is written by the project and holds no Untrusted Content."""
+    `STRUCTURAL_REFUTED`, `NOTHING_SEARCHED`, `NAME_KEPT`, `KEPT_ELSEWHERE`, and
+    `SEARCH_DECIDES_NOTHING` for a Structural Claim. It is written by the project and holds
+    no Untrusted Content."""
 
 
 def compute_verdict(
@@ -150,9 +158,12 @@ def compute_verdict(
         and does not hold after it.
 
     A Structural Claim
-        Only `SearchEvidence` can decide the Claim. Any other Evidence decides nothing,
+        Only `SearchEvidence` can decide the Claim. A `RemovedNameEvidence` can keep it
+        from being Confirmed and can do nothing else. Any other Evidence decides nothing,
         whatever it holds: a Reproduction, accepted or not, any other Evidence obtained by
-        running code, and a `ReadEvidence`. Of a `SearchEvidence`, only its `change` and
+        running code, and a `ReadEvidence`. Of a `RemovedNameEvidence`, only whether it has
+        any `after_lines` is read: a name is kept when it has at least one. Of a
+        `SearchEvidence`, only its `change` and
         how many lines hold its text are read: the number of its `before_lines`, of its
         `after_lines`, and of its `after_lines_elsewhere`. Its text, its path, its
         observation, and what the lines hold are never read here.
@@ -182,12 +193,15 @@ def compute_verdict(
           contradicts the Claim, whatever the others show. A rename that leaves the old name
           in the code is not carried out, however many lines hold the new one;
         - Confirmed, with the reason `STRUCTURAL_CONFIRMED`, when there is at least one
-          `SearchEvidence` and every one supports the Claim. Each text is one thing the Claim
-          says, so one that shows nothing leaves the Claim undecided;
+          `SearchEvidence`, every one supports the Claim, and no name is kept. Each text is
+          one thing the Claim says, so one that shows nothing leaves the Claim undecided;
         - Inconclusive, with the reason `NOTHING_SEARCHED`, when there is no `SearchEvidence`,
           which includes there being no Evidence at all;
-        - Inconclusive, with the reason `KEPT_ELSEWHERE`, when none contradicts the Claim and
-          at least one is kept elsewhere, whatever the others show;
+        - Inconclusive, with the reason `NAME_KEPT`, when there is at least one
+          `SearchEvidence`, none contradicts the Claim, and a name is kept, whatever the
+          searches show;
+        - Inconclusive, with the reason `KEPT_ELSEWHERE`, when none contradicts the Claim,
+          no name is kept, and at least one is kept elsewhere, whatever the others show;
         - Inconclusive, with the reason `SEARCH_DECIDES_NOTHING`, in every other case.
 
         `after_lines_elsewhere` can only take a Confirmed away. It never leads to Refuted,
@@ -199,6 +213,15 @@ def compute_verdict(
         because a text can have good reason to stay in another file, as an old requirement
         does in a project's examples, and Refuted there would be a False Block. The price is
         Decided Rate: a true Claim whose text stays elsewhere is now Inconclusive.
+
+        A kept name can only take a Confirmed away, as `after_lines_elsewhere` can. It never
+        leads to Refuted, and with no `SearchEvidence` the reason stays `NOTHING_SEARCHED`.
+        It is there because a model chooses each text, and a text narrower than the name the
+        Claim is about is borne out by the lines the pull request did change: searched for
+        `"Py_NOGIL": 1,` in the tests, a rename of `Py_NOGIL` that skipped the file reading
+        it was Confirmed. The name is found by code, in what the pull request removes, and
+        searched for in every file. It does not give Refuted, because a name can have good
+        reason to stay, as in a changelog, and that would be a False Block.
 
         Refuted blocks the Gate, so its condition is kept to the one case with lines to
         show, which the Evidence lists: it is never met by a search that found nothing. The

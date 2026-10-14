@@ -160,6 +160,26 @@ class SearchEvidence(Evidence):
 
 
 @dataclass(frozen=True)
+class RemovedNameEvidence(Evidence):
+    """Evidence obtained by searching the code after the pull request for one name that the
+    Claim names and the pull request removes lines of.
+
+    `names_removed` of `pr_verification.removed_names` says which names those are. Code
+    finds the name and code searches for it: no model chooses it. `source` is always
+    `EvidenceSource.READ_CODE`. In the printed report it appears among a Claim's `evidence`
+    with `source`, `observation`, `name`, and `after_lines`.
+    """
+
+    name: str
+    """The name, exactly as the code before the pull request writes it. It is taken from
+    the pull request's code, so it is Untrusted Content."""
+    after_lines: tuple[str, ...]
+    """Every line of the code after the pull request, `Report.after`, that holds the name
+    as a whole name, in any file, each as `<path>:<line number>:<line>`, by path and then by
+    line number. Empty when no file holds the name any longer. Untrusted Content."""
+
+
+@dataclass(frozen=True)
 class Claim:
     text: str
     verdict: Verdict

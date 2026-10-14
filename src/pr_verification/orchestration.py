@@ -306,10 +306,10 @@ class FixedPipeline:
             step 4, `verify_structural_claim` is called for it in place of
             `write_judged_reproduction`, with the Claim, `repository`, `before`, `after`, the
             model, the pipeline's `progress_guard`, and the step cap it has unless given
-            another. The Claim is given the `StructuralRun`'s `evidence` and its
-            `inconclusive`, and as its `loops` the loop of the `StructuralRun`'s `run`, when
-            there is a run and it has one. No Sandbox is used for it, and no Reproduction
-            is written.
+            another. The Claim is given the `StructuralRun`'s `evidence` followed by its
+            `names`, its `inconclusive`, and as its `loops` the loop of the `StructuralRun`'s
+            `run`, when there is a run and it has one. No Sandbox is used for it, and no
+            Reproduction is written.
 
             Every other Claim goes on to a Reproduction, as step 4 of `gather` says: a Claim
             `kinds` names Behavioural, one it has None for, and every Claim when `kinds` is

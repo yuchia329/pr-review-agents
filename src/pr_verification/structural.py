@@ -15,7 +15,12 @@ from pr_verification.agent import Role, RoleRun, Stopped, Tool, _stopped_looping
 from pr_verification.decision import Decider
 from pr_verification.model import Model, ModelFailed
 from pr_verification.reading import lines_holding, reading_tools
-from pr_verification.report import EvidenceSource, SearchEvidence, TextChange
+from pr_verification.report import (
+    EvidenceSource,
+    RemovedNameEvidence,
+    SearchEvidence,
+    TextChange,
+)
 
 VERIFIER_STEP_CAP = 12
 """The most steps one run of the Structural verifier takes unless another cap is given."""
@@ -79,6 +84,11 @@ class StructuralRun:
     `pr_verification.agent`, filled in. There is no Evidence then. None when the role
     finished, whatever it finished with."""
 
+    names: tuple[RemovedNameEvidence, ...] = ()
+    """One piece of Evidence for each name the Claim names that the pull request removes
+    lines of, as `names_removed` gives them. Code finds them, whatever the role named. Empty
+    when there is none, and when `inconclusive` is not None."""
+
 
 def verify_structural_claim(
     claim: str,
@@ -120,6 +130,11 @@ def verify_structural_claim(
     So what is recorded is what code found in the two commits, whatever the role said is
     there. The model's word alone is never Evidence, and the role gives no Verdict: one is
     computed from this Evidence by `compute_verdict`.
+
+    When the role finished, whatever it finished with, `names` is what
+    `names_removed(claim, repository=repository, before=before, after=after)` gives. The
+    role has no say in it and is told nothing of it: its answer may name no text at all, or
+    not be one that can be read, and the names are the same.
 
     An entry is left out when it is not an object, when it has no `text`, no `change`, or a
     member other than those and `path`, when its `text` is not a string, is blank, or holds a
