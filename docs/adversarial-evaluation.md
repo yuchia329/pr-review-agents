@@ -327,4 +327,12 @@ long here; whether it is as long on a true Claim has not been measured.
   next try. It is not the default Budget, and the results will say so.
 - The long writer step is a property of the system, not of this measurement. Shortening it
   changes what the writer is asked or allowed to write, which the tests pin, so it is a group of
-  work of its own and not part of this one.
+  work of its own and not part of this one. What the trace suggests, in this order:
+  - **Tell the writer that running the Reproduction decides, not it.** Its work is a test of
+    what the Claim says, not a judgement of whether the Claim holds. That is the thinking the
+    trace shows to be spent for nothing, and the change is to the writer's instructions alone.
+  - **Cap the length of an answer for each role**, as the protocol lets a request do, so that one
+    answer cannot fill the context as the one of 30,986 tokens did. An answer cut at the cap
+    would then be one failed step of the writer, which tries again, and not a Claim lost.
+  - Not turning thinking off. It is cheap on most steps, and nothing measured shows it is not
+    what makes the writer's Reproductions right.
