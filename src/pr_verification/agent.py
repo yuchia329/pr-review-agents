@@ -100,7 +100,14 @@ class Role:
     """What the role is called in the record of its run."""
 
     instructions: str
-    """What the role is for and what it finishes with, written by the project."""
+    """What the role is for and what it finishes with, written by the project.
+
+    Every JSON object they show is a whole response the role can give, which the agent loop
+    reads as `run_role` says: a finish is shown inside `finish`, as
+    `{"finish": {"places": []}}`, and never as the bare `{"places": []}`. So a model that
+    copies what it is shown gives a response that can be read. An object that is part of
+    another one shown, such as one entry of a list a finish holds, is no object of its own
+    here."""
 
     tools: tuple[Tool, ...]
     """The tools this role may use, each with a different name. It can use no other."""
@@ -355,7 +362,9 @@ def run_role(
       are written from nothing else: they are the same on every step of a run, and hold
       nothing of `task`, of any response, or of anything a tool returned. The fixed wording
       names `told`, described below, as the one part of `data` that the loop itself writes
-      and the role is to act on.
+      and the role is to act on. It also says that what a role's own instructions say it
+      finishes with goes inside `finish`, and shows that with an example: a finish whole,
+      whose object has at least one member.
     - `data` is a JSON object with exactly two members: `task`, as given, and `steps`, a list
       with one object for each step taken so far, in order, whose only members are that
       step's `response` and `result`, and `told` where loop detection told the role
