@@ -311,10 +311,36 @@ What it does not reach: a Claim that does not write the name at all, as "the GIL
 `Py_NOGIL`, and a Claim that names two things the pull request removes, of which only the
 longer name is searched for.
 
+### A first run with the names, 2026-10-13
+
+The three renames were then run with the names searched for: the true and the false case of
+each once, and the three false cases twice more, 12 runs. The model was Qwen3.8 27B in its FP8
+build, served by vLLM on another machine and shared with other work at the time; it is not the
+MLX build that Ollama served for the results above.
+
+The server was too busy for the run to say much. Of the 23 Claims, 13 ended Inconclusive
+because a request waited longer than the client's five minutes, so the rename Claim was decided
+in only three of the nine runs of a false case.
+
+- **No False Assurance.** No false Claim was Confirmed in any of the 12 runs.
+- **The names did the work once, in a live run**, as the replay said they would. In one run of
+  `rename/packaging-gil-disabled@left-out` the verifier named `"Py_NOGIL": 1,` and
+  `"Py_NOGIL": 0,` in `tests/test_tags.py`, and the searches alone gave Confirmed. Code found
+  `Py_NOGIL` still in `src/packaging/tags.py`, and the Claim was Inconclusive. In the two other
+  runs that decided the rename Claim, the verifier named the bare name and the search refuted
+  it.
+- **No true Claim was lost to the names.** Both true renames that were decided, of `httpx` and
+  `packaging`, were Confirmed, and code found the old name in no file after them.
+
+So the run shows the rule doing what it was built for and costing nothing where it could be
+seen, but on too few decided runs to measure how often.
+
 ## What is still to do
 
 - Repeat the run, to see how much the Verdicts vary, and set the model's prices so that the
   cost of a pull request is recorded.
 - Try the search for the name on cases it was not made for.
+- Run the three renames again with the names, on a server that answers within the client's
+  time, for how often the rename Claim of a false case is still Confirmed.
 - Run all 32 cases with the rule and MiniMax M3, for what the rule costs it in Decided Rate.
 - Run with the default decider, Laya, which needs `uv sync --extra laya`.
