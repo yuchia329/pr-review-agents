@@ -337,12 +337,39 @@ in only three of the nine runs of a false case.
 So the run shows the rule doing what it was built for and costing nothing where it could be
 seen, but on too few decided runs to measure how often.
 
+### The same run with no limit on a request, 2026-10-14
+
+The 12 runs were made again on the same server with nothing else running on it, with
+`--no-request-limit` and a Budget of 7,200 seconds for a pull request, so that no Claim was
+left Inconclusive for the server's load. Every run gave a report, and no Structural Claim ended
+for a timeout or a spent Budget. They took 4 hours 45 minutes.
+
+| The Claim of the rename, in nine runs of a false case | Searches alone | With the names |
+| --- | --- | --- |
+| Confirmed, a False Assurance | 1 | 0 |
+| Refuted | 7 | 7 |
+| Inconclusive | 1 | 2 |
+
+- **No rename that skips a file was Confirmed**, in any of the nine runs, for any of the three
+  cases.
+- **The names took away the one False Assurance the searches left.** In a run of
+  `rename/httpx-url-pattern@left-out` the verifier named `class URLMatcher:` and
+  `class URLPattern:` in `httpx/_utils.py`; code found `URLMatcher` on five lines of
+  `httpx/_client.py`.
+- **Most runs needed neither rule.** In seven of the nine the verifier named the bare name with
+  no path, and the search of every file refuted the Claim.
+- **No true Claim was lost.** The six true Claims of the three true cases were all Confirmed,
+  and code found the old name in no file after them.
+- **No False Block.**
+
+The ten false Claims of these runs that are not the rename, such as "Nothing in
+`src/attr/_make.py` uses the old name", were Refuted in six runs and Inconclusive in four, two
+of them Behavioural Claims whose Reproduction writer gave an answer that could not be read.
+
 ## What is still to do
 
 - Repeat the run, to see how much the Verdicts vary, and set the model's prices so that the
   cost of a pull request is recorded.
 - Try the search for the name on cases it was not made for.
-- Run the three renames again with the names, on a server that answers within the client's
-  time, for how often the rename Claim of a false case is still Confirmed.
 - Run all 32 cases with the rule and MiniMax M3, for what the rule costs it in Decided Rate.
 - Run with the default decider, Laya, which needs `uv sync --extra laya`.
