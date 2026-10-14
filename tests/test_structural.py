@@ -5,7 +5,14 @@ from functools import cache
 from pathlib import Path
 
 import pytest
-from conftest import FixtureRepository, UnreachableModel, asks, commit_snapshots, finishes
+from conftest import (
+    FixtureRepository,
+    UnreachableModel,
+    asks,
+    assert_shows_only_whole_responses,
+    commit_snapshots,
+    finishes,
+)
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -420,3 +427,9 @@ def test_whatever_texts_the_verifier_names_only_lines_the_commits_hold_become_ev
         assert evidence.source is EvidenceSource.READ_CODE
         assert evidence.before_lines == held(accounts.path, accounts.before, evidence.text)
         assert evidence.after_lines == held(accounts.path, accounts.after, evidence.text)
+
+
+def test_structural_verifier_is_shown_only_whole_responses(accounts: FixtureRepository) -> None:
+    _, model = verify(accounts, finishes(texts=[]))
+
+    assert_shows_only_whole_responses(model.requests[0].instructions)

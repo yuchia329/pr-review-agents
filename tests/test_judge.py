@@ -10,7 +10,14 @@ from itertools import count, repeat
 from pathlib import Path
 
 import pytest
-from conftest import FixtureRepository, UnreachableModel, asks, commit_snapshots, finishes
+from conftest import (
+    FixtureRepository,
+    UnreachableModel,
+    asks,
+    assert_shows_only_whole_responses,
+    commit_snapshots,
+    finishes,
+)
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -560,3 +567,18 @@ def test_whatever_the_judge_answers_the_cap_on_rounds_holds_and_only_what_it_acc
     if run.evidence is not None:
         assert isinstance(run.evidence, AcceptedReproduction)
         assert vars(run.evidence) == vars(run.rounds[-1].written.evidence)
+
+
+def test_judge_and_writer_told_of_a_rejection_are_shown_only_whole_responses(
+    shop: FixtureRepository,
+) -> None:
+    model = WriterAndJudge(
+        writer=[writes("planted"), writes("fixed")], judge=[rejects(WHY), ACCEPTS]
+    )
+
+    judged(shop, model)
+
+    instructions = {(role, request.instructions) for role, request in model.asked}
+    assert {role for role, _ in instructions} == {"writer", "judge"}
+    for _, shown in instructions:
+        assert_shows_only_whole_responses(shown)

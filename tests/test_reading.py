@@ -4,7 +4,14 @@ import json
 import posixpath
 
 import pytest
-from conftest import FixtureRepository, asks, commit, finishes, git
+from conftest import (
+    FixtureRepository,
+    asks,
+    assert_shows_only_whole_responses,
+    commit,
+    finishes,
+    git,
+)
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
@@ -394,3 +401,11 @@ def test_printed_report_holds_what_was_read_among_the_evidence_for_a_claim(
             "excerpt": "RATE = 0.0  # no tax abroad",
         }
     ]
+
+
+def test_locator_is_shown_only_whole_responses(billing: FixtureRepository) -> None:
+    model = ScriptedModel([finishes(places=[])])
+
+    locate(CLAIM, repository=billing.path, commit=billing.before, model=model)
+
+    assert_shows_only_whole_responses(model.requests[0].instructions)

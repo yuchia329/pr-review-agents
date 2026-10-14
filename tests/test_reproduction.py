@@ -10,7 +10,13 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 import pytest
-from conftest import FixtureRepository, asks, commit_snapshots, finishes
+from conftest import (
+    FixtureRepository,
+    asks,
+    assert_shows_only_whole_responses,
+    commit_snapshots,
+    finishes,
+)
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -919,3 +925,9 @@ def test_total_adds_tax():
     assert not mark.exists()
     assert "key: None" in run.evidence.before.output
     assert "sk-not-for-the-sandbox" not in run.evidence.before.output + run.evidence.after.output
+
+
+def test_writer_is_shown_only_whole_responses(pricing: FixtureRepository) -> None:
+    _, model = write(pricing, writes("fixed"))
+
+    assert_shows_only_whole_responses(model.requests[0].instructions)

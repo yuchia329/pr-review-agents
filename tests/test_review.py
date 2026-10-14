@@ -11,6 +11,7 @@ from conftest import (
     UnreachableModel,
     a_reproduction,
     asks,
+    assert_shows_only_whole_responses,
     commit_snapshots,
     finishes,
     results,
@@ -1144,3 +1145,11 @@ def test_command_line_asked_to_review_prints_the_findings_and_exits_with_the_gat
         }
     ]
     assert exited == code
+
+
+def test_reviewer_is_shown_only_whole_responses(change: FixtureRepository) -> None:
+    model = ScriptedModel([finishes(findings=[])])
+
+    reviewing(change, model=model)
+
+    assert_shows_only_whole_responses(model.requests[0].instructions)

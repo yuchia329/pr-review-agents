@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from pr_verification.agent import Role, StepOutcome, run_role
 from pr_verification.ecosystem import Results, Unreadable
 from pr_verification.model import Model, ModelFailed, ModelRequest, ScriptedModel
 from pr_verification.orchestration import Gathered
@@ -138,6 +139,42 @@ def asks(tool: str, **arguments: object) -> str:
 def finishes(**answer: object) -> str:
     """A response in which a role finishes with an answer."""
     return json.dumps({"finish": answer})
+
+
+def objects_shown(text: str) -> list[dict[str, object]]:
+    """Each JSON object written out in `text`, in order. One that is part of another is not
+    counted on its own."""
+    shown: list[dict[str, object]] = []
+    decoder, start = json.JSONDecoder(), text.find("{")
+    while start != -1:
+        try:
+            value, end = decoder.raw_decode(text, start)
+        except ValueError:
+            value, end = None, start + 1
+        if isinstance(value, dict):
+            shown.append(value)
+        else:
+            end = start + 1
+        start = text.find("{", end)
+    return shown
+
+
+def outcome_of(response: str) -> StepOutcome:
+    """What the agent loop makes of `response` as the first step of a role with no tools."""
+    run = run_role(Role("copier", "", (), step_cap=1), {}, ScriptedModel([response]))
+    return run.steps[0].outcome
+
+
+def assert_shows_only_whole_responses(instructions: str) -> None:
+    """That every JSON object `instructions` show, in the role's own wording, the loop's, or
+    a tool's description, is a response the agent loop can read, and that they show at least
+    one finish."""
+    shown = objects_shown(instructions)
+    outcomes = {json.dumps(each): outcome_of(json.dumps(each)) for each in shown}
+    assert StepOutcome.FINISHED in outcomes.values(), shown
+    assert {
+        each: outcome for each, outcome in outcomes.items() if outcome is StepOutcome.UNREADABLE
+    } == {}
 
 
 def results(passed: str = "", failed: str = "", errors: str = "") -> Results:

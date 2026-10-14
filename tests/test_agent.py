@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from itertools import groupby
 
 import pytest
-from conftest import UnreachableModel, asks, finishes
+from conftest import UnreachableModel, asks, finishes, objects_shown, outcome_of
 from hypothesis import example, given
 from hypothesis import strategies as st
 
@@ -764,3 +764,26 @@ def test_whatever_is_detected_the_step_cap_holds_and_a_run_is_stopped_at_its_sec
     # The role was told of the first trigger, after the step it was found at, and of no other.
     found = {trigger.step: TOLD[trigger.kind] for trigger in run.triggers[:1]}
     assert told(model.requests[-1]) == [found.get(step) for step in range(1, len(run.steps))]
+
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        role_with(),
+        role_with(RecordingTool("read_file")),
+        Role("judge", 'Finish with {"x": 1}.', (), 3),
+    ],
+    ids=["no tools", "a tool", "instructions that show a bare object"],
+)
+def test_loops_wording_shows_a_finish_whole_whatever_the_role(role: Role) -> None:
+    model = ScriptedModel([finishes()])
+
+    run_role(role, TASK, model)
+
+    finishes_shown = [
+        shown
+        for shown in objects_shown(model.requests[0].instructions)
+        if shown.keys() == {"finish"} and shown["finish"]
+    ]
+    assert finishes_shown
+    assert all(outcome_of(json.dumps(shown)) is StepOutcome.FINISHED for shown in finishes_shown)
