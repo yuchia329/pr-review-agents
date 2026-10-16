@@ -31,7 +31,8 @@ capability saves is the difference from the run beside it.
 
 Only the development part is run unless `--held-out` is given, so that the held-out part is
 not looked at while the system is being tuned. `--clones`, the directory
-`tools/structural_cases.py` clones into, adds the Structural cases.
+`tools/structural_cases.py` clones into, adds the Structural cases, and `--no-hand-made` leaves
+the hand-made ones out.
 """
 
 import argparse
@@ -163,6 +164,9 @@ def main() -> None:
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument("--held-out", action="store_true", help="run the held-out part as well")
     parser.add_argument("--clones", type=Path, help="adds the Structural cases, cloned here")
+    parser.add_argument(
+        "--no-hand-made", action="store_true", help="leaves the hand-made cases out"
+    )
     arguments = parser.parse_args()
 
     named = dict(CONFIGURATIONS)
@@ -204,7 +208,8 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as directory, shown_within(limits):
         hand_made = Path(directory) / "hand-made"
         hand_made.mkdir()
-        cases += hand_made_cases(hand_made)
+        if not arguments.no_hand_made:
+            cases += hand_made_cases(hand_made)
         if arguments.clones is not None:
             cases += [
                 built(case, clone_of(case.repository, arguments.clones), Path(directory))
