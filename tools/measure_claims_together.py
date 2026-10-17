@@ -8,6 +8,9 @@ what each run gave and spent and how long it took on the clock, and then the two
 
     uv run python tools/measure_claims_together.py --repetitions 3
 
+`--every-role NAME ENDPOINT MODEL KEY_VARIABLE` measures a model served where no named
+configuration says, as `tools/compare_configurations.py` takes it.
+
 `docs/supervisor.md` measured the same question with stand-in models that answer every request
 in a fixed time. Here the model is a real one, so the Claims differ in how much work they take,
 as they do on a real pull request. The configuration's models need the keys it names, as
@@ -25,20 +28,18 @@ after, so each can be Confirmed under the Refuted rule as it stands.
 import argparse
 import json
 import os
-import statistics
 import sys
 import tempfile
-import time
 from pathlib import Path
 
-from compare_configurations import each_run
+from compare_configurations import clock_summary, every_role, on_the_clock
 
 from pr_verification.budget import budget_from_environment
-from pr_verification.comparison import Comparison, evaluate_configured, label_of
+from pr_verification.comparison import Comparison, label_of
 from pr_verification.configuration import configuration_named, configured_models
 from pr_verification.context_bound import limits_from_environment, shown_within
 from pr_verification.decision import configured_decider, decision_configuration
-from pr_verification.evaluation import Evaluation, Part, PartEvaluation, _HandMade
+from pr_verification.evaluation import Evaluation, Part, _HandMade
 from pr_verification.orchestration import OrchestrationChoice
 from pr_verification.report import Verdict
 
@@ -95,57 +96,44 @@ def count_vowels(text):
 def main() -> None:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--configuration", default="default")
+    parser.add_argument(
+        "--every-role",
+        nargs=4,
+        metavar=("NAME", "ENDPOINT", "MODEL", "KEY_VARIABLE"),
+        help="measures that model in every role, as compare_configurations.py makes it",
+    )
     parser.add_argument("--repetitions", type=int, default=3)
     arguments = parser.parse_args()
 
-    configuration = configuration_named(arguments.configuration)
+    if arguments.every_role is not None:
+        configuration = every_role(*arguments.every_role)
+    else:
+        configuration = configuration_named(arguments.configuration)
     models = configured_models(configuration, os.environ)
     decider = configured_decider(decision_configuration(os.environ), models)
     budget = budget_from_environment(os.environ)
     evaluations: dict[str, Evaluation] = {}
+    clock: dict[str, list[float]] = {}
     with (
         tempfile.TemporaryDirectory() as directory,
         shown_within(limits_from_environment(os.environ)),
     ):
         case = FOUR_FIXES.built_in(Path(directory))
-        clock: dict[str, list[float]] = {}
         for how in OrchestrationChoice:
             label = label_of(configuration, how)
             print(f"running {label}", file=sys.stderr, flush=True)
-            runs = []
-            for repetition in range(arguments.repetitions):
-                started = time.monotonic()
-                runs.append(
-                    evaluate_configured(
-                        [case],
-                        configuration,
-                        repetitions=1,
-                        orchestration=how,
-                        decider=decider,
-                        budget=budget,
-                        models=models,
-                    )
-                )
-                clock.setdefault(label, []).append(time.monotonic() - started)
-                each_run(label, runs[-1])
-                shown = {"run": label, "repetition": repetition + 1}
-                print(
-                    json.dumps(shown | {"clock_seconds": round(clock[label][-1], 1)}),
-                    file=sys.stderr,
-                )
-            evaluations[label] = Evaluation(
+            evaluations[label], clock[label] = on_the_clock(
+                label,
+                [case],
+                configuration,
+                how,
                 repetitions=arguments.repetitions,
-                development=PartEvaluation(
-                    tuple(run for each in runs for run in each.development.runs)
-                ),
-                held_out=PartEvaluation(()),
+                decider=decider,
+                budget=budget,
+                models=models,
             )
-    for label, seconds in clock.items():
-        print(
-            f"{label}: median {statistics.median(seconds):.1f} seconds on the clock",
-            file=sys.stderr,
-        )
-    print(Comparison(evaluations).to_json())
+    compared = json.loads(Comparison(evaluations).to_json())
+    print(json.dumps({**compared, "clock_seconds": clock_summary(clock)}, indent=2))
 
 
 if __name__ == "__main__":

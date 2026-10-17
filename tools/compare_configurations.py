@@ -4,7 +4,12 @@ side.
 A measurement, not a test. It runs the hand-made cases, which are all Behavioural, through the
 core's entry point once for each `--run`, and prints the comparison as JSON
 (`pr_verification.comparison`): the False Block rate, the False Assurance rate, the Decided
-Rate, and the time and the cost of a pull request for each run.
+Rate, and the time and the cost of a pull request for each run, and beside them the seconds
+each orchestration took on the clock.
+
+The comparison's seconds are the Budget's seconds of work, in which work done at the same
+time is each counted, so they make the supervisor look slower whenever it works on Claims
+together. `clock_seconds` is how long a pull request took, and is the one to compare.
 
     uv run --extra laya python tools/compare_configurations.py \\
         --run default/pipeline --run default/supervisor --baseline default --repetitions 3
@@ -38,8 +43,10 @@ the hand-made ones out.
 import argparse
 import json
 import os
+import statistics
 import sys
 import tempfile
+import time
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
@@ -47,7 +54,7 @@ from pathlib import Path
 from structural_cases import built, clone_of, load
 
 from pr_verification.baseline import reading_only_baseline
-from pr_verification.budget import budget_from_environment
+from pr_verification.budget import Budget, budget_from_environment
 from pr_verification.comparison import BASELINE_LABEL, Comparison, evaluate_configured, label_of
 from pr_verification.configuration import (
     CONFIGURATIONS,
@@ -58,8 +65,16 @@ from pr_verification.configuration import (
     configured_models,
 )
 from pr_verification.context_bound import limits_from_environment, shown_within
-from pr_verification.decision import configured_decider, decision_configuration
-from pr_verification.evaluation import Case, Evaluation, Part, evaluate, hand_made_cases
+from pr_verification.decision import Decider, configured_decider, decision_configuration
+from pr_verification.evaluation import (
+    Case,
+    CaseRun,
+    Evaluation,
+    Part,
+    PartEvaluation,
+    evaluate,
+    hand_made_cases,
+)
 from pr_verification.model import (
     REASONING_ROLES,
     Model,
@@ -108,26 +123,95 @@ def every_role(name: str, endpoint: str, model: str, key_variable: str) -> Confi
     return Configuration(name, choice)
 
 
+def one_run(label: str, case_run: CaseRun, clock_seconds: float | None = None) -> None:
+    """Print to standard error what one run gave and spent, how long it took on the clock
+    when that was timed, and which limit of the Budget stopped it, if one did: a Claim left
+    Inconclusive by a limit is the limit's doing, not the model's.
+
+    `seconds` is the Budget's seconds of work, in which work done at the same time is each
+    counted, so the supervisor's are more than it took whenever it works on Claims together.
+    `clock_seconds` is how long the run took."""
+    spend = case_run.spend
+    shown = {
+        "run": label,
+        "case": case_run.name,
+        "repetition": case_run.repetition,
+        "expected": case_run.expected.value,
+        "verdicts": [verdict.value for verdict in case_run.verdicts],
+        "seconds": None if spend is None else round(spend.seconds, 1),
+        "clock_seconds": None if clock_seconds is None else round(clock_seconds, 1),
+        "dollars": None if spend is None else round(spend.dollars, 4),
+        "steps": None if spend is None else spend.steps,
+        "stopped_by": getattr(spend, "stopped_by", None),
+        "no_report": case_run.no_report,
+    }
+    print(json.dumps(shown), file=sys.stderr, flush=True)
+
+
 def each_run(label: str, evaluation: Evaluation) -> None:
-    """Print to standard error what each run of the evaluation gave and spent, and which
-    limit of the Budget stopped it, if one did: a Claim left Inconclusive by a limit is the
-    limit's doing, not the model's."""
+    """`one_run` for each run of the evaluation, untimed."""
     for part in (evaluation.development, evaluation.held_out):
         for case_run in part.runs:
-            spend = case_run.spend
-            shown = {
-                "run": label,
-                "case": case_run.name,
-                "repetition": case_run.repetition,
-                "expected": case_run.expected.value,
-                "verdicts": [verdict.value for verdict in case_run.verdicts],
-                "seconds": None if spend is None else round(spend.seconds, 1),
-                "dollars": None if spend is None else round(spend.dollars, 4),
-                "steps": None if spend is None else spend.steps,
-                "stopped_by": getattr(spend, "stopped_by", None),
-                "no_report": case_run.no_report,
-            }
-            print(json.dumps(shown), file=sys.stderr, flush=True)
+            one_run(label, case_run)
+
+
+def on_the_clock(
+    label: str,
+    cases: list[Case],
+    configuration: Configuration,
+    how: OrchestrationChoice,
+    *,
+    repetitions: int,
+    decider: Decider,
+    budget: Budget,
+    models: RoleModels,
+) -> tuple[Evaluation, list[float]]:
+    """Run the cases as `evaluate_configured` does, every case once and then again, but one
+    run at a time, so that each is timed on the clock and printed as it ends. The evaluation,
+    and the seconds on the clock of each run in the order run."""
+    runs: list[CaseRun] = []
+    clock: list[float] = []
+    for repetition in range(1, repetitions + 1):
+        for case in cases:
+            started = time.monotonic()
+            one = evaluate_configured(
+                [case],
+                configuration,
+                repetitions=1,
+                orchestration=how,
+                decider=decider,
+                budget=budget,
+                models=models,
+            )
+            clock.append(time.monotonic() - started)
+            (case_run,) = one.development.runs + one.held_out.runs
+            runs.append(replace(case_run, repetition=repetition))
+            one_run(label, runs[-1], clock[-1])
+    evaluation = Evaluation(
+        repetitions=repetitions,
+        development=PartEvaluation(
+            tuple(r for r in runs if r.name in _named(cases, Part.DEVELOPMENT))
+        ),
+        held_out=PartEvaluation(tuple(r for r in runs if r.name in _named(cases, Part.HELD_OUT))),
+    )
+    return evaluation, clock
+
+
+def _named(cases: list[Case], part: Part) -> set[str]:
+    return {case.name for case in cases if case.part is part}
+
+
+def clock_summary(clock: dict[str, list[float]]) -> dict[str, dict[str, float]]:
+    """The median and the range of the seconds on the clock of each label's runs."""
+    return {
+        label: {
+            "median": round(statistics.median(seconds), 1),
+            "least": round(min(seconds), 1),
+            "most": round(max(seconds), 1),
+        }
+        for label, seconds in clock.items()
+        if seconds
+    }
 
 
 def without_parallel_tool_calls(configuration: Configuration) -> Configuration:
@@ -184,6 +268,7 @@ def main() -> None:
     budget = budget_from_environment(os.environ)
     limits = limits_from_environment(os.environ)
     evaluations: dict[str, Evaluation] = {}
+    clock: dict[str, list[float]] = {}
 
     def models_of(configuration: Configuration) -> RoleModels:
         return configured_models(configuration, os.environ)
@@ -192,17 +277,17 @@ def main() -> None:
         label: str, configuration: Configuration, models: RoleModels, how: OrchestrationChoice
     ) -> None:
         print(f"running {label}", file=sys.stderr, flush=True)
-        evaluations[label] = evaluate_configured(
+        # A run can take a long time, so each is shown as it ends, apart from the comparison.
+        evaluations[label], clock[label] = on_the_clock(
+            label,
             cases,
             configuration,
+            how,
             repetitions=arguments.repetitions,
-            orchestration=how,
             decider=configured_decider(decision_configuration(os.environ), models),
             budget=budget,
             models=models,
         )
-        # A run can take a long time, so each is shown as it ends, apart from the comparison.
-        each_run(label, evaluations[label])
         print(Comparison({label: evaluations[label]}).to_json(), file=sys.stderr, flush=True)
 
     with tempfile.TemporaryDirectory() as directory, shown_within(limits):
@@ -242,7 +327,8 @@ def main() -> None:
             )
             each_run(BASELINE_LABEL, baseline)
 
-    print(Comparison(evaluations, baseline).to_json())
+    compared = json.loads(Comparison(evaluations, baseline).to_json())
+    print(json.dumps({**compared, "clock_seconds": clock_summary(clock)}, indent=2))
 
 
 if __name__ == "__main__":
