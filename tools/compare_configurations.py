@@ -86,6 +86,7 @@ from pr_verification.model import (
     offers_parallel_tool_calls,
 )
 from pr_verification.orchestration import OrchestrationChoice
+from pr_verification.report import Verdict
 from pr_verification.reproduction import WRITER_STEP_CAP
 
 
@@ -168,7 +169,17 @@ def on_the_clock(
 ) -> tuple[Evaluation, list[float]]:
     """Run the cases as `evaluate_configured` does, every case once and then again, but one
     run at a time, so that each is timed on the clock and printed as it ends. The evaluation,
-    and the seconds on the clock of each run in the order run."""
+    and the seconds on the clock of each run in the order run.
+
+    Raises `ValueError` before any run, as `evaluate` does, when `repetitions` is less than 1,
+    when two cases share a name, or when a case expects Inconclusive."""
+    if repetitions < 1:
+        raise ValueError(f"each case must be run at least once, not {repetitions} times")
+    if len({case.name for case in cases}) < len(cases):
+        raise ValueError("two cases share a name")
+    for case in cases:
+        if case.expected is Verdict.INCONCLUSIVE:
+            raise ValueError(f"{case.name} expects Inconclusive, which is not an answer to score")
     runs: list[CaseRun] = []
     clock: list[float] = []
     for repetition in range(1, repetitions + 1):

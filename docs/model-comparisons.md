@@ -295,26 +295,32 @@ every run timed on the clock as well as in the Budget's seconds of work.
 the same time is each counted. The supervisor works on up to four Claims at once, so its
 seconds of work run ahead of the clock: in one run it had spent 907 seconds of work in 584
 seconds. The comparison's `seconds_per_pull_request` is seconds of work. How long a pull
-request took is `clock_seconds`, printed by the tools since `2fab0de`.
+request took is `clock_seconds`, which the two tools below print for every run.
 
 ### A: the development part of the Structural cases
 
 18 pull requests from open-source projects, 12 whose Claims are true and 6 with part of the
-change left out, whose Claims are false. Budget 900 seconds, 0.50 dollars, and 300 steps.
+change left out, whose Claims are false. Budget 900 seconds, 0.50 dollars, and 300 steps, with
+`PR_VERIFICATION_DECISION=small_llm`. Qwen 3.8 has no price, so only time and steps bound it.
 
 ```sh
-uv run python tools/compare_configurations.py --clones ~/.cache/pr-verification --no-hand-made \
+PR_VERIFICATION_BUDGET_DOLLARS=0.50 uv run python tools/compare_configurations.py \
+  --clones ~/.cache/pr-verification --no-hand-made \
   --run default/pipeline --run default/supervisor --repetitions 3
+
+uv run python tools/compare_configurations.py --clones ~/.cache/pr-verification --no-hand-made \
+  --every-role qwen-remote http://localhost:18000/v1 Qwen/Qwen3.8-27B-FP8 QWEN_REMOTE_KEY \
+  --run qwen-remote/pipeline --run qwen-remote/supervisor --repetitions 2
 ```
 
 | | MiniMax M3, pipeline | MiniMax M3, supervisor | Qwen 3.8, pipeline | Qwen 3.8, supervisor |
 | --- | --- | --- | --- | --- |
 | Repetitions | 3 | 3 | 2 | 2 |
 | Claims | 89 | 83 | 63 | 63 |
-| Decided Rate | 0.72 | 0.74 | 0.73 | 0.73 |
+| Decided Rate | 0.72 (64) | 0.73 (61) | 0.73 (46) | 0.73 (46) |
 | False Block rate | 0 | 0.04 | 0 | 0 |
 | False Assurance rate | 0 | 0 | 0 | 0 |
-| Seconds on the clock, median | 41 | **34** | 125 | 121 |
+| Seconds on the clock, median | 41.2 | **33.9** | 125.0 | 121.2 |
 | Seconds on the clock, mean | 93 | 90 | 269 | 266 |
 | Dollars for a pull request | 0.027 | 0.028 | 0 | 0 |
 | Runs stopped by the time limit | 0 of 54 | 2 of 54 | 0 of 36 | **6 of 36** |
@@ -322,21 +328,21 @@ uv run python tools/compare_configurations.py --clones ~/.cache/pr-verification 
 Qwen 3.8 was served by vLLM on `sicong`, as above; its two runs went side by side with
 MiniMax M3's, and both used this machine's Docker.
 
-- **The two decided as much as each other.** The Decided Rates differ by less than one Claim
-  in fifty.
-- **The supervisor's two False Blocks are one Claim.** Both are
+- **The two decided as much as each other**: 0.72 against 0.73 on MiniMax M3, and the same 46
+  of 63 Claims on Qwen 3.8.
+- **The supervisor's two False Blocks are one pull request.** Both are
   `rename/packaging-private-format-full-version`, which the fixed pipeline also Refuted in the
-  first run of A. Each pull request makes one to three Claims, so these rates rest on about 12
-  distinct true Claims and 6 false ones, and no error in 12 leaves the upper end of a one-sided
-  95% interval at 22%.
-- **On MiniMax M3 the supervisor was quicker in the middle of the range**, 34 seconds on the
-  clock against 41 at the median, at the same cost. The means are within 3 seconds of each
-  other.
+  first run of A. The rates rest on 12 pull requests with true Claims and 6 with false ones, at
+  one to three Claims each, so on at least 12 distinct true Claims. No error in 12 leaves the
+  upper end of a one-sided 95% interval at 22%.
+- **On MiniMax M3 the supervisor was quicker in the middle of the range**: 33.9 seconds on the
+  clock against 41.2 at the median, 18% less, at the same cost. The means are within 3 seconds
+  of each other. On Qwen 3.8 the two took the same.
 - **The time limit stops the supervisor and not the pipeline.** Every run stopped by the limit
-  was the supervisor's, and all were renames. Counted in seconds of
-  work, working on Claims at the same time spends the same limit faster, so the design meant to
-  save time is the one the time limit cuts short. Two of the six Qwen runs stopped at 688 and
-  723 seconds on the clock.
+  was the supervisor's, and all were renames. Counted in seconds of work, working on Claims at
+  the same time spends the same limit faster, so the design meant to save time is the one the
+  time limit cuts short. Five of the eight stopped with less than 900 seconds on the clock: at
+  584, 688, 723, 840, and 899. The other three had run past 900 on the clock as well.
 
 **A first run of A was made with Docker stopped**, on 2026-10-16, without anyone noticing: a
 Claim sent to a Reproduction was Inconclusive at once. It gave about the same Decided Rates and
@@ -345,10 +351,14 @@ half the cost, and is not counted here.
 ### C: one pull request with four Behavioural Claims
 
 Made for the measurement (`tools/measure_claims_together.py`): four small fixes in one module,
-each stated as a Claim that fails its test before the pull request and passes it after.
+each stated as a Claim that fails its test before the pull request and passes it after. The
+Budget and the decision setting were as in A.
 
 ```sh
-uv run python tools/measure_claims_together.py --repetitions 3
+PR_VERIFICATION_BUDGET_DOLLARS=0.50 uv run python tools/measure_claims_together.py --repetitions 3
+
+uv run python tools/measure_claims_together.py --repetitions 2 \
+  --every-role qwen-remote http://localhost:18000/v1 Qwen/Qwen3.8-27B-FP8 QWEN_REMOTE_KEY
 ```
 
 | | MiniMax M3, pipeline | MiniMax M3, supervisor | Qwen 3.8, pipeline | Qwen 3.8, supervisor |
@@ -359,9 +369,13 @@ uv run python tools/measure_claims_together.py --repetitions 3
 | Seconds of work | 82, 110, 116 | 151, 163, 182 | 177, 334 | 234, 969 |
 | Dollars for a pull request | 0.012 | 0.012 | 0 | 0 |
 
+In one Qwen 3.8 run of each orchestration the Claim extractor found five Claims in the
+description, not four, which is why each has nine.
+
 - **On MiniMax M3 the supervisor took 93 seconds against 111 at the median, at the same cost
   and with every Claim Confirmed.** It did 1.6 times the work in less time, by working on the
-  Claims together. That is the upside the design was built for.
+  Claims together, which is the upside the design was built for. The ranges overlap: the
+  fastest run of each took 83 seconds.
 - **On Qwen 3.8 the two runs disagree with each other.** The supervisor's fastest run was the
   fastest of all, 147 seconds, and its slowest was stopped by the time limit after 874 seconds
   on the clock, with 969 seconds of work and one Claim Inconclusive. Two runs cannot say which
@@ -369,15 +383,17 @@ uv run python tools/measure_claims_together.py --repetitions 3
 
 ### What the two say together
 
-- **The supervisor is as accurate as the fixed pipeline, at the same cost, and it is quicker
-  when Claims can be worked on together**: by 16% at the median on a pull request with four
-  Claims that each need a Reproduction, and by 18% at the median on the Structural cases with MiniMax M3.
+- **The supervisor was as accurate as the fixed pipeline, at the same cost, and on MiniMax M3
+  it was quicker at the median**: by 16% on a pull request with four Claims that each need a
+  Reproduction, and by 18% on the Structural cases. On Qwen 3.8 it was not: the same on the
+  Structural cases, and in C one fast run and one stopped by the time limit.
 - **Its upside is cut short by a rule written for one Claim at a time.** The Budget's time limit
   counts seconds of work, so the more the supervisor works in parallel, the sooner it is
-  stopped, though less time has passed. It was stopped 8 times in these runs and the pipeline
-  never.
+  stopped, though less time has passed. It was stopped 9 times in these runs, 6 of them with
+  less than 900 seconds on the clock, and the pipeline never.
 - **Nothing here is larger than its noise by much.** Three repetitions on MiniMax M3 and two on
-  Qwen 3.8, on 18 pull requests and one made for the measurement.
+  Qwen 3.8, on 18 pull requests and one made for the measurement. The speed-up is a lead to
+  measure again, on more pull requests with several Claims, not a settled result.
 
 ## What to keep in mind when reading the results
 

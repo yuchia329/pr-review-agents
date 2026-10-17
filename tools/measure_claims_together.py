@@ -21,6 +21,11 @@ The seconds the comparison shows are the Budget's seconds of work, in which work
 same time is each counted, so they cannot show time saved by working on Claims together. Each
 run's seconds on the clock are printed beside them, and are what answers the question.
 
+One decider serves both orchestrations, and the fixed pipeline runs first. With Laya as the
+decider, it loads on its first use, so its load falls in the pipeline's first run: the runs
+recorded in `docs/model-comparisons.md` used `PR_VERIFICATION_DECISION=small_llm`, which loads
+nothing.
+
 All four Claims are true, and each fix fails its test before the pull request and passes it
 after, so each can be Confirmed under the Refuted rule as it stands.
 """
