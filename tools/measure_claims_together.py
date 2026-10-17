@@ -4,7 +4,7 @@ with four Behavioural Claims faster than the fixed pipeline, which works on one 
 A measurement, not a test. It makes one pull request that fixes four small functions, each
 fix stated in its description as a Claim that a test can decide, runs it through the core's
 entry point under both orchestrations with the models of a named configuration, and prints
-what each run gave and spent, and then the two side by side:
+what each run gave and spent and how long it took on the clock, and then the two side by side:
 
     uv run python tools/measure_claims_together.py --repetitions 3
 
@@ -14,14 +14,21 @@ as they do on a real pull request. The configuration's models need the keys it n
 `docs/model-comparisons.md` describes, and the decider is configured as `docs/decision-layer.md`
 does, with the configuration's default model as its small LLM.
 
+The seconds the comparison shows are the Budget's seconds of work, in which work done at the
+same time is each counted, so they cannot show time saved by working on Claims together. Each
+run's seconds on the clock are printed beside them, and are what answers the question.
+
 All four Claims are true, and each fix fails its test before the pull request and passes it
 after, so each can be Confirmed under the Refuted rule as it stands.
 """
 
 import argparse
+import json
 import os
+import statistics
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from compare_configurations import each_run
@@ -31,7 +38,7 @@ from pr_verification.comparison import Comparison, evaluate_configured, label_of
 from pr_verification.configuration import configuration_named, configured_models
 from pr_verification.context_bound import limits_from_environment, shown_within
 from pr_verification.decision import configured_decider, decision_configuration
-from pr_verification.evaluation import Evaluation, Part, _HandMade
+from pr_verification.evaluation import Evaluation, Part, PartEvaluation, _HandMade
 from pr_verification.orchestration import OrchestrationChoice
 from pr_verification.report import Verdict
 
@@ -101,19 +108,43 @@ def main() -> None:
         shown_within(limits_from_environment(os.environ)),
     ):
         case = FOUR_FIXES.built_in(Path(directory))
+        clock: dict[str, list[float]] = {}
         for how in OrchestrationChoice:
             label = label_of(configuration, how)
             print(f"running {label}", file=sys.stderr, flush=True)
-            evaluations[label] = evaluate_configured(
-                [case],
-                configuration,
+            runs = []
+            for repetition in range(arguments.repetitions):
+                started = time.monotonic()
+                runs.append(
+                    evaluate_configured(
+                        [case],
+                        configuration,
+                        repetitions=1,
+                        orchestration=how,
+                        decider=decider,
+                        budget=budget,
+                        models=models,
+                    )
+                )
+                clock.setdefault(label, []).append(time.monotonic() - started)
+                each_run(label, runs[-1])
+                shown = {"run": label, "repetition": repetition + 1}
+                print(
+                    json.dumps(shown | {"clock_seconds": round(clock[label][-1], 1)}),
+                    file=sys.stderr,
+                )
+            evaluations[label] = Evaluation(
                 repetitions=arguments.repetitions,
-                orchestration=how,
-                decider=decider,
-                budget=budget,
-                models=models,
+                development=PartEvaluation(
+                    tuple(run for each in runs for run in each.development.runs)
+                ),
+                held_out=PartEvaluation(()),
             )
-            each_run(label, evaluations[label])
+    for label, seconds in clock.items():
+        print(
+            f"{label}: median {statistics.median(seconds):.1f} seconds on the clock",
+            file=sys.stderr,
+        )
     print(Comparison(evaluations).to_json())
 
 
