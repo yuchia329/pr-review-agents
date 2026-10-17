@@ -285,6 +285,100 @@ Still to run and record here, each with the command above:
   hand-made ones;
 - the effect of prompt caching and of parallel tool calls on time and cost.
 
+## The supervisor against the fixed pipeline, 2026-10-16 and 17
+
+Where the multi-agent design does better than the fixed pipeline, and what it costs (#47,
+amended 2026-10-16). Two experiments, each under both orchestrations with the same models, and
+every run timed on the clock as well as in the Budget's seconds of work.
+
+**The Budget's seconds are not time on the clock.** They are seconds of work, and work done at
+the same time is each counted. The supervisor works on up to four Claims at once, so its
+seconds of work run ahead of the clock: in one run it had spent 907 seconds of work in 584
+seconds. The comparison's `seconds_per_pull_request` is seconds of work. How long a pull
+request took is `clock_seconds`, printed by the tools since `2fab0de`.
+
+### A: the development part of the Structural cases
+
+18 pull requests from open-source projects, 12 whose Claims are true and 6 with part of the
+change left out, whose Claims are false. Budget 900 seconds, 0.50 dollars, and 300 steps.
+
+```sh
+uv run python tools/compare_configurations.py --clones ~/.cache/pr-verification --no-hand-made \
+  --run default/pipeline --run default/supervisor --repetitions 3
+```
+
+| | MiniMax M3, pipeline | MiniMax M3, supervisor | Qwen 3.8, pipeline | Qwen 3.8, supervisor |
+| --- | --- | --- | --- | --- |
+| Repetitions | 3 | 3 | 2 | 2 |
+| Claims | 89 | 83 | 63 | 63 |
+| Decided Rate | 0.72 | 0.74 | 0.73 | 0.73 |
+| False Block rate | 0 | 0.04 | 0 | 0 |
+| False Assurance rate | 0 | 0 | 0 | 0 |
+| Seconds on the clock, median | 41 | **34** | 125 | 121 |
+| Seconds on the clock, mean | 93 | 90 | 269 | 266 |
+| Dollars for a pull request | 0.027 | 0.028 | 0 | 0 |
+| Runs stopped by the time limit | 0 of 54 | 2 of 54 | 0 of 36 | **6 of 36** |
+
+Qwen 3.8 was served by vLLM on `sicong`, as above; its two runs went side by side with
+MiniMax M3's, and both used this machine's Docker.
+
+- **The two decided as much as each other.** The Decided Rates differ by less than one Claim
+  in fifty.
+- **The supervisor's two False Blocks are one Claim.** Both are
+  `rename/packaging-private-format-full-version`, which the fixed pipeline also Refuted in the
+  first run of A. Each pull request makes one to three Claims, so these rates rest on about 12
+  distinct true Claims and 6 false ones, and no error in 12 leaves the upper end of a one-sided
+  95% interval at 22%.
+- **On MiniMax M3 the supervisor was quicker in the middle of the range**, 34 seconds on the
+  clock against 41 at the median, at the same cost. The means are within 3 seconds of each
+  other.
+- **The time limit stops the supervisor and not the pipeline.** Every run stopped by the limit
+  was the supervisor's, and all were renames. Counted in seconds of
+  work, working on Claims at the same time spends the same limit faster, so the design meant to
+  save time is the one the time limit cuts short. Two of the six Qwen runs stopped at 688 and
+  723 seconds on the clock.
+
+**A first run of A was made with Docker stopped**, on 2026-10-16, without anyone noticing: a
+Claim sent to a Reproduction was Inconclusive at once. It gave about the same Decided Rates and
+half the cost, and is not counted here.
+
+### C: one pull request with four Behavioural Claims
+
+Made for the measurement (`tools/measure_claims_together.py`): four small fixes in one module,
+each stated as a Claim that fails its test before the pull request and passes it after.
+
+```sh
+uv run python tools/measure_claims_together.py --repetitions 3
+```
+
+| | MiniMax M3, pipeline | MiniMax M3, supervisor | Qwen 3.8, pipeline | Qwen 3.8, supervisor |
+| --- | --- | --- | --- | --- |
+| Repetitions | 3 | 3 | 2 | 2 |
+| Claims Confirmed | 12 of 12 | 12 of 12 | 9 of 9 | 8 of 9 |
+| Seconds on the clock | 83, 111, 117 | **83, 93, 97** | 178, 341 | 147, 874 |
+| Seconds of work | 82, 110, 116 | 151, 163, 182 | 177, 334 | 234, 969 |
+| Dollars for a pull request | 0.012 | 0.012 | 0 | 0 |
+
+- **On MiniMax M3 the supervisor took 93 seconds against 111 at the median, at the same cost
+  and with every Claim Confirmed.** It did 1.6 times the work in less time, by working on the
+  Claims together. That is the upside the design was built for.
+- **On Qwen 3.8 the two runs disagree with each other.** The supervisor's fastest run was the
+  fastest of all, 147 seconds, and its slowest was stopped by the time limit after 874 seconds
+  on the clock, with 969 seconds of work and one Claim Inconclusive. Two runs cannot say which
+  is typical.
+
+### What the two say together
+
+- **The supervisor is as accurate as the fixed pipeline, at the same cost, and it is quicker
+  when Claims can be worked on together**: by 16% at the median on a pull request with four
+  Claims that each need a Reproduction, and by 18% at the median on the Structural cases with MiniMax M3.
+- **Its upside is cut short by a rule written for one Claim at a time.** The Budget's time limit
+  counts seconds of work, so the more the supervisor works in parallel, the sooner it is
+  stopped, though less time has passed. It was stopped 8 times in these runs and the pipeline
+  never.
+- **Nothing here is larger than its noise by much.** Three repetitions on MiniMax M3 and two on
+  Qwen 3.8, on 18 pull requests and one made for the measurement.
+
 ## What to keep in mind when reading the results
 
 - **Prompts were tuned on the default configuration.** Every role's instructions were written
