@@ -218,7 +218,12 @@ class Ledger:
         # The share of each Claim, with what was recorded against it. They start the same.
         self._shares: list[Budget] = []
         self._claims: list[BudgetSpend] = []
-        # Held while a spend is recorded or a move is made, so that each is made whole.
+        # How many pieces of work are under way, and the reading of the clock up to which the
+        # seconds of the pull request count the time in which work was under way.
+        self._under_way = 0
+        self._counted_to = 0.0
+        # Held while a spend is recorded, a move is made, or the clock is read for a piece of
+        # work, so that each is made whole.
         self._lock = threading.Lock()
 
     def share_out(self, claims: int) -> None:
@@ -473,7 +478,11 @@ class Ledger:
         raises or not. `dollars` says what work that was done cost."""
         self._refuse_once_spent(claim)
         cost = 0.0
-        started = self._clock()
+        with self._lock:
+            started = self._clock()
+            if self._under_way == 0:
+                self._counted_to = started
+            self._under_way += 1
         try:
             done = work()
             if dollars is not None:
@@ -481,10 +490,14 @@ class Ledger:
             return done
         finally:
             # Work that was started is recorded whole, whatever limit was reached meanwhile.
-            spend = BudgetSpend(self._clock() - started, cost, steps)
-            _require_amounts(spend)
             with self._lock:
-                self._add(spend, claim)
+                ended = self._clock()
+                self._under_way -= 1
+                on_the_clock = ended - self._counted_to
+                self._counted_to = ended
+                spend = BudgetSpend(ended - started, cost, steps)
+                _require_amounts(spend)
+                self._add(spend, claim, on_the_clock=on_the_clock)
 
     def _no_longer_than_is_left(self, limits: Limits, claim: int | None) -> Limits:
         """The limits of a run for `claim`, as `sandbox` says: as given for no Claim, and for
@@ -500,9 +513,16 @@ class Ledger:
         # let go ahead. The run is then given no time, and never less than none.
         return replace(limits, seconds=min(limits.seconds, max(0.0, left)))
 
-    def _add(self, spend: BudgetSpend, claim: int | None) -> None:
-        """Add one spend to what is recorded, as `record` says. The lock is held."""
-        self._spent = _sum(self._spent, spend)
+    def _add(
+        self, spend: BudgetSpend, claim: int | None, *, on_the_clock: float | None = None
+    ) -> None:
+        """Add one spend to what is recorded, as `record` says. The lock is held.
+
+        `on_the_clock` is what the spend adds to the seconds of the pull request, as the
+        ledger says of work timed through it, and None for a spend given to `record`, whose
+        seconds count in full."""
+        counted = spend if on_the_clock is None else replace(spend, seconds=on_the_clock)
+        self._spent = _sum(self._spent, counted)
         if self._stopped is None:
             self._stopped = _reached(self._spent, self._budget)
         if claim is not None:
