@@ -329,10 +329,12 @@ class PullRequestSpend(BudgetSpend):
     """What was spent on one pull request in all, and on each of its Claims.
 
     `seconds`, `dollars`, and `steps` are for the whole pull request: the work on every Claim,
-    and the work that was for no one Claim, such as listing the Claims. In the printed report
-    it is the report's `budget_spend`, with `seconds`, `dollars`, `steps`, `stopped_by`, which
-    is `time`, `money`, `steps`, or null, and `claims`, a list holding what a `ClaimSpend`
-    prints for each Claim.
+    and the work that was for no one Claim, such as listing the Claims. Its `seconds` are
+    seconds on the clock during which work was under way, in which work done at the same time
+    counts once, and those of each `ClaimSpend` are seconds of work, as `pr_verification.budget`
+    says. In the printed report it is the report's `budget_spend`, with `seconds`, `dollars`,
+    `steps`, `stopped_by`, which is `time`, `money`, `steps`, or null, and `claims`, a list
+    holding what a `ClaimSpend` prints for each Claim.
     """
 
     stopped_by: BudgetLimit | None = None

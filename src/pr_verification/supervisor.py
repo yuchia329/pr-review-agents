@@ -415,8 +415,9 @@ class Supervisor:
             other. When the Budget is spent while a Sandbox is made ready, no dispatch of
             the step is run.
 
-            The time each dispatch takes is recorded as the ledger says, so work done at the
-            same time is each counted: the Budget's seconds are seconds of work. While a
+            The time each dispatch takes is recorded as the ledger says: in full against the
+            share of its Claim, and once against the Budget's time limit, however many
+            dispatches are under way at the same time. While a
             recording is open, what each dispatch does is recorded as
             `pr_verification.tracing` says of a thread started for a dispatch.
 
