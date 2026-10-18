@@ -20,6 +20,11 @@ one answer of the model is waited for, in place of the client's five minutes: a 
 serving a model that thinks at length can need longer for one answer, and the wait is there to
 catch a request that hangs, which is no part of what is measured here.
 
+The orchestration is the one `PR_VERIFICATION_ORCHESTRATION` chooses, as for the command line:
+the fixed pipeline unless it says `supervisor`. Each run of the supervisor is given a state
+directory of its own, so that nothing is kept from one run to the next, as the command line
+does without `--state-dir`.
+
 Every Claim of every run is printed too, with its reason, how many Reproductions were run for it,
 how many of those the Reproduction judge accepted, and the limit of the Budget that stopped the
 work on it. A rate of no False Assurances carries weight only when Reproductions were put to
@@ -43,6 +48,7 @@ from pr_verification.decision import configured_decider, decision_configuration
 from pr_verification.evaluation import CaseRun, Part, PartEvaluation, evaluate, score
 from pr_verification.model import Model, ModelFailed
 from pr_verification.openai_compatible import model_from_environment
+from pr_verification.orchestration import OrchestrationChoice, orchestration_choice
 from pr_verification.report import (
     AcceptedReproduction,
     Claim,
@@ -51,6 +57,7 @@ from pr_verification.report import (
     ReproductionEvidence,
     Verdict,
 )
+from pr_verification.supervisor import supervisor
 
 
 def by_placement(part: PartEvaluation) -> dict[str, dict[str, Any]]:
@@ -134,6 +141,7 @@ def main() -> None:
         model._client.timeout = httpx.Timeout(arguments.answer_wait, connect=10.0)
     decider = configured_decider(decision_configuration(os.environ), model)
     budget = budget_from_environment(os.environ)
+    choice = orchestration_choice(os.environ)
     confirmed: list[dict[str, str]] = []
     claims: list[dict[str, Any]] = []
     failed_in_a_row: list[str] = []
@@ -142,7 +150,14 @@ def main() -> None:
 
     def recorded_run(pull_request: PullRequest, model: Model) -> Report:
         try:
-            report = run(pull_request, model, decider, budget=budget)
+            if choice is OrchestrationChoice.SUPERVISOR:
+                with tempfile.TemporaryDirectory() as state:
+                    orchestration = supervisor(Path(state), progress_guard=decider)
+                    report = run(
+                        pull_request, model, decider, orchestration=orchestration, budget=budget
+                    )
+            else:
+                report = run(pull_request, model, decider, budget=budget)
         except ModelFailed as error:
             stop_if_refused(names[pull_request.repository], str(error))
             failed_in_a_row.append(str(error))
@@ -187,6 +202,7 @@ def main() -> None:
 
     parts = {"development": evaluation.development, "held_out": evaluation.held_out}
     measured = {
+        "orchestration": choice.value,
         "evaluation": json.loads(evaluation.to_json()),
         "by_placement": {name: by_placement(part) for name, part in parts.items()},
         "confirmed": confirmed,
