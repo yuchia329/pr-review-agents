@@ -53,8 +53,9 @@ class Budget:
 
     seconds: float = DEFAULT_SECONDS
     """The time limit: the most seconds on the clock during which work for the pull request
-    is under way. Work done at the same time counts once against it. A Claim's share of it is
-    in seconds of work, in which work done at the same time each counts (`Ledger`)."""
+    is under way. Time in which several pieces of work are under way counts once against it. A
+    Claim's share of it is in seconds of work, in which each piece of work counts in full
+    (`Ledger`)."""
 
     dollars: float = DEFAULT_DOLLARS
     """The money limit: the most dollars, summed across every model at each model's price."""
@@ -135,22 +136,30 @@ class Ledger:
         what was recorded against each Claim and what was recorded against no Claim: exactly
         in steps, and to within the rounding of a floating-point sum in dollars.
 
-        In seconds, the two are measured differently. What is recorded against a Claim, and
-        against no Claim, is seconds of work: each piece of work counts in full, though others
-        were done at the same time. What is recorded against the whole pull request is seconds
-        on the clock during which work was under way: a piece of work done through `model` or
-        `sandbox` is under way from the reading of the clock just before it is started to the
-        one just after it ends, and time in which two or more were under way counts once. Time
-        in which none was under way is not counted. The seconds of a spend given to `record`
-        were not timed by the ledger, so they count in full against the pull request as well.
+        In seconds, the pull request and each Claim are measured differently. What is recorded
+        against a Claim, and against no Claim, is seconds of work: each piece of work counts in
+        full, though others were done at the same time. What is recorded against the whole
+        pull request is seconds on the clock during which work was under way. A piece of work
+        done through `model` or `sandbox` is under way from the reading of the clock just
+        before it is started to the one just after it ends or raises, and time in which two or
+        more were under way counts once. Time in which none was under way is not counted. Work
+        refused with `BudgetSpent` reads the clock never and is never under way. The seconds of
+        a spend given to `record` were not timed by the ledger, so they count in full against
+        the pull request as well, as against a Claim.
+
+        Each reading of the clock that starts or ends a piece of work, with the change it
+        makes to what is recorded, is made whole and one after another, as each spend is. The
+        seconds of the pull request are brought up to date each time a piece of work ends:
+        they are then the time, up to that reading of the clock, during which work was under
+        way, and the seconds of every spend given to `record`. Work still under way counts
+        only up to the reading at which the last piece of work ended.
 
         So the seconds of the pull request are never more than the sum of the seconds recorded
         against each Claim and against no Claim, and they are that sum, to within the rounding
-        of a floating-point sum, when one piece of work is done at a time. They are brought up
-        to date each time a piece of work ends: they are then the time up to that reading of
-        the clock during which work was under way, and the seconds of every spend given to
-        `record`. Work still under way when they are read has counted only up to the last
-        piece of work that ended.
+        of a floating-point sum, when one piece of work is done at a time. For example, when
+        work for no Claim is under way from 0 to 10 seconds on the clock, and inside it work
+        for Claim 1 from 2 to 5, the pull request has 5 seconds once the work for Claim 1 ends
+        and 10 once the other does, and Claim 1 has 3.
 
     When a limit is reached
         A limit is reached when what has been recorded in its unit is the limit or more. The
@@ -178,7 +187,8 @@ class Ledger:
     At the same time
         One ledger may be used from several threads at once, as it is when several roles work
         at the same time. Each spend is recorded whole and each move is made whole, one after
-        another, so the sums hold whatever the threads do. Each piece of work is timed on its
+        another, so what is recorded holds as said above, whatever the threads do. Each piece
+        of work is timed on its
         own, so two pieces of work done at the same time both count in full against their
         Claims, or against no Claim, and once against the pull request, as said above.
 
@@ -217,9 +227,11 @@ class Ledger:
         Every share is the same. For each limit it is what is left of that limit now, which is
         the limit less what has been recorded for the whole pull request, divided by `claims`:
         exactly for time and money, and rounded down to a whole number for steps, though never
-        to less than 1 step. So what was spent before the shares are set aside comes out of no
-        Claim's share, and one Claim that spends its whole share takes nothing from the share
-        of another, but for one case.
+        to less than 1 step. For time, what is left is seconds on the clock, and each share of
+        it is seconds of work, so Claims worked on at the same time can spend their shares
+        before the Budget's time limit is reached. So what was spent before the shares are set
+        aside comes out of no Claim's share, and one Claim that spends its whole share takes
+        nothing from the share of another, but for one case.
 
         With fewer steps left than there are Claims, each share is 1 step, and the shares come
         to more steps than are left. The Budget's own limit still holds, so the Claims worked
@@ -298,7 +310,9 @@ class Ledger:
         Each amount is the limit in that unit less what has been recorded against it, and 0
         when what was recorded is past the limit. So an amount is never less than 0, and one
         that is 0 means that limit has been reached. For a Claim no share was set aside for,
-        nothing is left: 0.0 seconds, 0.0 dollars, and 0 steps.
+        nothing is left: 0.0 seconds, 0.0 dollars, and 0 steps. What is left of the Budget's
+        time leaves out work still under way since the last piece of work ended, as the
+        ledger says.
 
         What is left of a Claim's share says nothing of the Budget, and can be more than is
         left of the Budget.
@@ -387,14 +401,14 @@ class Ledger:
            when the share of Claim `claim` is.
         2. Otherwise asks `model` once, with the request exactly as given: through
            `complete_priced` when `model` is a `PricedModel`, and through `complete` when not.
-        3. Records one spend against `claim`, as `record` does, though it is recorded
-           whatever limit other work reached meanwhile, and its seconds count against the
-           whole pull request as work done at the same time does, as the ledger says. Its
+        3. Records one spend against `claim`, as `record` does, but for two things: it is
+           recorded whatever limit other work reached meanwhile, and its seconds count
+           against the pull request on the clock, as the ledger says, not in full. Its
            `seconds` are the time between a reading of the clock just before `model` is asked
-           and one just after. Its
-           `dollars` are those of the `PricedResponse`, and 0.0 for a model that is no
-           `PricedModel`: it has no price, so it costs time and no money, as a local model
-           does. Its `steps` are 1: each request is one step, whatever the model.
+           and one just after. Its `dollars` are those of the `PricedResponse`, and 0.0 for a
+           model that is no `PricedModel`: it has no price, so it costs time and no money,
+           as a local model does. Its `steps` are 1: each request is one step, whatever the
+           model.
         4. Returns the response exactly as `model` gave it.
 
         When `model` raises, the request is recorded all the same, with its seconds, one step,
@@ -426,13 +440,13 @@ class Ledger:
         2. Otherwise asks `sandbox` once, with what it was given, but for one thing. A `run`
            for a Claim is given no longer than the time that is left: its `limits` are as
            given, except that `seconds` is lowered to what is left of the time limit of the
-           Claim's share, or of the Budget's when less is left of that. It is never raised.
-           So one run cannot take a Claim far past its share. A `run` for no Claim is given
-           its `limits` as they are: an install cut short would leave nothing for a later run
-           to use.
-        3. Records one spend against `claim`, as `record` does, though it is recorded
-           whatever limit other work reached meanwhile, and its seconds count against the
-           whole pull request as work done at the same time does, as the ledger says: the
+           Claim's share, or of the Budget's when less is left of that, each as `left` says.
+           It is never raised. So one run cannot take a Claim far past its share. A `run`
+           for no Claim is given its `limits` as they are: an install cut short would leave
+           nothing for a later run to use.
+        3. Records one spend against `claim`, as `record` does, but for two things: it is
+           recorded whatever limit other work reached meanwhile, and its seconds count
+           against the pull request on the clock, as the ledger says, not in full. It is the
            seconds between a reading of the clock just before `sandbox` is asked and one just
            after, with no dollars and no steps. Running code costs time only.
         4. Returns what `sandbox` returned.

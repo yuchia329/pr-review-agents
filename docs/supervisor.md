@@ -67,8 +67,9 @@ three runs of each were within 1 second of one another.
 - **It is faster once the model's time is what a run is made of.** At 5 seconds a request the
   four Claims take 10 seconds of waiting on the model and not 40, and at 20 seconds 40 and not
   160. A hosted model's requests take seconds, so that is the case to expect.
-- **Together spends more of the Budget's time.** The Budget's seconds are seconds of work, and
-  work done at the same time is each counted. With requests of 5 seconds, a run together
+- **Together spends more of the Budget's time.** The Budget's seconds were then seconds of
+  work, in which work done at the same time each counted, as they no longer are for the pull
+  request since ADR 0007. With requests of 5 seconds, a run together
   recorded 79 seconds of work and a run one at a time 55. Making the further Sandboxes
   ready is about 13 of those 24 seconds. Where the rest went was not measured.
 

@@ -7,9 +7,10 @@ core's entry point once for each `--run`, and prints the comparison as JSON
 Rate, and the time and the cost of a pull request for each run, and beside them the seconds
 each orchestration took on the clock.
 
-The comparison's seconds are the Budget's seconds of work, in which work done at the same
-time is each counted, so they make the supervisor look slower whenever it works on Claims
-together. `clock_seconds` is how long a pull request took, and is the one to compare.
+The comparison's seconds are the Budget's seconds for a pull request: seconds on the clock
+during which work was under way, in which work done at the same time counts once (ADR 0007).
+Before ADR 0007 they were seconds of work, in which it each counted. `clock_seconds` is how
+long a pull request took from start to end, time with no work under way included.
 
     uv run --extra laya python tools/compare_configurations.py \\
         --run default/pipeline --run default/supervisor --baseline default --repetitions 3
@@ -129,9 +130,9 @@ def one_run(label: str, case_run: CaseRun, clock_seconds: float | None = None) -
     when that was timed, and which limit of the Budget stopped it, if one did: a Claim left
     Inconclusive by a limit is the limit's doing, not the model's.
 
-    `seconds` is the Budget's seconds of work, in which work done at the same time is each
-    counted, so the supervisor's are more than it took whenever it works on Claims together.
-    `clock_seconds` is how long the run took."""
+    `seconds` is the Budget's seconds for the pull request, on the clock while work was under
+    way, as `pr_verification.budget` says. `clock_seconds` is how long the run took from start
+    to end."""
     spend = case_run.spend
     shown = {
         "run": label,

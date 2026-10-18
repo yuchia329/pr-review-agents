@@ -17,9 +17,10 @@ as they do on a real pull request. The configuration's models need the keys it n
 `docs/model-comparisons.md` describes, and the decider is configured as `docs/decision-layer.md`
 does, with the configuration's default model as its small LLM.
 
-The seconds the comparison shows are the Budget's seconds of work, in which work done at the
-same time is each counted, so they cannot show time saved by working on Claims together. Each
-run's seconds on the clock are printed beside them, and are what answers the question.
+The seconds the comparison shows are the Budget's seconds for a pull request, on the clock
+while work was under way (ADR 0007). Each run's seconds on the clock from start to end are
+printed beside them, and are what answers the question. Runs made before ADR 0007 showed
+seconds of work, in which work done at the same time each counted.
 
 One decider serves both orchestrations, and the fixed pipeline runs first. With Laya as the
 decider, it loads on its first use, so its load falls in the pipeline's first run: the runs

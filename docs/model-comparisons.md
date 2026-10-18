@@ -291,11 +291,13 @@ Where the multi-agent design does better than the fixed pipeline, and what it co
 amended 2026-10-16). Two experiments, each under both orchestrations with the same models, and
 every run timed on the clock as well as in the Budget's seconds of work.
 
-**The Budget's seconds are not time on the clock.** They are seconds of work, and work done at
-the same time is each counted. The supervisor works on up to four Claims at once, so its
-seconds of work run ahead of the clock: in one run it had spent 907 seconds of work in 584
-seconds. The comparison's `seconds_per_pull_request` is seconds of work. How long a pull
-request took is `clock_seconds`, which the two tools below print for every run.
+**The Budget's seconds were not time on the clock** when these runs were made. They were
+seconds of work, in which work done at the same time each counted; since ADR 0007 the pull
+request's are seconds on the clock while work is under way. The supervisor works on up to
+four Claims at once, so its seconds of work ran ahead of the clock: in one run it had spent 907
+seconds of work in 584 seconds. In these runs the comparison's `seconds_per_pull_request` is
+seconds of work. How long a pull request took is `clock_seconds`, which the two tools below
+print for every run.
 
 ### A: the development part of the Structural cases
 
@@ -388,8 +390,8 @@ description, not four, which is why each has nine.
   Reproduction, and by 18% on the Structural cases. On Qwen 3.8 it was not: the same on the
   Structural cases, and in C one fast run and one stopped by the time limit.
 - **Its upside is cut short by a rule written for one Claim at a time.** The Budget's time limit
-  counts seconds of work, so the more the supervisor works in parallel, the sooner it is
-  stopped, though less time has passed. It was stopped 9 times in these runs, 6 of them with
+  counted seconds of work, so the more the supervisor worked in parallel, the sooner it was
+  stopped, though less time had passed. ADR 0007 reads it on the clock since. It was stopped 9 times in these runs, 6 of them with
   less than 900 seconds on the clock, and the pipeline never.
 - **Nothing here is larger than its noise by much.** Three repetitions on MiniMax M3 and two on
   Qwen 3.8, on 18 pull requests and one made for the measurement. The speed-up is a lead to

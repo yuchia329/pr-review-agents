@@ -25,7 +25,7 @@ still unresolved then is Inconclusive, and the report's `budget_spend` says whic
 
 | Variable | Meaning | When unset |
 | --- | --- | --- |
-| `PR_VERIFICATION_BUDGET_SECONDS` | The time limit, in seconds | 900 |
+| `PR_VERIFICATION_BUDGET_SECONDS` | The time limit: seconds on the clock while work is under way (ADR 0007) | 900 |
 | `PR_VERIFICATION_BUDGET_DOLLARS` | The money limit, in dollars | 3 |
 | `PR_VERIFICATION_BUDGET_STEPS` | The step limit: the most requests to a model | 300 |
 | `PR_VERIFICATION_INPUT_PRICE` | Dollars for a million tokens sent to the model | 0 |

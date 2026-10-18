@@ -416,10 +416,9 @@ class Supervisor:
             the step is run.
 
             The time each dispatch takes is recorded as the ledger says: in full against the
-            share of its Claim, and once against the Budget's time limit, however many
-            dispatches are under way at the same time. While a
-            recording is open, what each dispatch does is recorded as
-            `pr_verification.tracing` says of a thread started for a dispatch.
+            share of its Claim, while time in which several dispatches are under way counts
+            once against the Budget. While a recording is open, what each dispatch does is
+            recorded as `pr_verification.tracing` says of a thread started for a dispatch.
 
         A role stopped for going round in circles
             A dispatch ends, as the pipeline's step 4 says, when a role it runs is stopped
