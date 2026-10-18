@@ -397,6 +397,66 @@ description, not four, which is why each has nine.
   Qwen 3.8, on 18 pull requests and one made for the measurement. The speed-up is a lead to
   measure again, on more pull requests with several Claims, not a settled result.
 
+These two experiments led to ADR 0007, and the runs made after it are below.
+
+### After the time limit was read on the clock, 2026-10-17 and 18
+
+ADR 0007 made the pull request's time limit seconds on the clock while work is under way, with
+each Claim's share still in seconds of work (#47). C on both models and A on Qwen 3.8 were run
+again at `9aab7d0`, with the same commands, Budget, and decision setting as above.
+
+**C, one pull request with four Behavioural Claims.** Every Claim was Confirmed in every run,
+and no run was stopped by the time limit.
+
+| | Pipeline, before | Pipeline, after | Supervisor, before | Supervisor, after |
+| --- | --- | --- | --- | --- |
+| MiniMax M3, seconds on the clock | 83, 111, 117 | 85, 98, 109 | 83, 93, 97 | 80, 81, 110 |
+| MiniMax M3, the Budget's seconds | 82, 110, 116 | 85, 98, 108 | 151, 163, 182 | 79, 79, 106 |
+| Qwen 3.8, seconds on the clock | 178, 341 | 166, 203 | 147, **874, stopped** | 165, 266 |
+| Qwen 3.8, the Budget's seconds | 177, 334 | 165, 202 | 234, 969 | 164, 254 |
+
+In one supervisor run on each model the Claim extractor found five Claims, not four. On
+MiniMax M3 the supervisor took 81 seconds at the median against the pipeline's 98, 18% less,
+where before it was 93 against 111.
+
+**A on Qwen 3.8, the development part of the Structural cases**, two repetitions:
+
+| | Pipeline, before | Pipeline, after | Supervisor, before | Supervisor, after |
+| --- | --- | --- | --- | --- |
+| Decided Rate | 0.73 (46 of 63) | 0.76 (47 of 62) | 0.73 (46 of 63) | 0.76 (47 of 62) |
+| False Blocks, False Assurances | 0, 0 | 0, 0 | 0, 0 | 0, 0 |
+| Seconds on the clock, median | 125.0 | 122.8 | 121.2 | **107.5** |
+| Seconds on the clock, mean | 269 | 233 | 266 | 295 |
+| Runs stopped by the time limit | 0 of 36 | 0 of 36 | 6 of 36 | 6 of 36 |
+| Of them, with less than 900 seconds on the clock | | | 4: 688, 723, 840, 899 | **none** |
+
+The runs before went side by side with A on MiniMax M3 and shared this machine's Docker; the
+runs after went alone.
+
+- **The time limit no longer stops the supervisor early.** Every stop after the change came
+  after more than 900 seconds on the clock: at 935, 988, 1055, 1063, 1096, and 1148. Before,
+  four of Qwen 3.8's six came sooner, and in C one came at 874.
+- **The six stops left are real, and they show a cost of the supervisor.** All six are on three
+  pull requests, `rename/packaging-gil-disabled`, its left-out pair, and
+  `rename/attrs-post-init-hook@left-out`, in both repetitions. On them the supervisor kept
+  working until the limit, up to 1148 seconds, and left a Claim Inconclusive in each, where the
+  pipeline ended in 266 to 988 seconds and decided more: 8 Claims in those six runs against the
+  supervisor's 5.
+- **On the other pull requests the supervisor was quicker**: 107.5 seconds at the median against
+  the pipeline's 122.8, 12% less, where before the two were the same. The mean is higher, 295
+  against 233, because of the six runs that went to the limit.
+- **Both decided as many Claims in all.** The Decided Rate was 0.76 for both, 47 of 62, so the
+  supervisor decided 3 more than the pipeline on the other pull requests. Neither made a False
+  Block or a False Assurance.
+
+So with the time limit read on the clock, the supervisor's upside holds on both models where a
+pull request has Claims it can decide: 18% quicker on MiniMax M3 in C, and 12% quicker at the
+median on Qwen 3.8 in A. What is left against it is that on a pull request with a Claim it
+does not decide, it can take the whole time limit, and on the three such pull requests here it
+decided fewer Claims than the pipeline. As before, two or three
+repetitions on 18 pull requests and one made for the measurement are a lead, not a settled
+result.
+
 ## What to keep in mind when reading the results
 
 - **Prompts were tuned on the default configuration.** Every role's instructions were written
