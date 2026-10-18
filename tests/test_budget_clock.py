@@ -92,14 +92,14 @@ class Threads:
         self._threads: list[threading.Thread] = []
         self._raised: list[BaseException] = []
 
-    def start(self, work: Callable[[], object]) -> None:
+    def start(self, work: Callable[[], object], name: str | None = None) -> None:
         def run() -> None:
             try:
                 work()
             except BaseException as raised:
                 self._raised.append(raised)
 
-        thread = threading.Thread(target=run, daemon=True)
+        thread = threading.Thread(target=run, name=name, daemon=True)
         self._threads.append(thread)
         thread.start()
 
@@ -243,7 +243,9 @@ def test_threads_whose_work_overlaps_count_the_time_either_was_under_way() -> No
     assert second.started.wait(timeout=10)
     clock.now = 5.0
     first.may_end.set()
-    while ledger.spent().steps < 1:
+    for _ in range(10_000):
+        if ledger.spent().steps == 1:
+            break
         threading.Event().wait(0.001)
 
     assert ledger.spent().seconds == pytest.approx(5.0)
@@ -264,12 +266,12 @@ def test_readings_of_the_clock_from_many_threads_count_the_time_any_work_was_und
         def __init__(self) -> None:
             self._lock = threading.Lock()
             self._now = 0.0
-            self.readings: list[tuple[int, float]] = []
+            self.readings: list[tuple[str, float]] = []
 
         def __call__(self) -> float:
             with self._lock:
                 self._now += 1.0
-                self.readings.append((threading.get_ident(), self._now))
+                self.readings.append((threading.current_thread().name, self._now))
                 now = self._now
             threading.Event().wait(0.0002)
             return now
@@ -284,31 +286,29 @@ def test_readings_of_the_clock_from_many_threads_count_the_time_any_work_was_und
             return "a response"
 
     threads = Threads()
-    idents: list[int] = []
 
     def work(claim: int) -> None:
-        idents.append(threading.get_ident())
         model = ledger.model(Yields(), claim=claim)
         for _ in range(25):
             model.complete(REQUEST)
 
     for claim in range(4):
-        threads.start(partial(work, claim))
+        threads.start(partial(work, claim), name=f"claim {claim}")
     threads.join()
 
     # Each thread does one piece of work after another, and the ledger reads the clock once
     # as each starts and once as it ends, so a thread's readings pair up in order.
     intervals: dict[int, list[tuple[float, float]]] = {}
-    for ident in set(idents):
-        own = [reading for thread, reading in clock.readings if thread == ident]
-        intervals[ident] = list(zip(own[::2], own[1::2], strict=True))
+    for claim in range(4):
+        own = [reading for thread, reading in clock.readings if thread == f"claim {claim}"]
+        intervals[claim] = list(zip(own[::2], own[1::2], strict=True))
     union, reached = 0.0, 0.0
     for start, end in sorted(pair for pairs in intervals.values() for pair in pairs):
         union += max(0.0, end - max(start, reached))
         reached = max(reached, end)
     assert ledger.spent().seconds == pytest.approx(union)
-    assert sorted(spent.seconds for spent in everything_recorded(ledger, 4)[1:]) == pytest.approx(
-        sorted(sum(end - start for start, end in pairs) for pairs in intervals.values())
+    assert [spent.seconds for spent in everything_recorded(ledger, 4)[1:]] == pytest.approx(
+        [sum(end - start for start, end in intervals[claim]) for claim in range(4)]
     )
 
 
