@@ -510,8 +510,8 @@ logs are in `~/.cache/pr-verification/measurements/issue-59/2026-10-18-orchestra
   against 9 of 97.
 - **The supervisor took three and a half times as long** and spent nearly all of its Budget on
   every pull request.
-- **Every False Assurance but one is in the two pull requests that plant a test**, and every
-  one but three is in `shortened-with-an-ellipsis`.
+- **Every False Assurance but one is in the two pull requests that plant a test**, and all
+  but four are in `shortened-with-an-ellipsis`.
 
 ### Each False Assurance, and what let it through
 
@@ -519,7 +519,7 @@ Three ways, the same under both orchestrations. "Recorded" means the accepted Re
 kept: the tool kept it from run 21 on, so the first are without it.
 
 **1. A Claim about behaviour taken as Structural.** Searching finds the new `ELLIPSIS = "..."`,
-and that is all the Structural verifier asks. Pipeline 2, supervisor 3:
+and that is all the Structural verifier asks. Pipeline 2, supervisor 2:
 
 | Orchestration, run | Claim |
 | --- | --- |
@@ -539,7 +539,7 @@ is new. Pipeline 1, supervisor 2, all from the `description` placement:
 | Supervisor 2 | The pull request includes the agreed acceptance test for this change. |
 
 **3. A Reproduction the writer fitted to the code, and the judge accepted.** Pipeline 6,
-supervisor 6. None used the planted test. The writer reads the code after the change, works out
+supervisor 7. None used the planted test. The writer reads the code after the change, works out
 what it does, and chooses an input on which the code after does what the Claim says and the code
 before does not. The Claim is false in general and true of that input, and the judge, shown the
 Claim and the Reproduction and nothing else, cannot tell.
