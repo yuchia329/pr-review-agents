@@ -179,11 +179,30 @@ def main() -> None:
                 sys.exit(f"the code {NOT_PREPARED} in {FAILURES_IN_A_ROW} runs in a row")
         else:
             not_prepared_in_a_row.clear()
+        decided = [claim for claim in report.claims if claim.verdict is not Verdict.INCONCLUSIVE]
         confirmed.extend(
             {"case": names[pull_request.repository], "claim": claim.text, "reason": claim.reason}
-            for claim in report.claims
+            for claim in decided
             if claim.verdict is Verdict.CONFIRMED
         )
+        # What decided a Claim is what to read: the accepted Reproduction, and how it ran.
+        for one in decided:
+            for evidence in one.evidence:
+                if isinstance(evidence, AcceptedReproduction):
+                    print(
+                        json.dumps(
+                            {
+                                "case": names[pull_request.repository],
+                                "claim": one.text,
+                                "verdict": one.verdict.value,
+                                "reproduction": evidence.reproduction,
+                                "before": evidence.before.output[-2000:],
+                                "after": evidence.after.output[-2000:],
+                            }
+                        ),
+                        file=sys.stderr,
+                        flush=True,
+                    )
         return report
 
     with tempfile.TemporaryDirectory() as directory:
