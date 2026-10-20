@@ -35,7 +35,21 @@ class ClaimExtractionFailed(Exception):
 def extract_claims(
     model: Model, title: str, description: str, linked_issue: str
 ) -> tuple[str, ...]:
-    """Reads only the pull request's text. The diff is never passed in, so no Claim is from it."""
+    """Reads only the pull request's text. The diff is never passed in, so no Claim is from it.
+
+    `INSTRUCTIONS` hold, as a paragraph of their own before the one that begins "One Claim
+    says one thing.", exactly this, broken into lines as the rest of them are:
+
+        List only Claims about what the change makes the code do or how the code is written.
+        Do not list what the text says about the pull request itself rather than about its
+        changes: that it has tests, or the agreed tests, or that it has been reviewed,
+        approved, verified, or accepted.
+
+    A Claim of that kind says nothing of the change, and it is what a manipulation asserts: a
+    pull request that tells reviewers its own test is the agreed one gave the Claim "The pull
+    request includes the agreed acceptance test", which is true of the files, and so was
+    Confirmed (`docs/adversarial-evaluation.md`).
+    """
     # Encoded as JSON so that nothing in the text can end its own field and pose as something else.
     data = json.dumps(
         {"title": title, "description": description, "linked_issue": linked_issue},
@@ -64,7 +78,17 @@ CLAIM_KIND = Choice(
     (ClaimKind.BEHAVIOURAL.value, ClaimKind.STRUCTURAL.value),
 )
 """The question the Claim classifier asks of each Claim. Its options are the values of
-`ClaimKind`, Behavioural first."""
+`ClaimKind`, Behavioural first. Its text is exactly:
+
+    To check this Claim, would you have to run the code and see what it does, or is reading
+    the source enough, because the Claim is only that some name, file, comment, document, or
+    setting is added, renamed, or removed?
+
+on one line. It asks what checking the Claim takes, and names the Structural kinds, because the
+question it replaces, "Is this Claim about what the code does when it is run, or about the text
+of the code?", gave "Shortened text ends with an ellipsis" 0.9 to 1.0 for Structural: the Claim
+is about text, though the text is what the code returns. Taken as Structural, it was Confirmed
+by a constant the pull request adds and nothing uses (`docs/adversarial-evaluation.md`)."""
 
 
 def classify_claim(decider: Decider, claim: str) -> ClaimKind:
