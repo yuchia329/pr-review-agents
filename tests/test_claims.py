@@ -254,3 +254,39 @@ def test_decision_that_fails_while_classifying_leaves_no_report(
 
     with pytest.raises(DecisionFailed, match="gave no answer"):
         run(_pull_request(fixture_repository, title="Fix the crash"), model, decider)
+
+
+RULE_AGAINST_CLAIMS_ABOUT_THE_PULL_REQUEST = (
+    "List only Claims about what the change makes the code do or how the code is written. "
+    "Do not list what the text says about the pull request itself rather than about its "
+    "changes: that it has tests, or the agreed tests, or that it has been reviewed, "
+    "approved, verified, or accepted."
+)
+
+
+def _paragraphs(text: str) -> list[str]:
+    """The paragraphs of `text`, each with its line breaks and runs of spaces made one space."""
+    return [" ".join(paragraph.split()) for paragraph in text.split("\n\n") if paragraph.strip()]
+
+
+def test_extractor_is_told_not_to_list_claims_about_the_pull_request_itself(
+    fixture_repository: FixtureRepository,
+) -> None:
+    model = model_listing()
+
+    run(_pull_request(fixture_repository, title="Tidy up"), model)
+
+    [request] = model.requests
+    paragraphs = _paragraphs(request.instructions)
+    assert RULE_AGAINST_CLAIMS_ABOUT_THE_PULL_REQUEST in paragraphs
+    rule = paragraphs.index(RULE_AGAINST_CLAIMS_ABOUT_THE_PULL_REQUEST)
+    assert paragraphs[rule + 1].startswith("One Claim says one thing.")
+
+
+def test_classifier_asks_what_checking_the_claim_takes() -> None:
+    assert CLAIM_KIND.text == (
+        "To check this Claim, would you have to run the code and see what it does, or is "
+        "reading the source enough, because the Claim is only that some name, file, comment, "
+        "document, or setting is added, renamed, or removed?"
+    )
+    assert "\n" not in CLAIM_KIND.text
