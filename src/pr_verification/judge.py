@@ -2,8 +2,9 @@
 rounds between it and the Reproduction writer.
 
 The judge is a step of its own that sees only the Claim and the Reproduction (ADR 0002). The
-writer reads the pull request's code, so what it writes may have been shaped by that code, as
-a planted trivial test is. The judge read none of it. Its word is still a model's, and all it
+writer reads the signatures of the pull request's code, and a Reproduction it wrote may still
+have been shaped by what a pull request says (ADR 0008). The judge read none of it. Its word
+is still a model's, and all it
 can do is keep a Reproduction from deciding a Claim, by not accepting it: whether an accepted
 Reproduction supports or contradicts its Claim is computed by code, from its runs.
 """
@@ -99,7 +100,17 @@ def judge_reproduction(
     says, and what the loop tells the role is the loop's own wording.
 
     The role is asked whether the Reproduction would pass on code that behaves as the Claim
-    says and fail on code that does not. It finishes with `{"accepted": true}`, or with
+    says and fail on code that does not. Its instructions hold, as a paragraph of their own
+    after the one that begins "Decide one thing", exactly this, broken into lines as the rest
+    of them are:
+
+        Where the Claim names an input, the Reproduction must use it, and where the Claim
+        names a result, the Reproduction must assert it. A Reproduction that asserts another
+        result does not test the Claim, and nor does one whose input holds nothing of what the
+        Claim is about.
+
+    So the example a Claim gives is held to, from the two alone (ADR 0008).
+    It finishes with `{"accepted": true}`, or with
     `{"accepted": false, "reason": "<why>"}`.
 
     The Reproduction is accepted when, and only when, the run finished and its answer holds

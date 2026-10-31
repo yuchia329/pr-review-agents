@@ -169,13 +169,35 @@ def write_reproduction(
     Reproduction needs to run is there. Makes one attempt after another. Each attempt:
 
     1. Writes. A role named `reproduction-writer` is run with `run_role`. Its tools are
-       `reading_tools(repository, after)` and no other, so it has no tool that runs
-       anything. Its step cap is `step_cap`, and its instructions hold
-       `ecosystem.reproduction_form()`. Its task is `{"claim": claim, "attempts": [...]}`,
+       `reading_tools(repository, before)` and, when `ecosystem` is a `SignatureEcosystem`,
+       `signature_tool(repository, before, after, ecosystem.signatures)`, and no other. So it
+       has no tool that runs anything, it reads the code before the pull request in full, and
+       of the code after it sees only how what changed is called (ADR 0008). Its step cap is
+       `step_cap`, and its instructions hold `ecosystem.reproduction_form()`, and tell it, in
+       place of the paragraph that begins "Your tools read the files", exactly this, broken
+       into lines as the rest of them are:
+
+           Your tools read the files of the repository as they were before the pull request.
+           Of the code after it you see only what the tool "changed_signatures" shows, if you
+           have that tool: how the code the pull request changed is called, and not how it
+           works. Use your tools to learn how the code is called, and write the test from what
+           the Claim says. You cannot run anything yourself: the Reproduction is run for you
+           once you finish.
+
+       and, in place of the entry of `SHOWS_NOTHING` among the results, exactly this:
+
+           - "shows_nothing": it behaved the same on both, so it shows nothing about the
+             Claim. Its "after" is null, as what the code after the pull request gave is not
+             shown to you.
+
+       Its task is `{"claim": claim, "attempts": [...]}`,
        where `attempts` has one object for each earlier attempt, in order, whose only
        members are `reproduction`, `result`, `before`, and `after`: the Reproduction's text,
        the value of the `AttemptResult`, and the output of the two runs the attempt records,
-       each null where the attempt has none. An output is shown as
+       each null where the attempt has none. `after` is null too when the result is
+       `SHOWS_NOTHING`: the run on the code after holds what that code gave, and with it the
+       writer could fit its next test to the change. `COULD_NOT_RUN` shows both, since the
+       writer has to mend what stopped it. An output is shown as
        `bounded(output, limit, Keep.END)` (`pr_verification.context_bound`), where the
        limit is the `sandbox_output` of `limits_in_use()`, read once before the first
        attempt. So what the role is shown of one run is never longer than that limit, an

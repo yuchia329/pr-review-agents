@@ -195,6 +195,29 @@ class ReproductionEcosystem(Ecosystem, Protocol):
 
 
 @runtime_checkable
+class SignatureEcosystem(ReproductionEcosystem, Protocol):
+    """A ReproductionEcosystem that can say how the code in a file is called, and nothing of
+    how it works.
+
+    The Ecosystem that the Reproduction writer is given is asked with `isinstance` whether it
+    is one (ADR 0008).
+    """
+
+    def signatures(self, path: str, text: str) -> tuple[str, ...]:
+        """How the code in one file is called, one signature to an entry, in the file's order.
+
+        `path` is the file's path from the root of the repository and `text` is all it holds.
+        Each entry shows how a function, method, or class is called. It shows nothing else of
+        the file: no body, no comment, and no documentation.
+
+        Empty when this Ecosystem has no signatures to read there: for a file that is not in
+        its language, and for one it cannot parse. `text` is Untrusted Content: it is read as
+        data and never run, and nothing it holds makes this raise.
+        """
+        ...
+
+
+@runtime_checkable
 class ResultsFileEcosystem(ReproductionEcosystem, Protocol):
     """A ReproductionEcosystem whose test tooling writes a Reproduction's results to a file.
 

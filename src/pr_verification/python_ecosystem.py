@@ -234,6 +234,34 @@ class PythonEcosystem:
             lock_files=LOCK_FILES,
         )
 
+    def signatures(self, path: str, text: str) -> tuple[str, ...]:
+        """See `SignatureEcosystem.signatures`.
+
+        A file is in this language when its path ends in `.py`. The text is parsed with `ast`
+        and never imported or run. There is one entry for each `def`, `async def`, and `class`
+        at the top of the module or in the body of a class that has an entry, nested classes
+        included. One inside a function has none, as what is inside a function is how it
+        works. Each is prefixed with the name of the class it is in, so that
+        `class Cart:` is followed by `Cart.add`.
+
+        An entry is written by `ast.unparse` from the parsed code, so it holds none of the
+        file's own layout or comments:
+
+            class Cart(Base)
+
+            @classmethod
+            def Cart.empty(cls, currency: str='EUR') -> 'Cart'
+
+        Each decorator comes first, on its own line of the entry, then the signature: `def` or
+        `async def`, or `class` with its bases, ending without a colon. A function's
+        parameters, their annotations, their default values, and its return annotation are
+        shown when it has them.
+
+        Empty when the path does not end in `.py`, and for text that does not parse, whatever
+        `ast` raises for it.
+        """
+        raise NotImplementedError
+
     def read_results(self, run: RunResult) -> Results | Unreadable:
         """See `Ecosystem.read_results`.
 

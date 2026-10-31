@@ -6,7 +6,7 @@ commit holds them, outside the Sandbox, whatever the state of the working tree.
 """
 
 import os
-from collections.abc import Collection, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -115,6 +115,34 @@ def reading_tools(repository: Path, commit: str) -> tuple[Tool, ...]:
     `Keep.START`.
     """
     return _tools(_Files(repository, commit))
+
+
+def signature_tool(
+    repository: Path,
+    before: str,
+    after: str,
+    signatures: Callable[[str, str], Sequence[str]],
+) -> Tool:
+    """The tool `changed_signatures`, which shows how the code a pull request changed is called
+    and nothing of how it works (ADR 0008).
+
+    `signatures` is `SignatureEcosystem.signatures`. It is asked about each file of `after`
+    that is not the same in `before`: one `before` does not have, or holds otherwise. Its
+    text is the file's lines with a line feed between one and the next. A file only `before`
+    has is not among them, and so a removal shows nothing.
+
+    `changed_signatures` takes no arguments
+        Returns the files that have signatures, by path, each as its path on a line followed
+        by each of its signatures, every line of a signature indented by two spaces. A line
+        feed sits between one file and the next, and none follows the last. `NOTHING_FOUND`
+        when no file has any. `BAD_ARGUMENTS` when it is given an argument.
+
+    Files and their text are as `reading_tools` has them, read from git's object store and
+    never from a working tree, and what the tool returns is Untrusted Content. It returns
+    what it finds whole, and what a role is shown of it is bounded by `run_role`, keeping the
+    start: `Tool.keeps` is `Keep.START`.
+    """
+    raise NotImplementedError
 
 
 def lines_holding(
