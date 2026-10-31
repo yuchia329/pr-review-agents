@@ -12,7 +12,14 @@ from conftest import FixtureRepository, commit_snapshots
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from pr_verification.ecosystem import Commands, Results, Unreadable, Unsupported, find_commands
+from pr_verification.ecosystem import (
+    Commands,
+    Results,
+    SignatureEcosystem,
+    Unreadable,
+    Unsupported,
+    find_commands,
+)
 from pr_verification.python_ecosystem import (
     LOCK_FILES,
     NOT_A_PYTHON_PROJECT,
@@ -510,3 +517,91 @@ def test_test_file_that_cannot_be_imported_is_named_by_its_path_as_could_not_run
 
     assert isinstance(results, Results)
     assert "tools/test_shipping.py" in results.could_not_run
+
+
+# How the code in a file is called
+
+
+CALLED = """\
+import shipping
+
+
+@registered("cart")
+class Cart(Base, metaclass=Meta):
+    \"\"\"DOCUMENTATION of the cart.\"\"\"
+
+    RATE = 3
+
+    class Line:
+        def price(self):
+            return 1
+
+    @classmethod
+    def empty(cls, currency: str = "EUR") -> "Cart":  # COMMENT
+        def INNER():
+            return BODY
+        return cls()
+
+    async def pay(self, *cards, retries=3, **details):
+        return BODY
+
+
+def shipping_for(
+    weight,  # COMMENT
+    abroad=False,
+) -> int:
+    \"\"\"DOCUMENTATION of the charge.\"\"\"
+    return BODY
+
+
+async def fetch():
+    return BODY
+"""
+
+
+def test_python_ecosystem_can_say_how_code_is_called() -> None:
+    assert isinstance(PythonEcosystem(), SignatureEcosystem)
+
+
+def test_signatures_show_each_function_and_class_in_the_order_of_the_file() -> None:
+    assert PythonEcosystem().signatures("cart.py", CALLED) == (
+        "@registered('cart')\nclass Cart(Base, metaclass=Meta)",
+        "class Cart.Line",
+        "def Cart.Line.price(self)",
+        "@classmethod\ndef Cart.empty(cls, currency: str='EUR') -> 'Cart'",
+        "async def Cart.pay(self, *cards, retries=3, **details)",
+        "def shipping_for(weight, abroad=False) -> int",
+        "async def fetch()",
+    )
+
+
+@pytest.mark.parametrize("left_out", ["BODY", "COMMENT", "DOCUMENTATION", "INNER", "RATE"])
+def test_signatures_show_nothing_of_how_the_code_works(left_out: str) -> None:
+    assert not any(left_out in shown for shown in PythonEcosystem().signatures("cart.py", CALLED))
+
+
+@pytest.mark.parametrize(
+    ("path", "text"),
+    [
+        ("notes.txt", "def called():\n    pass\n"),
+        ("broken.py", "def called(:\n"),
+        ("deep.py", "(" * 100_000),
+        ("null.py", "def called():\n    pass\n\0"),
+    ],
+    ids=["another language", "does not parse", "too deep to parse", "holds a null byte"],
+)
+def test_signatures_of_what_cannot_be_read_are_empty(path: str, text: str) -> None:
+    assert PythonEcosystem().signatures(path, text) == ()
+
+
+@given(text=st.text())
+def test_signatures_never_raise_for_what_a_file_holds(text: str) -> None:
+    assert isinstance(PythonEcosystem().signatures("any.py", text), tuple)
+
+
+def test_signatures_run_nothing_of_the_file(tmp_path: Path) -> None:
+    written = tmp_path / "ran"
+
+    PythonEcosystem().signatures("any.py", f"open({str(written)!r}, 'w')\n")
+
+    assert not written.exists()

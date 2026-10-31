@@ -514,6 +514,7 @@ def test_read_only_tools_keep_the_start_of_what_they_return(ledger: FixtureRepos
 RUN_LIMITS = Limits(seconds=120.0, memory_bytes=1024 * 1024 * 1024, processors=2.0)
 NOISE = "".join(f"collected item {number}\n" for number in range(1, 200))
 PASSED, FAILED = NOISE + "ok test_tax", NOISE + "failed test_tax"
+ERRORED = NOISE + "error test_tax"
 
 
 class LastLineEcosystem:
@@ -527,7 +528,7 @@ class LastLineEcosystem:
         return Results(
             passed=(name,) if word == "ok" else (),
             failed=(name,) if word == "failed" else (),
-            could_not_run=(),
+            could_not_run=(name,) if word == "error" else (),
         )
 
     def reproduction_form(self) -> str:
@@ -568,7 +569,7 @@ def write_twice(
     return run, model.requests
 
 
-def outputs_shown(request: ModelRequest) -> list[tuple[str, str]]:
+def outputs_shown(request: ModelRequest) -> list[tuple[str, str | None]]:
     attempts = json.loads(request.data)["task"]["attempts"]
     return [(attempt["before"], attempt["after"]) for attempt in attempts]
 
@@ -576,7 +577,7 @@ def outputs_shown(request: ModelRequest) -> list[tuple[str, str]]:
 def test_writer_is_shown_the_end_of_a_long_run_and_the_record_keeps_it_whole(
     fixture_repository: FixtureRepository,
 ) -> None:
-    before, after = PASSED, "preparing\n" + PASSED
+    before, after = ERRORED, "preparing\n" + ERRORED
 
     with shown_within(ContextLimits(sandbox_output=300)):
         run, requests = write_twice(fixture_repository, before, after)
@@ -586,24 +587,36 @@ def test_writer_is_shown_the_end_of_a_long_run_and_the_record_keeps_it_whole(
     ]
     assert outputs_shown(requests[1]) != [(before, after)]
     first = run.attempts[0]
-    assert first.result is AttemptResult.SHOWS_NOTHING
+    assert first.result is AttemptResult.COULD_NOT_RUN
     assert first.before is not None and first.after is not None
     assert (first.before.output, first.after.output) == (before, after)
+
+
+def test_writer_is_not_shown_the_run_on_the_code_after_when_it_shows_nothing_and_the_record_is(
+    fixture_repository: FixtureRepository,
+) -> None:
+    with shown_within(ContextLimits(sandbox_output=300)):
+        run, requests = write_twice(fixture_repository, PASSED, PASSED)
+
+    assert outputs_shown(requests[1]) == [(bounded(PASSED, 300, Keep.END), None)]
+    first = run.attempts[0]
+    assert first.result is AttemptResult.SHOWS_NOTHING
+    assert first.after is not None and first.after.output == PASSED
 
 
 def test_run_within_the_limit_is_shown_to_the_writer_whole(
     fixture_repository: FixtureRepository,
 ) -> None:
-    with shown_within(ContextLimits(sandbox_output=len(PASSED))):
-        _, requests = write_twice(fixture_repository, PASSED, PASSED)
+    with shown_within(ContextLimits(sandbox_output=len(ERRORED))):
+        _, requests = write_twice(fixture_repository, ERRORED, ERRORED)
 
-    assert outputs_shown(requests[1]) == [(PASSED, PASSED)]
+    assert outputs_shown(requests[1]) == [(ERRORED, ERRORED)]
 
 
 def test_run_is_bounded_by_the_default_limit_when_no_limit_was_set(
     fixture_repository: FixtureRepository,
 ) -> None:
-    printed = "x" * SANDBOX_OUTPUT_LIMIT + "\nok test_tax"
+    printed = "x" * SANDBOX_OUTPUT_LIMIT + "\nerror test_tax"
 
     _, requests = write_twice(fixture_repository, printed, printed)
 
@@ -624,10 +637,10 @@ def test_evidence_keeps_the_whole_output_of_both_runs(
 def test_limit_on_a_tools_result_does_not_bound_what_the_writer_is_shown_of_a_run(
     fixture_repository: FixtureRepository,
 ) -> None:
-    with shown_within(ContextLimits(tool_result=SMALLEST_LIMIT, sandbox_output=len(PASSED))):
-        _, requests = write_twice(fixture_repository, PASSED, PASSED)
+    with shown_within(ContextLimits(tool_result=SMALLEST_LIMIT, sandbox_output=len(ERRORED))):
+        _, requests = write_twice(fixture_repository, ERRORED, ERRORED)
 
-    assert outputs_shown(requests[1]) == [(PASSED, PASSED)]
+    assert outputs_shown(requests[1]) == [(ERRORED, ERRORED)]
 
 
 # The limits a run from the command line is made within

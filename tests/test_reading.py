@@ -2,6 +2,7 @@
 
 import json
 import posixpath
+from collections.abc import Callable, Sequence
 
 import pytest
 from conftest import (
@@ -9,6 +10,7 @@ from conftest import (
     asks,
     assert_shows_only_whole_responses,
     commit,
+    commit_snapshots,
     finishes,
     git,
 )
@@ -16,6 +18,7 @@ from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
 from pr_verification.agent import NO_SUCH_TOOL, StepOutcome, Stopped
+from pr_verification.context_bound import Keep
 from pr_verification.model import ScriptedModel
 from pr_verification.reading import (
     BAD_ARGUMENTS,
@@ -25,6 +28,7 @@ from pr_verification.reading import (
     Located,
     locate,
     reading_tools,
+    signature_tool,
 )
 from pr_verification.report import (
     BudgetSpend,
@@ -73,6 +77,91 @@ def billing(tmp_path_factory: pytest.TempPathFactory) -> FixtureRepository:
 def use(billing: FixtureRepository, tool: str, **arguments: object) -> str:
     tools = {tool.name: tool for tool in reading_tools(billing.path, billing.before)}
     return tools[tool].run(arguments)
+
+
+@pytest.fixture(scope="module")
+def changed(tmp_path_factory: pytest.TempPathFactory) -> FixtureRepository:
+    """A pull request that changes one file, adds one, and removes one, and leaves one alone."""
+    path = tmp_path_factory.mktemp("signatures") / "repository"
+    before, after = commit_snapshots(
+        path,
+        {"gone.py": "was", "same.py": "kept", "zoned/rate.py": "first"},
+        {"added.py": "new", "same.py": "kept", "zoned/rate.py": "second"},
+    )
+    return FixtureRepository(path=path, before=before, after=after)
+
+
+def signatures_of(
+    repository: FixtureRepository, read: Callable[[str, str], Sequence[str]], **arguments: object
+) -> str:
+    tool = signature_tool(repository.path, repository.before, repository.after, read)
+    return tool.run(arguments)
+
+
+def test_changed_signatures_shows_each_file_the_change_added_or_changed_by_path(
+    changed: FixtureRepository,
+) -> None:
+    def read(path: str, text: str) -> tuple[str, ...]:
+        return (f"{text} one", f"{text} two")
+
+    assert signatures_of(changed, read) == (
+        "added.py\n  new one\n  new two\nzoned/rate.py\n  second one\n  second two"
+    )
+
+
+def test_changed_signatures_asks_about_no_file_the_change_removed_or_left_alone(
+    changed: FixtureRepository,
+) -> None:
+    asked: list[tuple[str, str]] = []
+
+    def read(path: str, text: str) -> tuple[str, ...]:
+        asked.append((path, text))
+        return ()
+
+    signatures_of(changed, read)
+
+    assert asked == [("added.py", "new"), ("zoned/rate.py", "second")]
+
+
+def test_every_line_of_a_signature_is_indented(changed: FixtureRepository) -> None:
+    def read(path: str, text: str) -> tuple[str, ...]:
+        return ("@decorated\ndef called()",) if path == "added.py" else ()
+
+    assert signatures_of(changed, read) == "added.py\n  @decorated\n  def called()"
+
+
+def test_file_with_no_signatures_is_left_out(changed: FixtureRepository) -> None:
+    def read(path: str, text: str) -> tuple[str, ...]:
+        return ("def called()",) if path == "zoned/rate.py" else ()
+
+    assert signatures_of(changed, read) == "zoned/rate.py\n  def called()"
+
+
+def test_changed_signatures_says_so_when_no_file_has_any(changed: FixtureRepository) -> None:
+    assert signatures_of(changed, lambda path, text: ()) == NOTHING_FOUND
+
+
+def test_changed_signatures_takes_no_arguments(changed: FixtureRepository) -> None:
+    assert signatures_of(changed, lambda path, text: (), path="added.py") == BAD_ARGUMENTS
+
+
+def test_changed_signatures_reads_the_commits_and_not_the_working_tree(
+    billing: FixtureRepository,
+) -> None:
+    def read(path: str, text: str) -> tuple[str, ...]:
+        return (text,)
+
+    assert signatures_of(billing, read) == (
+        "billing/later.py\n  RATE = 0.9\nbilling/tax.py\n  RATE = 0.5"
+    )
+
+
+def test_changed_signatures_keeps_the_start_of_what_it_returns(
+    changed: FixtureRepository,
+) -> None:
+    tool = signature_tool(changed.path, changed.before, changed.after, lambda path, text: ())
+
+    assert (tool.name, tool.keeps) == ("changed_signatures", Keep.START)
 
 
 def test_there_are_three_read_only_tools(billing: FixtureRepository) -> None:

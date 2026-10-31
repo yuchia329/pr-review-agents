@@ -299,7 +299,11 @@ def test_attempt_records_the_runs_of_the_reproduction_and_the_role_is_shown_only
     first = run.attempts[0]
     assert (first.before, first.after) == (ended(printed[0]), ended(printed[1]))
     (shown,) = json.loads(model.requests[1].data)["task"]["attempts"]
-    assert (shown["before"], shown["after"]) == printed
+    assert (shown["result"], shown["before"], shown["after"]) == (
+        SHOWS_NOTHING.value,
+        printed[0],
+        None,
+    )
 
 
 def test_results_naming_none_of_the_reproductions_tests_on_one_commit_are_never_evidence(

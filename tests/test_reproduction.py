@@ -45,7 +45,7 @@ from pr_verification.ecosystem import (
 )
 from pr_verification.model import Model, ModelFailed, ModelRequest, ScriptedModel
 from pr_verification.python_ecosystem import REPRODUCTION_PATH
-from pr_verification.reading import reading_tools
+from pr_verification.reading import NOTHING_FOUND, reading_tools, signature_tool
 from pr_verification.report import BudgetSpend, Claim, EvidenceSource, Report, Verdict
 from pr_verification.reproduction import (
     ATTEMPT_CAP,
@@ -342,9 +342,10 @@ def test_writer_revises_a_reproduction_that_could_not_run_or_shows_nothing_and_i
     assert (earlier.reproduction, earlier.before, earlier.after) == (first, before, after)
     assert run.evidence is not None and run.evidence.reproduction == "fixed"
     shown = {"reproduction": first, "result": result.value}
+    output_after = None if result is SHOWS_NOTHING else after.output
     assert [task(request) for request in model.requests] == [
         {"claim": CLAIM, "attempts": []},
-        {"claim": CLAIM, "attempts": [{**shown, "before": before.output, "after": after.output}]},
+        {"claim": CLAIM, "attempts": [{**shown, "before": before.output, "after": output_after}]},
     ]
 
 
@@ -427,7 +428,7 @@ def test_reproduction_that_cannot_be_placed_on_both_commits_is_not_run(
     ]
 
 
-def test_writers_role_reads_the_code_after_the_pull_request_and_has_no_tool_that_runs_anything(
+def test_writers_role_reads_the_code_before_the_pull_request_and_has_no_tool_that_runs_anything(
     pricing: FixtureRepository,
 ) -> None:
     sandbox = StandInSandbox(pricing)
@@ -436,15 +437,86 @@ def test_writers_role_reads_the_code_after_the_pull_request_and_has_no_tool_that
     run, _ = write(pricing, reads, runs, writes("same"), sandbox=sandbox, attempt_cap=1)
 
     role = run.attempts[0].run
-    (read_file,) = (t for t in reading_tools(pricing.path, pricing.after) if t.name == "read_file")
+    (read_file,) = (t for t in reading_tools(pricing.path, pricing.before) if t.name == "read_file")
     assert role.role == "reproduction-writer"
     assert [(step.outcome, step.result) for step in role.steps[:2]] == [
         (StepOutcome.RAN_TOOL, read_file.run({"path": "pricing.py"})),
         (StepOutcome.REFUSED, NO_SUCH_TOOL),
     ]
-    assert "round(net * 1.2, 2)" in role.steps[0].result
+    assert "return net" in role.steps[0].result
+    assert "round(net * 1.2, 2)" not in role.steps[0].result
     assert {command[0] for command, *_ in sandbox.runs} == {"write", "run-reproduction"}
     assert len(sandbox.runs) == 4
+
+
+def test_writers_role_cannot_find_what_only_the_code_after_the_pull_request_holds(
+    pricing: FixtureRepository,
+) -> None:
+    run, _ = write(pricing, asks("search", text="1.2"), writes("fixed"))
+
+    assert run.attempts[0].run.steps[0].result == NOTHING_FOUND
+
+
+class SigningEcosystem(LineEcosystem):
+    """A stand-in that can say how the code in a file is called."""
+
+    def signatures(self, path: str, text: str) -> tuple[str, ...]:
+        return (f"how to call {path}",)
+
+
+def test_writers_role_is_shown_how_the_changed_code_is_called_when_its_ecosystem_can_say(
+    pricing: FixtureRepository,
+) -> None:
+    ecosystem = SigningEcosystem()
+    tool = signature_tool(pricing.path, pricing.before, pricing.after, ecosystem.signatures)
+
+    run, _ = write(pricing, asks("changed_signatures"), writes("fixed"), ecosystem=ecosystem)
+
+    step = run.attempts[0].run.steps[0]
+    assert (step.outcome, step.result) == (StepOutcome.RAN_TOOL, tool.run({}))
+    assert step.result == "pricing.py\n  how to call pricing.py"
+
+
+def test_writers_role_has_no_signatures_when_its_ecosystem_cannot_give_them(
+    pricing: FixtureRepository,
+) -> None:
+    run, _ = write(pricing, asks("changed_signatures"), writes("fixed"))
+
+    step = run.attempts[0].run.steps[0]
+    assert (step.outcome, step.result) == (StepOutcome.REFUSED, NO_SUCH_TOOL)
+
+
+def paragraphs(text: str) -> list[str]:
+    """The paragraphs of `text`, each with its line breaks and runs of spaces made one space."""
+    return [" ".join(paragraph.split()) for paragraph in text.split("\n\n") if paragraph.strip()]
+
+
+def test_instructions_say_the_writer_reads_the_code_before_and_only_signatures_of_the_code_after(
+    pricing: FixtureRepository,
+) -> None:
+    _, model = write(pricing, writes("fixed"))
+
+    told = paragraphs(model.requests[0].instructions)
+    assert (
+        "Your tools read the files of the repository as they were before the pull request. Of "
+        'the code after it you see only what the tool "changed_signatures" shows, if you have '
+        "that tool: how the code the pull request changed is called, and not how it works. Use "
+        "your tools to learn how the code is called, and write the test from what the Claim "
+        "says. You cannot run anything yourself: the Reproduction is run for you once you "
+        "finish."
+    ) in told
+    assert not any("as they are after the pull request" in paragraph for paragraph in told)
+
+
+def test_instructions_say_what_an_attempt_that_shows_nothing_leaves_out(
+    pricing: FixtureRepository,
+) -> None:
+    _, model = write(pricing, writes("fixed"))
+
+    assert (
+        '"shows_nothing": it behaved the same on both, so it shows nothing about the Claim. Its '
+        '"after" is null, as what the code after the pull request gave is not shown to you.'
+    ) in " ".join(model.requests[0].instructions.split())
 
 
 def test_role_that_reaches_its_step_cap_gave_no_reproduction_and_the_next_attempt_starts_afresh(
@@ -880,7 +952,11 @@ def test_python_reproduction_that_does_not_settle_the_claim_is_revised_and_succe
     assert [attempt.result for attempt in run.attempts] == [result, SHOWS_A_DIFFERENCE]
     assert run.evidence is not None and run.evidence.reproduction == ADDS_TAX
     (earlier,) = json.loads(model.requests[1].data)["task"]["attempts"]
-    assert shown in earlier["before"] and shown in earlier["after"]
+    assert shown in earlier["before"]
+    if result is SHOWS_NOTHING:
+        assert earlier["after"] is None
+    else:
+        assert shown in earlier["after"]
 
 
 def test_python_reproduction_that_never_shows_a_difference_leaves_the_claim_inconclusive(

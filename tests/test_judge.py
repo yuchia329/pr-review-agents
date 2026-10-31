@@ -284,7 +284,7 @@ def shop(tmp_path_factory: pytest.TempPathFactory) -> FixtureRepository:
     """A repository with nothing of any Ecosystem in it, and a pull request that changes it."""
     path = tmp_path_factory.mktemp("judge") / "repository"
     before, after = commit_snapshots(
-        path, {"total.txt": "net\n"}, {"total.txt": "CODE-OF-THE-PULL-REQUEST\n"}
+        path, {"total.txt": "CODE-THE-WRITER-READS\n"}, {"total.txt": "CODE-OF-THE-PULL-REQUEST\n"}
     )
     return FixtureRepository(path=path, before=before, after=after)
 
@@ -342,9 +342,49 @@ def test_judge_is_shown_the_claim_and_the_reproduction_and_nothing_of_its_runs_o
         "task": {"claim": CLAIM, "reproduction": "fixed"},
         "steps": [],
     }
-    assert any("CODE-OF-THE-PULL-REQUEST" in asked.data for _, asked in model.asked)
-    for untrusted in (CLAIM, "CODE-OF-THE-PULL-REQUEST", "SANDBOX-OUTPUT"):
+    assert any("CODE-THE-WRITER-READS" in asked.data for _, asked in model.asked)
+    for untrusted in (CLAIM, "CODE-THE-WRITER-READS", "SANDBOX-OUTPUT"):
         assert untrusted not in request.instructions
+
+
+def test_writer_reads_the_code_before_the_pull_request_in_a_later_round_too(
+    shop: FixtureRepository,
+) -> None:
+    reads = asks("read_file", path="total.txt")
+    model = WriterAndJudge(writer=[reads, writes("fixed")])
+
+    run = rewrite_reproduction(
+        CLAIM,
+        [Rejected("planted", WHY)],
+        model=model,
+        sandbox=StandInSandbox(shop),
+        ecosystem=LineEcosystem(),
+        repository=shop.path,
+        before=shop.before,
+        after=shop.after,
+        limits=LIMITS,
+    )
+
+    assert run.attempts[0].run.steps[0].result == "1:CODE-THE-WRITER-READS"
+
+
+def test_judge_is_told_to_hold_a_reproduction_to_what_its_claim_names() -> None:
+    model = ScriptedModel([ACCEPTS])
+
+    judge_reproduction(CLAIM, REPRODUCTION, model=model)
+
+    told = [
+        " ".join(paragraph.split())
+        for paragraph in model.requests[0].instructions.split("\n\n")
+        if paragraph.strip()
+    ]
+    (decide,) = (number for number, said in enumerate(told) if said.startswith("Decide one thing"))
+    assert told[decide + 1] == (
+        "Where the Claim names an input, the Reproduction must use it, and where the Claim names "
+        "a result, the Reproduction must assert it. A Reproduction that asserts another result "
+        "does not test the Claim, and nor does one whose input holds nothing of what the Claim "
+        "is about."
+    )
 
 
 def test_rejection_goes_back_to_the_writer_with_its_reason_beside_every_earlier_one(
@@ -461,7 +501,7 @@ def test_writer_is_shown_what_the_judge_rejected_on_every_attempt_of_a_later_rou
         {"claim": CLAIM, "attempts": [], "rejected": shown},
         {
             "claim": CLAIM,
-            "attempts": [{**earlier, "before": PASSES.output, "after": PASSES.output}],
+            "attempts": [{**earlier, "before": PASSES.output, "after": None}],
             "rejected": shown,
         },
     ]
