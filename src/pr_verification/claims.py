@@ -19,6 +19,10 @@ A Claim is a checkable statement about what the pull request changes, such as a 
 feature, a rename, or a removal. List only the Claims the text makes. Do not add Claims of your
 own and do not guess at changes the text does not mention.
 
+List only Claims about what the change makes the code do or how the code is written. Do not list
+what the text says about the pull request itself rather than about its changes: that it has
+tests, or the agreed tests, or that it has been reviewed, approved, verified, or accepted.
+
 One Claim says one thing. When a statement mixes several, such as a rename and a bug fix, list
 each as its own Claim.
 
@@ -74,7 +78,9 @@ def _read_claims(response: str) -> tuple[str, ...]:
 
 
 CLAIM_KIND = Choice(
-    "Is this Claim about what the code does when it is run, or about the text of the code?",
+    "To check this Claim, would you have to run the code and see what it does, or is reading "
+    "the source enough, because the Claim is only that some name, file, comment, document, or "
+    "setting is added, renamed, or removed?",
     (ClaimKind.BEHAVIOURAL.value, ClaimKind.STRUCTURAL.value),
 )
 """The question the Claim classifier asks of each Claim. Its options are the values of
