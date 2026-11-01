@@ -1,5 +1,7 @@
 # An LLM supervisor controls effort; code controls outcome
 
+Superseded by ADR 0009, which makes the fixed pipeline the design. What this decision says about limiting the supervisor's power stands for as long as the supervisor is in the code.
+
 The steps needed to verify a pull request could be written as a fixed pipeline, and that would be simpler, faster, and harder to manipulate. We chose an LLM supervisor instead, because the right strategy differs per Claim (a Reproduction for a bug fix, existing tests on both commits for a refactor, a benchmark for a performance change), plans must change when a step fails, and effort has to be divided between Claims. The project also exists to demonstrate orchestration problems that a fixed pipeline designs away.
 
 To keep ADR 0002 intact, the supervisor's power is limited to effort. It chooses which agent runs, in what order, with how much of the Budget, and when to re-plan. It does not see raw Untrusted Content, only structured Claims and structured agent results. Verdicts are computed by code from recorded Evidence, and the Gate is computed by code from Verdicts. Code also prevents the supervisor from finishing until every Claim has had at least one Verification attempt or the Budget is spent, and enforces the step cap and Budget from outside the supervisor.

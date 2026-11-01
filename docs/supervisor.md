@@ -1,7 +1,8 @@
 # The LLM supervisor
 
-The supervisor is the second orchestration (ADR 0003). A model decides how effort is spent on
-the Claims of a pull request: which Claim is worked on, in what order, how many at once, with
+The supervisor is the second orchestration (ADR 0003). It stays as the alternative the fixed
+pipeline is measured against: ADR 0009 makes the fixed pipeline the design, and says why. A
+model decides how effort is spent on the Claims of a pull request: which Claim is worked on, in what order, how many at once, with
 how much of the Budget, and whether to try again. It decides nothing else. Each Verdict and the
 Gate are computed by code from the Evidence the roles record, whatever the supervising model
 says.

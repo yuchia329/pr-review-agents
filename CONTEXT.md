@@ -1,6 +1,6 @@
 # PR Verification
 
-A multi-agent system that checks pull requests in a CI/CD pipeline, both by verifying what the pull request claims and by reviewing the quality of its changes.
+A system that checks pull requests in a CI/CD pipeline, both by verifying what the pull request claims and by reviewing the quality of its changes.
 
 ## Language
 
