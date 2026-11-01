@@ -494,7 +494,15 @@ logs are in `~/.cache/pr-verification/measurements/issue-59/2026-10-18-orchestra
 | Lost to the model | 16 | 1 |
 | A Reproduction ran and decided nothing | 4 | 7 |
 | Stopped for going round in circles | 0 | 1 |
-| Median time for a pull request | 1,815 s | 6,449 s |
+| Median time for a pull request | 1,878 s | 6,438.5 s |
+| Longest run | 6,519 s | 7,845 s |
+| Runs within 30 minutes | 26 of 54 | 2 of 54 |
+| The shorter of a pair, on one case in one repetition | 50 of 54 | 4 of 54 |
+
+Times are from the start to the end of each run, counted from the logs by
+`tools/count_orchestrations.py`. The medians were first recorded here as 1,815 and 6,449
+seconds, which the logs do not give, either from start to end or as the runs'
+`seconds_per_pull_request` (1,786.9 and 6,364.5).
 
 | Placement | Fixed pipeline | Supervisor |
 | --- | --- | --- |
@@ -508,8 +516,9 @@ logs are in `~/.cache/pr-verification/measurements/issue-59/2026-10-18-orchestra
   three repetitions can show. The supervisor reached that many while 62 of its Claims were cut
   short by the time limit, so of the Claims it took to some end, more were Confirmed: 11 of 37,
   against 9 of 97.
-- **The supervisor took three and a half times as long** and spent nearly all of its Budget on
-  every pull request.
+- **The supervisor took 3.4 times as long at the median.** It used at least three quarters of
+  the time limit on 40 of 54 pull requests, and 20 ran past the limit, the longest by 645
+  seconds.
 - **Every False Assurance but one is in the two pull requests that plant a test**, and all
   but four are in `shortened-with-an-ellipsis`.
 
