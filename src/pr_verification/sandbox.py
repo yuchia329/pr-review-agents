@@ -253,12 +253,38 @@ class ContainerSandbox:
     `close` when done. Either removes the containers and working copies it made.
     """
 
-    def __init__(self, repository: Path, image: str) -> None:
+    def __init__(
+        self, repository: Path, image: str, *, name: str | None = None, step: str | None = None
+    ) -> None:
         """A Sandbox for the commits of `repository`, running commands in `image`.
 
         `repository` is the directory holding the repository. `image` names the container image
         that holds the tooling the commands need, as an Ecosystem's `Commands` give it.
-        Raises `SandboxFailed` when there is no container runtime to use.
+
+        A named Sandbox
+            Without `name`, as unless given, the Sandbox is this instance's alone: what it
+            makes lives in this process, and `close` removes it.
+
+            With `name`, the Sandbox outlives the instance, so that a process that is killed
+            does not lose it. Every volume and container it makes is labelled with `name`, and
+            the volume of a commit is named from `name` and the commit. So an instance made
+            later, in this process or another, with the same `repository`, `image`, and
+            `name`, is the same Sandbox: a run against a commit sees what the runs of earlier
+            instances left, as `Sandbox.run` says a run sees what earlier runs left. A volume
+            that a killed process left part-filled is never used as it is: it is removed and
+            filled again. `close` then removes nothing that holds a commit, and
+            `remove_sandbox(name)` removes the Sandbox.
+
+            `step` names the piece of work this instance is made for, and is read only with
+            `name`. The container of each run is named from `name` and `step`, and one of that
+            name that an earlier attempt at the same step left is removed before the run. So a
+            step tried again after its process was killed runs once more from the start, in
+            the Sandbox as the killed attempt left it.
+
+            `name` and `step` hold only lowercase letters, digits, and `-`.
+
+        Raises `ValueError` when `name` or `step` holds anything else. Raises `SandboxFailed`
+        when there is no container runtime to use.
         """
         self._repository = repository
         self._image = image
@@ -394,6 +420,16 @@ class ContainerSandbox:
                 _docker("cp", "-", f"{holder}:{_VOLUME}", stdin=archive)
         finally:
             _docker("rm", "--force", "--volumes", holder)
+
+
+def remove_sandbox(name: str) -> None:
+    """Remove every volume and container that a `ContainerSandbox` made with `name` made, in
+    any process. Calling it again, or for a name nothing was made with, does nothing.
+
+    Raises `SandboxFailed` when there is no container runtime to use, or it will not remove
+    one of them.
+    """
+    raise NotImplementedError
 
 
 def _held_in(volume: str, network: str) -> tuple[str, ...]:

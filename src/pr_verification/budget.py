@@ -402,6 +402,21 @@ class Ledger:
         ledger._claims = list(state.claims)
         return ledger
 
+    def adopt(self, state: LedgerState) -> None:
+        """Make this ledger hold `state`, in place of all it held, and go on timing work with
+        its own clock.
+
+        From then on it answers, records, refuses, and moves shares as
+        `Ledger.restored(state, clock=...)` with its clock would. So a ledger can be handed to
+        work done elsewhere as `snapshot` gives it, and take back what that work left it with,
+        while whoever holds the ledger goes on holding the same one.
+
+        Raises `ValueError`, having changed nothing, while work is under way through `model`
+        or `sandbox`, when `state` holds another Budget than this ledger's, and when no ledger
+        could hold `state`, as `restored` says.
+        """
+        raise NotImplementedError
+
     def move_share(self, amount: BudgetSpend, *, source: int, destination: int) -> None:
         """Move `amount` from the share of Claim `source` to the share of Claim `destination`.
 

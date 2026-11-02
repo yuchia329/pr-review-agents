@@ -32,8 +32,8 @@ from pr_verification.model import Model, ModelFailed, ModelRequest, RoleName, mo
 from pr_verification.orchestration import (
     FixedPipeline,
     Gathered,
+    Ready,
     _reading,
-    _Ready,
     _reproducing,
     fixed_pipeline,
 )
@@ -723,7 +723,7 @@ class _Run:
         # Whether a dispatch of the supervisor's last step was a repeat.
         self._repeated = False
         # Each Sandbox made ready, as it was opened, in the order they were made ready.
-        self._ready: list[_Ready] = []
+        self._ready: list[Ready] = []
         # Each Sandbox as it is used while preparing, with the same Sandbox as it was opened.
         self._as_opened: dict[SandboxWithHomes, SandboxWithHomes] = {}
 
@@ -747,7 +747,7 @@ class _Run:
                 if all(reproduced):
                     return
             else:
-                self._ready.append(_Ready(self._as_opened[ready.sandbox], ready.ecosystem))
+                self._ready.append(Ready(self._as_opened[ready.sandbox], ready.ecosystem))
         self._ledger.share_out(len(self._claims))
         self._supervise()
         # The supervisor has finished or was stopped. Code gives each Claim it left untried
@@ -927,7 +927,7 @@ class _Run:
                 if isinstance(made_ready, str):
                     work.append(partial(Gathered, (), made_ready))
                     continue
-                self._ready.append(_Ready(self._as_opened[made_ready], self._ready[0].ecosystem))
+                self._ready.append(Ready(self._as_opened[made_ready], self._ready[0].ecosystem))
             work.append(partial(self._reproduce_for, place, self._ready[reproductions]))
             reproductions += 1
         if self._ledger.stopped_by() is not None:
@@ -976,7 +976,7 @@ class _Run:
             summaries.append(summary)
         return tuple(summaries)
 
-    def _reproduce_for(self, place: int, ready: _Ready) -> Gathered:
+    def _reproduce_for(self, place: int, ready: Ready) -> Gathered:
         """A `Strategy.REPRODUCTION` for the Claim at `place`, in a Sandbox it has to itself."""
         return self._pipeline._reproduce(
             self._claims[place],

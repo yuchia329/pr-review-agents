@@ -14,10 +14,14 @@ dependencies = [
 laya = [
     "laya>=0.4.2,<0.5",
 ]
+durable = [
+    "temporalio>=1.35,<2",
+]
 
 [project.scripts]
 pr-verification = "pr_verification.cli:main"
 pr-verification-action = "pr_verification.github_action:main"
+pr-verification-durable = "pr_verification.durable.driver:main"
 
 [dependency-groups]
 dev = [
@@ -25,6 +29,7 @@ dev = [
     "mypy>=1.11",
     "pytest>=8",
     "ruff>=0.6",
+    "temporalio>=1.35,<2",
 ]
 
 [build-system]

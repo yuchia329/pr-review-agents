@@ -163,14 +163,40 @@ class BudgetedOrchestration(Orchestration, Protocol):
 
 
 @dataclass(frozen=True)
-class _Ready:
+class Ready:
     """What a Reproduction is run with, once both commits are prepared."""
 
     sandbox: SandboxWithHomes
-    """The Sandbox in which the dependencies of both commits are installed."""
+    """The Sandbox in which the dependencies of both commits are installed, as it was opened:
+    not through a ledger."""
 
     ecosystem: ReproductionEcosystem
     """The repository's Ecosystem."""
+
+
+class WorkOnClaim(Protocol):
+    """Does the work of step 4 of `FixedPipeline.gather_within` for one Claim, as
+    `FixedPipeline.work_in_place` does it, or has it done elsewhere and gives what came of it.
+
+    A durable run (`pr_verification.durable`) gives one that has each Claim's work done as a
+    workflow of its own."""
+
+    def __call__(
+        self,
+        ledger: Ledger,
+        place: int,
+        claim: str,
+        kind: ClaimKind | None,
+        ready: Ready | None,
+        *,
+        repository: Path,
+        before: str,
+        after: str,
+        model: Model,
+    ) -> Gathered:
+        """What the Claim at `place` is given, with what the work spent recorded in `ledger`
+        as `FixedPipeline.work_in_place` records it. Raises what that raises."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -209,6 +235,10 @@ class FixedPipeline:
 
     judge_step_cap: int = JUDGE_STEP_CAP
     """The step cap of the Reproduction judge, each time it is run."""
+
+    work_on_claim: WorkOnClaim | None = None
+    """Does the work on each Claim in step 4 of `gather_within`. With None, as it is unless
+    given, the work is done in place, by `work_in_place`. `gather` does not read it."""
 
     def gather(
         self, claims: tuple[str, ...], *, repository: Path, before: str, after: str, model: Model
@@ -375,6 +405,16 @@ class FixedPipeline:
         Evidence already gathered is never thrown away. A Claim whose work gave Evidence is
         given it, though the last piece of that work was the one that reached a limit.
 
+        Who does the work on a Claim
+            In step 4 the work on each Claim worked on is asked of the pipeline's
+            `work_on_claim`, once, with `ledger`, the Claim's place in `claims`, the Claim,
+            its kind in `kinds`, the `Ready` that steps 1 to 3 gave when they gave one and
+            None otherwise, `repository`, `before`, `after`, and `model`. What it gives is what
+            the Claim is given, and a `BudgetSpent` it raises is treated as one raised by the
+            work is, above. With `work_on_claim` None, the work is asked of `work_in_place`,
+            in the same way. So with either, every Claim is given what this docstring says,
+            and only the place where the work is done changes.
+
         Every Sandbox opened is closed before the answer is given or an exception goes on.
         Raises what `gather` raises. `BudgetSpent` is never raised from here.
         """
@@ -442,12 +482,12 @@ class FixedPipeline:
                 return
         ledger.share_out(len(claims))
         for index, claim in enumerate(claims):
-            if not (structural[index] or isinstance(ready, _Ready)):
+            if not (structural[index] or isinstance(ready, Ready)):
                 continue
             if ledger.stopped_by() is not None:
                 break
             try:
-                if isinstance(ready, _Ready) and not structural[index]:
+                if isinstance(ready, Ready) and not structural[index]:
                     given = self._reproduce(
                         claim,
                         _reproducing(model, ledger, index),
@@ -466,6 +506,38 @@ class FixedPipeline:
                     break
                 given = Gathered((), str(spent))
             yield index, given
+
+    def work_in_place(
+        self,
+        ledger: Ledger,
+        place: int,
+        claim: str,
+        kind: ClaimKind | None,
+        ready: Ready | None,
+        *,
+        repository: Path,
+        before: str,
+        after: str,
+        model: Model,
+    ) -> Gathered:
+        """Do the work of step 4 of `gather_within` for the Claim at `place`, here, and give
+        what the Claim is given.
+
+        A Claim that `kind` names Structural is verified by reading, and any other Claim goes
+        on to a Reproduction in `ready.sandbox` with `ready.ecosystem`, each as Routing in
+        `gather_within` says and with what is recorded as What is recorded there says for the
+        Claim at `place`: every request through `ledger.model` with `claim=place`, and every
+        run through `ledger.sandbox(ready.sandbox, claim=place)`.
+
+        `ledger` must hold shares already. Nothing is asked of `ledger.stopped_by()` before
+        the work starts: whether to start is the caller's to decide.
+
+        Raises `ValueError` when the Claim would go on to a Reproduction and `ready` is None.
+        Raises the `BudgetSpent` the work raises, for the Claim's share or for the Budget, as
+        it comes, so the caller can tell which. Raises what `write_judged_reproduction` and
+        `verify_structural_claim` raise.
+        """
+        raise NotImplementedError
 
     def prepare_target_commit(
         self, repository: Path, target: str
@@ -551,7 +623,7 @@ class FixedPipeline:
 
     def _prepare(
         self, repository: Path, before: str, after: str, sandbox_for: SandboxFor
-    ) -> _Ready | str:
+    ) -> Ready | str:
         """Steps 1 to 3 of `gather`: what a Reproduction is run with, or why none can be run.
         Each Sandbox is the one `sandbox_for` gives for its image, and closing it is left to
         the caller."""
@@ -563,7 +635,7 @@ class FixedPipeline:
         made_ready = self._prepare_commits(repository, before, after, sandbox_for)
         if isinstance(made_ready, str):
             return made_ready
-        return _Ready(made_ready, found.ecosystem)
+        return Ready(made_ready, found.ecosystem)
 
     def _prepare_commits(
         self, repository: Path, before: str, after: str, sandbox_for: SandboxFor

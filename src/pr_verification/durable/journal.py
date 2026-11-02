@@ -1,0 +1,343 @@
+"""The Journal of a durable run, and the core's own code replayed against it.
+
+Nothing here uses Temporal, so all of it can be run and tested as plain code. A workflow
+(`pr_verification.durable.workflows`) holds a Journal and calls `replay_run` or `replay_claim`
+with it again after each Effect it makes.
+
+The Effects
+    Each Effect is one call behind a seam that `pr_verification.effects` names, and an `Effect`
+    says which, with what it was asked. Its `Answer` holds what the seam gave, or what it
+    raised. The kinds, what each is asked, and what answers it:
+
+    ================  ==================================================  =====================
+    Kind              `asked`                                             Answered by
+    ================  ==================================================  =====================
+    CAPABILITIES      ()                                                  `Capabilities`
+    MODEL             (role or None, `ModelRequest`)                      `PricedResponse`
+    DECISION          (state, `Question`)                                 `Decision`
+    GIT               (repository, arguments, stdin, environment)         `bytes`
+    TOKEN             (size,)                                             `str`
+    PROFILE_LOAD      (repository,)                                       `RepoProfile` or None
+    PROFILE_SAVE      (repository, `RepoProfile`)                         None
+    PROFILE_DISCARD   (repository,)                                       None
+    ARCHIVE           (repository, image, lock digest)                    `Path`
+    ARCHIVE_HOLDS     (archive,)                                          `bool`
+    ARCHIVE_DISCARD   (archive,)                                          None
+    SANDBOX_RUN       (Sandbox name, repository, image, command, commit,  `RunResult`
+                      `Phase`, `Limits`)
+    HOME_SAVE         (Sandbox name, repository, image, commit, archive)  None
+    HOME_RESTORE      (Sandbox name, repository, image, commit, archive)  None
+    CLAIM             (`ClaimInput`,)                                     `ClaimOutcome`
+    ================  ==================================================  =====================
+
+    A repository and an archive are a `Path`, arguments and a command a tuple of `str`, and
+    the environment of a git command its items as pairs, sorted. A MODEL Effect asked for no
+    role is a request to the model of no role, as `RoleModels.complete` makes one. Its answer
+    has `dollars` 0.0 when the worker's model has no price, as the ledger counts a request to
+    such a model.
+
+    What is not an Effect
+        The clock. A replay's clock is `Replay.clock`: the seconds its Effects took where they
+        were made, added up. So the Budget's time is spent by the time Effects took, and not
+        by time in which no worker was running, or in which the code was replayed (ADR 0010).
+
+        Opening and closing a Sandbox. A Sandbox is named for the run, and the Effects that
+        use it name it, so that the worker making each one finds it (`ContainerSandbox` with
+        `name`). Closing it in a replay does nothing. The workflow removes it once the run is
+        over, however the run ended.
+"""
+
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from enum import StrEnum
+
+from pr_verification.budget import Budget, BudgetSpent, LedgerState
+from pr_verification.context_bound import ContextLimits
+from pr_verification.core import PullRequest
+from pr_verification.ecosystem import ReproductionEcosystem
+from pr_verification.model import RoleName
+from pr_verification.orchestration import Gathered
+from pr_verification.report import ClaimKind, Report
+
+PAYLOAD_BYTES = 1_500_000
+"""The most one Effect, or one answer, may take once encoded (`codec.encoded_size`). Temporal
+refuses a payload over 2 MB, and a refusal is retried without end, so the limit is kept here,
+below Temporal's."""
+
+JOURNAL_BYTES = 30_000_000
+"""The most the Effects and answers of one workflow's Journal may take together, once encoded.
+Temporal ends a workflow whose history passes 50 MB, and replaying a long Journal takes long, so
+the limit is kept here, below Temporal's and below the 40 MB at which the measurement of
+durability stops."""
+
+LIMIT_REACHED = (
+    "The work on this Claim grew past what one durable run can keep, so it was stopped: {limit}"
+)
+"""Why a Claim is Inconclusive when the workflow doing its work went past `DurableLimits`.
+`limit` says which limit, and by how much. It holds nothing of what the Claim's work made."""
+
+
+class EffectKind(StrEnum):
+    """Which seam an Effect is made behind. The table in this module's docstring says what each
+    is asked and what answers it."""
+
+    CAPABILITIES = "capabilities"
+    MODEL = "model"
+    DECISION = "decision"
+    GIT = "git"
+    TOKEN = "token"
+    PROFILE_LOAD = "profile-load"
+    PROFILE_SAVE = "profile-save"
+    PROFILE_DISCARD = "profile-discard"
+    ARCHIVE = "archive"
+    ARCHIVE_HOLDS = "archive-holds"
+    ARCHIVE_DISCARD = "archive-discard"
+    SANDBOX_RUN = "sandbox-run"
+    HOME_SAVE = "home-save"
+    HOME_RESTORE = "home-restore"
+    CLAIM = "claim"
+
+
+@dataclass(frozen=True)
+class Effect:
+    """One Effect a replay asked for: its kind, and what it was asked."""
+
+    kind: EffectKind
+    asked: tuple[object, ...]
+
+
+@dataclass(frozen=True)
+class Answer:
+    """What answered one Effect where it was made."""
+
+    value: object = None
+    """What the seam gave. None when it raised."""
+
+    raised: Exception | None = None
+    """What the seam raised, or None. A replay raises it again where the Effect was asked, so
+    a failing model is a `ModelFailed` in the replay as in a run on one machine."""
+
+    seconds: float = 0.0
+    """How long the Effect took where it was made. 0 or more. For a CLAIM Effect, the seconds
+    of the Effects of the Claim's work, added up."""
+
+
+@dataclass(frozen=True)
+class Capabilities:
+    """What the worker's models and decider offer, which the code asks of them without making a
+    request. Asked once, as a run's first Effect, since the worker is what makes the
+    requests."""
+
+    parallel_tool_calls: tuple[RoleName, ...]
+    """The roles whose model offers parallel tool calls (`offers_parallel_tool_calls`), in the
+    order of `RoleName`."""
+
+    decider: bool
+    """Whether the worker has a decider. Without one, the run is given none, as the core's
+    entry point is when it has none."""
+
+
+@dataclass(frozen=True)
+class DurableLimits:
+    """The limits a durable run keeps to, so that it ends where Temporal would otherwise retry
+    without end. A test can give smaller ones."""
+
+    payload_bytes: int = PAYLOAD_BYTES
+    journal_bytes: int = JOURNAL_BYTES
+
+
+class NeedsEffect(BaseException):  # noqa: N818 - it is no error: the replay has gone as far as it can
+    """A replay asked for an Effect that its Journal holds no answer for.
+
+    It derives from `BaseException`, so no `except Exception` in the code replayed takes it for
+    a failure and swallows it.
+    """
+
+    def __init__(self, place: int, effect: Effect) -> None:
+        super().__init__(place, effect)
+        self.place = place
+        """The Effect's place in the Journal, counted from 0: the number of answers it holds."""
+        self.effect = effect
+
+
+class JournalMismatch(Exception):  # noqa: N818 - named for what it finds
+    """A replay asked, at some place, for another Effect than the one its Journal holds there.
+
+    The code replayed is not what made the Journal, or it is not deterministic. Either is a
+    fault in the system, never a failing model or Sandbox.
+    """
+
+
+def effect_id(place: int, effect: Effect) -> str:
+    """The ID of the activity that makes `effect` at `place` in a Journal.
+
+    It is `place`, then the kind, then a digest of what was asked, joined by `-`, and it holds
+    only lowercase letters, digits, and `-`. The digest is the same in every process and on
+    every machine for what is equal, and differs for what is asked differently. Temporal
+    compares activity IDs, and not what an activity was given, when it replays a workflow's
+    history, so with the digest in the ID a replay that asks for another Effect at a place than
+    its history holds fails, where without it the history's answer would be given.
+    """
+    raise NotImplementedError
+
+
+def sandbox_name(run: str, place: int) -> str:
+    """The name of the Sandbox that run `run` opened at `place` among the Sandboxes it opened,
+    counted from 0. Each Sandbox a run opens is a new one, as `SandboxFor` says, so the place
+    is in the name. Holds only lowercase letters, digits, and `-`, as `run` does."""
+    raise NotImplementedError
+
+
+@dataclass
+class Replay:
+    """One replay of the core's code against a Journal: the Effects made so far in a run, each
+    with its answer, in the order made.
+
+    Asking
+        `made` is asked for each Effect in the order the code asks for them. While the Journal
+        holds an answer at the next place, the Effect asked must be the one held there, and
+        the answer is given: its `value` is returned, or its `raised` raised. Past the last
+        answer, `made` raises `NeedsEffect` for the Effect asked, at the place after the last.
+
+        No Effect during unwinding
+            Once `made` has raised `NeedsEffect`, every later call raises that same
+            `NeedsEffect` again, whatever it is asked. So a `finally`, a `__exit__`, or an
+            `ExitStack` that asks for an Effect while the `NeedsEffect` unwinds the code does
+            not put its own Effect in place of the one the run needs: the run's next Effect is
+            always the first one the Journal could not answer.
+    """
+
+    journal: Sequence[tuple[Effect, Answer]]
+
+    used: int = field(default=0, init=False)
+    """How many answers have been given."""
+
+    needed: NeedsEffect | None = field(default=None, init=False)
+    """The `NeedsEffect` raised, once one has been."""
+
+    def made(self, effect: Effect) -> object:
+        """The answer to `effect`, which is the next Effect the code asks for, as Asking says.
+
+        Raises `JournalMismatch` when the Journal holds another Effect at that place. Raises
+        the answer's `raised` when it has one. Raises `NeedsEffect` past the Journal's end.
+        """
+        raise NotImplementedError
+
+    def clock(self) -> float:
+        """The replay's clock: the `seconds` of the answers given so far, added up. Starts at
+        0.0 and never goes back."""
+        raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class RunInput:
+    """What `VerifyPullRequest` is given: no secret, since a workflow's input is kept in its
+    history. Models, decider, and stores are the worker's."""
+
+    run: str
+    """Names the run, and each Sandbox it opens (`sandbox_name`): the workflow's ID. Holds
+    only lowercase letters, digits, and `-`."""
+
+    pull_request: PullRequest
+    """The pull request, with its repository as a directory on the workers' machine."""
+
+    budget: Budget = field(default_factory=Budget)
+
+    shown: ContextLimits = field(default_factory=ContextLimits)
+    """What a role is shown of any one thing it reads (`pr_verification.context_bound`). In
+    the input, and not read from a worker's environment, so that every replay is bounded
+    alike."""
+
+    limits: DurableLimits = field(default_factory=DurableLimits)
+
+
+@dataclass(frozen=True)
+class SandboxReady:
+    """What a Claim's work is given of the `Ready` that preparing gave: the Sandbox by its name,
+    since a Sandbox object does not cross to another workflow."""
+
+    name: str
+    image: str
+    ecosystem: ReproductionEcosystem
+
+
+@dataclass(frozen=True)
+class ClaimInput:
+    """What `VerifyClaim` is given: all that the work on one Claim reads."""
+
+    run: str
+    pull_request: PullRequest
+    """The pull request, with `before` and `after` as full commit IDs."""
+
+    place: int
+    """The Claim's place among the Claims of the pull request, counted from 0."""
+
+    claim: str
+    kind: ClaimKind | None
+    ready: SandboxReady | None
+    """Where a Reproduction is run, or None when preparing gave no `Ready`."""
+
+    ledger: LedgerState
+    """The run's ledger as it was when the work on the Claim was asked for."""
+
+    capabilities: Capabilities
+    shown: ContextLimits = field(default_factory=ContextLimits)
+    limits: DurableLimits = field(default_factory=DurableLimits)
+
+
+@dataclass(frozen=True)
+class ClaimOutcome:
+    """What came of the work on one Claim: what it is given, or the `BudgetSpent` that ended the
+    work, never both. `ledger` is the run's ledger as the work left it."""
+
+    gathered: Gathered | None
+    spent: BudgetSpent | None
+    ledger: LedgerState
+
+
+def replay_run(given: RunInput, replay: Replay) -> Report:
+    """The report of the core's entry point, run on `given.pull_request` against `replay`.
+
+    The run's first Effect is CAPABILITIES. Then `run` (`pr_verification.core`) is called with
+    the pull request, `given.budget`, `replay.clock` as its clock, a `RoleModels` that holds a
+    model for every role, a decider when the Capabilities say the worker has one and None
+    otherwise, and the fixed pipeline. Each model, the decider, and the pipeline's store,
+    cache, and Sandboxes ask `replay` for an Effect in place of each call they would make, as
+    the table of this module says, and the model of each role offers parallel tool calls when
+    the Capabilities say so. Every git command and random name is asked for through
+    `effects_through`, nothing is recorded while the code runs (`tracing.paused`), and what a
+    role is shown is bounded by `given.shown` (`shown_within`). The Review is not asked for.
+
+    The pipeline is `FixedPipeline` with the defaults it has, but for those seams, its
+    `progress_guard`, which is the decider, and its `work_on_claim`. That asks for one CLAIM
+    Effect for each Claim worked on, with a `ClaimInput` that holds `ledger.snapshot()`, makes
+    the ledger hold the outcome's `ledger` (`Ledger.adopt`), and then gives the outcome's
+    `gathered` or raises its `spent`. So the Claims are worked on one after another, as
+    `FixedPipeline` works on them, each in a workflow of its own.
+
+    So given a Journal of the answers a run on one machine had, with the same Capabilities,
+    the report is equal to that run's report, but for seconds, which are those the Effects
+    took.
+
+    Raises `NeedsEffect` while the Journal does not hold every answer the run needs, and
+    `JournalMismatch` as `Replay.made` raises it. Raises what the core's entry point raises.
+    """
+    raise NotImplementedError
+
+
+def replay_claim(given: ClaimInput, replay: Replay) -> ClaimOutcome:
+    """What came of the work on Claim `given.place`, done against `replay`.
+
+    The ledger is `Ledger.restored(given.ledger, clock=replay.clock)`, and the work is
+    `FixedPipeline.work_in_place` with that ledger, the Claim, its place and kind, a `Ready`
+    whose Sandbox is the one `given.ready` names, and the models and decider that `replay_run`
+    makes, through the seams it makes. The outcome holds what that gives, or the
+    `BudgetSpent` it raises, with `snapshot()` of the ledger after it.
+
+    So `replay_run` given each CLAIM Effect's answer from here gives the report a run on one
+    machine gives, as it says.
+
+    Raises `NeedsEffect` and `JournalMismatch` as `replay_run` does. Raises what
+    `work_in_place` raises but `BudgetSpent`.
+    """
+    raise NotImplementedError
