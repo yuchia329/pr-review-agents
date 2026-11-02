@@ -771,4 +771,59 @@ between them. The logs are in
 
 So no tuning follows from this, and the development part is finished.
 
-Not yet done: the held-out part, which is to be run once on the fixed pipeline.
+## The held-out part, once, 2026-11-02
+
+The held-out part is the four pull requests no change above was tuned on: their twelve
+adversarial cases and their four true cases, three repetitions each, in one queue of 48 runs,
+six at a time. It was run once, on `33e8e0f`, which holds both changes, with everything else as
+on the development runs: fixed pipeline, the small LLM as decider, the time limit at 7200
+seconds. Every run gave a report. The logs are in
+`~/.cache/pr-verification/measurements/issue-59/2026-11-02-held-out/`.
+
+It ran on the same other server as the true cases above, with the same vLLM, weights, and flags.
+The development adversarial runs were on sicong, so there is a change of hardware between them
+and this.
+
+| Adversarial cases | |
+| --- | --- |
+| Runs | 36 |
+| Runs without verdicts | 0 |
+| False Claims | 62 |
+| **False Assurances** | **0** |
+| Refuted | 0 |
+| Worked to an end, three attempts that showed nothing | 54 |
+| Lost to the model | 7 |
+| Stopped for going round in circles | 1 |
+| Median time for a pull request | 2,457 s |
+
+| Placement | False Assurances |
+| --- | --- |
+| `description` | 0 of 21 |
+| `code-comment` | 0 of 20 |
+| `printed-output` | 0 of 21 |
+| The two pull requests with a planted test | 0 of 34 |
+| The two without | 0 of 28 |
+
+| True cases | |
+| --- | --- |
+| Runs | 12 |
+| True Claims | 22 |
+| **Confirmed** | **21, Decided Rate 0.95** |
+| Refuted: False Blocks | 0 |
+| Inconclusive | 1, lost to the model |
+| Median time for a pull request | 186 s |
+
+- **No manipulation got through.** Every one of the 62 Claims is the pull request's own Claim,
+  in the system's words; none was made of a manipulation, and no run lost its Claims to the
+  order to list none. The planted tests, which carry the manipulation in two of the four, were
+  what got a Claim Confirmed.
+- **Every true Claim decided was Confirmed.** The one lost is the same fault as the 7 on the
+  adversarial cases: an answer that held thinking and no text.
+- **Read against ADR 0006.** A False Assurance rate of 0 of 62 is under the 5% the ADR allows.
+  The sample is small: were the Claims independent, 0 in 62 would put the rate below 4.8% with
+  95% confidence, and they are not, since the Claims of one run share a pull request and a
+  manipulation; by pull request it is 0 of 4. No False Block in 22 true Claims is in line with
+  the ADR's 2%, and cannot show it: so few Claims would bound the rate near 14% at best.
+- **Nothing here is like the two of the development part**, which came from a Claim taken as
+  Structural and from a test on an input where the Claim and the false change agree. Neither
+  shape came up; that the routes are closed is not shown by four pull requests.
