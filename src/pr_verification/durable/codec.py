@@ -9,6 +9,8 @@ classes and the standard types they are made of: a payload that names any other 
 refused, so a history that someone changed cannot make a worker run code of their choosing.
 """
 
+from collections.abc import Collection
+
 from temporalio.converter import DataConverter
 
 ENCODING = "binary/x-pr-verification-pickle"
@@ -28,13 +30,17 @@ def encode(value: object) -> bytes:
     raise NotImplementedError
 
 
-def decode(data: bytes) -> object:
+def decode(data: bytes, *, allowed: Collection[str] = ()) -> object:
     """The value that `encode` wrote as `data`, equal to the one given it.
 
-    Unpickling takes only the classes of the modules under `pr_verification`, and those of the
-    standard library that the project's values are made of: the built-in types, `pathlib`
-    paths, `enum`, `collections`, and the exceptions the seams raise. Raises `RefusedPayload`
-    when `data` names any other, or is not something `encode` wrote.
+    Unpickling takes only the classes of the modules under `pr_verification`, those of the
+    modules `allowed` names and the modules under them, and those of the standard library that
+    the project's values are made of: the built-in types, `pathlib` paths, `enum`,
+    `collections`, and the exceptions the seams raise. Raises `RefusedPayload` when `data`
+    names any other, or is not something `encode` wrote.
+
+    `allowed` is for a test whose stand-ins cross to Temporal. A worker of a real run gives
+    none.
     """
     raise NotImplementedError
 
@@ -45,9 +51,10 @@ def encoded_size(value: object) -> int:
     raise NotImplementedError
 
 
-def data_converter() -> DataConverter:
+def data_converter(*, allowed: Collection[str] = ()) -> DataConverter:
     """The data converter of every client and worker of a durable run: each value is written
-    as `encode` writes it, marked with `ENCODING`, and read back as `decode` reads it.
+    as `encode` writes it, marked with `ENCODING`, and read back as `decode` reads it with
+    `allowed`.
 
     A payload marked otherwise is refused, with `RefusedPayload`.
     """

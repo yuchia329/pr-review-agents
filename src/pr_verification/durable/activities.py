@@ -19,9 +19,10 @@ from temporalio import activity
 from pr_verification.budget import Clock
 from pr_verification.decision import Decider
 from pr_verification.durable.journal import Answer, Effect
+from pr_verification.ecosystem import find_commands
 from pr_verification.effects import Effects, OnThisMachine
 from pr_verification.model import Model
-from pr_verification.repo_profile import DependencyStore, ProfileStore
+from pr_verification.repo_profile import DependencyStore, Discover, ProfileStore
 from pr_verification.sandbox import ContainerSandbox, SandboxWithHomes, remove_sandbox
 
 LIMIT_REACHED = "DurableLimitReached"
@@ -51,6 +52,9 @@ class Resources:
 
     store: ProfileStore
     cache: DependencyStore
+
+    discover: Discover = find_commands
+    """Works out the repository's Ecosystem and how to install and test it."""
 
     open_sandbox: OpenNamedSandbox = ContainerSandbox
     remove_sandbox: Callable[[str], None] = remove_sandbox
@@ -90,7 +94,7 @@ class Activities:
         - MODEL asks `model_for(model, role)`, or the model itself for no role, through
           `ask_priced` when that model has a price and through `ask` otherwise, with
           `dollars` 0.0.
-        - DECISION asks the decider.
+        - DECISION asks the decider, and DISCOVER `discover`.
         - GIT and TOKEN go to `effects`, PROFILE_ to `store`, and ARCHIVE to `cache`.
         - SANDBOX_RUN, HOME_SAVE, and HOME_RESTORE open the Sandbox the Effect names with
           `open_sandbox(repository, image, name=..., step=...)`, where the step is this

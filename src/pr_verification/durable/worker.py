@@ -15,8 +15,9 @@ ADDRESS = "localhost:7233"
 
 
 async def connect(address: str = ADDRESS) -> Client:
-    """A client of the Temporal server at `address`, with the data converter of
-    `pr_verification.durable.codec`, which every client of a durable run must have."""
+    """A client of the Temporal server at `address`, with `data_converter()` of
+    `pr_verification.durable.codec`, which every client of a durable run must have: one made
+    with `allowed` will do."""
     raise NotImplementedError
 
 
@@ -36,6 +37,7 @@ def make_worker(
     run's step. Activities run on `activity_executor`, and on a thread pool as large as
     `max_concurrent_activities` when None, since they are not async.
 
-    Raises `ValueError` when `client` has not the data converter that `connect` gives.
+    Raises `ValueError` when the payloads of `client` are not written as
+    `pr_verification.durable.codec` writes them.
     """
     raise NotImplementedError

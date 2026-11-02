@@ -15,6 +15,8 @@ The Effects
     CAPABILITIES      ()                                                  `Capabilities`
     MODEL             (role or None, `ModelRequest`)                      `PricedResponse`
     DECISION          (state, `Question`)                                 `Decision`
+    DISCOVER          (repository, commit)                                `Commands` or
+                                                                          `Unsupported`
     GIT               (repository, arguments, stdin, environment)         `bytes`
     TOKEN             (size,)                                             `str`
     PROFILE_LOAD      (repository,)                                       `RepoProfile` or None
@@ -84,6 +86,7 @@ class EffectKind(StrEnum):
     CAPABILITIES = "capabilities"
     MODEL = "model"
     DECISION = "decision"
+    DISCOVER = "discover"
     GIT = "git"
     TOKEN = "token"
     PROFILE_LOAD = "profile-load"
@@ -309,7 +312,8 @@ def replay_run(given: RunInput, replay: Replay) -> Report:
     role is shown is bounded by `given.shown` (`shown_within`). The Review is not asked for.
 
     The pipeline is `FixedPipeline` with the defaults it has, but for those seams, its
-    `progress_guard`, which is the decider, and its `work_on_claim`. That asks for one CLAIM
+    `discover`, which asks for a DISCOVER Effect, its `progress_guard`, which is the decider,
+    and its `work_on_claim`. That asks for one CLAIM
     Effect for each Claim worked on, with a `ClaimInput` that holds `ledger.snapshot()`, makes
     the ledger hold the outcome's `ledger` (`Ledger.adopt`), and then gives the outcome's
     `gathered` or raises its `spent`. So the Claims are worked on one after another, as
