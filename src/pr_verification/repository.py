@@ -33,6 +33,11 @@ def git(
     `environment` is added to the environment git is run in. It is where to put what must not
     be among the arguments, which the error git's refusal raises repeats.
 
+    The command is run by the `Effects` in use (`pr_verification.effects`), as
+    `effects_in_use().git(repository, arguments, stdin=stdin, environment=environment or {})`,
+    and what that gives or raises is what this gives or raises. Nothing else is done here, so
+    a run that sets other `Effects` runs no git of its own.
+
     Raises `subprocess.CalledProcessError` when git refuses, and `OSError` when it cannot be run.
     """
     done = subprocess.run(

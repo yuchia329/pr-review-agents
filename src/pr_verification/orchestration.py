@@ -28,6 +28,7 @@ from pr_verification.model import Model, RoleModels, RoleName, model_for
 from pr_verification.repo_profile import (
     CommandFailed,
     DependencyCache,
+    DependencyStore,
     DirectoryStore,
     Discover,
     Prepared,
@@ -186,7 +187,7 @@ class FixedPipeline:
     store: ProfileStore
     """Where the Repo Profile is kept between runs."""
 
-    cache: DependencyCache
+    cache: DependencyStore
     """Where installed dependencies are kept between runs."""
 
     limits: Limits = LIMITS
@@ -666,9 +667,8 @@ def orchestration_choice(environment: Mapping[str, str]) -> OrchestrationChoice:
     """Read which orchestration a run uses from `PR_VERIFICATION_ORCHESTRATION`.
 
     `pipeline` is the fixed pipeline and `supervisor` is the LLM supervisor. Unset, or set to
-    the empty string, it is the fixed pipeline: the supervisor is chosen by configuration,
-    and the fixed pipeline stays the default until the supervisor has been measured against
-    it.
+    the empty string, it is the fixed pipeline, which is the design (ADR 0009). The supervisor
+    is chosen by configuration, so that it can still be measured against the fixed pipeline.
 
     Raises `InvalidOrchestration`, with a message that names the variable, when it is set to
     anything else. The two values are matched exactly as written. `baseline` is such a

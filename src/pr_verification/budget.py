@@ -121,6 +121,30 @@ def _reached(spent: BudgetSpend, limits: Budget) -> BudgetLimit | None:
     return None
 
 
+@dataclass(frozen=True)
+class LedgerState:
+    """All that a `Ledger` holds while no work is under way through it, but its clock, as
+    `Ledger.snapshot` gives it. It is plain data, so it can be kept, or sent to another
+    process and made into a ledger there with `Ledger.restored`."""
+
+    budget: Budget
+    """The Budget the ledger keeps to."""
+
+    spent: BudgetSpend
+    """What has been recorded against the whole pull request: `Ledger.spent()`."""
+
+    stopped: BudgetLimit | None
+    """The limit of the Budget that was reached first, or None: `Ledger.stopped_by()`."""
+
+    shares: tuple[Budget, ...]
+    """The share of each Claim, in the order of the Claims, as it is now that any moves have
+    been made. Empty until shares have been set aside."""
+
+    claims: tuple[BudgetSpend, ...]
+    """What has been recorded against each Claim, in the order of the Claims. As many as
+    `shares`."""
+
+
 class Ledger:
     """What has been spent on one pull request, held against its Budget and each Claim's share.
 
@@ -333,6 +357,30 @@ class Ledger:
             dollars=max(0.0, limits.dollars - spent.dollars),
             steps=max(0, limits.steps - spent.steps),
         )
+
+    def snapshot(self) -> LedgerState:
+        """All that the ledger holds now, but its clock.
+
+        Raises `ValueError` while work is under way through `model` or `sandbox`, since what
+        that work spends is not yet recorded.
+        """
+        raise NotImplementedError
+
+    @classmethod
+    def restored(cls, state: LedgerState, *, clock: Clock = time.monotonic) -> "Ledger":
+        """A ledger that holds `state` and times work with `clock`.
+
+        It answers `spent`, `left`, and `stopped_by` as the ledger that `state` was taken from
+        answered when it was taken, and from then on records, refuses, and moves shares as
+        that ledger would have, with no work under way. So
+        `Ledger.restored(ledger.snapshot()).snapshot() == ledger.snapshot()`. Shares are set
+        aside once for a pull request, so a restored ledger that holds shares refuses
+        `share_out` as that ledger would.
+
+        Raises `ValueError` when no ledger could hold `state`: when a limit of its Budget is
+        not more than 0, or when it has not as many `claims` as `shares`.
+        """
+        raise NotImplementedError
 
     def move_share(self, amount: BudgetSpend, *, source: int, destination: int) -> None:
         """Move `amount` from the share of Claim `source` to the share of Claim `destination`.

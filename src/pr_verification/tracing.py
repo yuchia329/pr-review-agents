@@ -268,6 +268,24 @@ def span(kind: SpanKind, name: str) -> Iterator[dict[str, Attribute]]:
 
 
 @contextmanager
+def paused() -> Iterator[None]:
+    """Record nothing of the work done inside the `with`, though a recording is open.
+
+    Inside it, `span` opens no span and gives attributes that are dropped, as it does with no
+    recording open, and a span open where the `with` starts is no parent of anything inside
+    it. Leaving the `with`, however it is left, records again as before. One `paused` inside
+    another changes nothing.
+
+    It is held as open spans are: in the context of the code that is running. A thread started
+    with a copy of that context is paused too, and pausing one thread pauses no other, so work
+    done meanwhile on another thread is recorded as usual. A durable run replays the work it
+    has already done inside it, so that each piece of work is recorded once, when it is done.
+    """
+    raise NotImplementedError
+    yield
+
+
+@contextmanager
 def record() -> Iterator[Recording]:
     """Open a recording for as long as the `with` lasts.
 

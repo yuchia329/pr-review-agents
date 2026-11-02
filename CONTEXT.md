@@ -56,6 +56,16 @@ _Avoid_: Memory, cache, repo config
 The fixed limit on effort the system may spend on one pull request, measured in time, money, and steps, with a share set aside for each **Claim**. A **Claim** still unresolved when the Budget is spent receives an Inconclusive **Verdict**.
 _Avoid_: Quota, limit, allowance
 
+### Running
+
+**Effect**:
+One call a run of the system makes that leaves it, and whose answer comes from outside what the run was given: a request to a model, a bounded decision, a command in the **Sandbox**, a git command, a name chosen at random, a reading of the clock, or a read or write of what is kept between runs. Two runs given the same, whose Effects are answered the same, give the same report.
+_Avoid_: Side effect, call, I/O
+
+**Journal**:
+The **Effects** a run has made, each with its answer, in the order made. A run that stops can be continued from its Journal, with only the **Effect** under way when it stopped made again.
+_Avoid_: Log, history, trace
+
 ### Trust
 
 **Untrusted Content**:

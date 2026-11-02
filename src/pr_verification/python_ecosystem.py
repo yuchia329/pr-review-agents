@@ -317,10 +317,11 @@ class PythonEcosystem:
         so pytest may run other files too, as with an `addopts` that names one.
 
         `take_results` is always given. `run` has pytest write its results to a file at the
-        root of the working copy. Each call chooses that file's name anew, from the
-        operating system's source of randomness and with no less than 128 bits of it. So
-        two placements differ in `run` and in `take_results`, even for the same text, and
-        nothing but those two commands holds the name.
+        root of the working copy. Each call chooses that file's name anew, from 16 bytes that
+        `token_hex` of the `Effects` in use gives (`pr_verification.effects`): 128 bits of the
+        operating system's source of randomness on this machine. So two placements differ in
+        `run` and in `take_results`, even for the same text, and nothing but those two
+        commands holds the name.
 
         `run` leaves nothing else of the Reproduction in the working copy: Python writes no
         compiled file there and pytest keeps no cache. Once `take_results` has exited with

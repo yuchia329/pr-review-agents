@@ -218,14 +218,42 @@ class DirectoryStore:
         return _kept_for(repository, self._directory) / "profile.json"
 
 
-class DependencyCache:
-    """Installed dependencies kept between runs in a directory, keyed by the lock file.
+class DependencyStore(Protocol):
+    """Where installed dependencies are kept between runs: somewhere a pull request cannot
+    modify.
 
     What is kept is the home directory that a commit's install commands left, as
-    `SandboxWithHomes.save_home` writes it: one archive for each repository, each image, and
-    each digest of the lock file. The cache only says where an archive belongs.
-    `prepare_target` is the one place that writes one, and only from the target branch.
+    `SandboxWithHomes.save_home` writes it to an archive and `restore_home` reads it back: one
+    archive for each repository, each image, and each digest of the lock file. The store says
+    where an archive belongs, whether one is kept there, and forgets one. `prepare_target` is
+    the one place that has one written, and only from the target branch.
     """
+
+    def archive(self, repository: Path, image: str, lock_digest: str) -> Path:
+        """Where the archive for `repository`, run in `image`, with one digest of its lock file
+        belongs.
+
+        The same repository, image, and digest always give the same path. A different
+        repository, told apart as `DirectoryStore` tells them, a different image, or a
+        different digest gives the path of a different archive, so the dependencies installed
+        for one lock file are never used for another, nor those installed in one image in
+        another. `image` and `lock_digest` may each be any text.
+        """
+        ...
+
+    def holds(self, archive: Path) -> bool:
+        """Whether an archive is kept at `archive`, a path that `archive` gave."""
+        ...
+
+    def discard(self, archive: Path) -> None:
+        """Forget the archive kept at `archive`, a path that `archive` gave. Does nothing when
+        none is kept there."""
+        ...
+
+
+class DependencyCache:
+    """The `DependencyStore` as a directory: installed dependencies kept between runs, keyed
+    by the lock file, one file for each archive."""
 
     def __init__(self, directory: Path) -> None:
         """A cache that keeps its archives under `directory`, which need not exist yet."""
@@ -251,6 +279,14 @@ class DependencyCache:
         kept = _kept_for(repository, self._directory)
         kept.mkdir(parents=True, exist_ok=True)
         return kept / f"{_digest([image, lock_digest])}.home"
+
+    def holds(self, archive: Path) -> bool:
+        """See `DependencyStore.holds`: whether the file `archive` exists."""
+        raise NotImplementedError
+
+    def discard(self, archive: Path) -> None:
+        """See `DependencyStore.discard`: delete the file `archive`, if it exists."""
+        raise NotImplementedError
 
 
 @dataclass(frozen=True)
@@ -284,7 +320,7 @@ def prepare_target(
     target: str,
     *,
     store: ProfileStore,
-    cache: DependencyCache,
+    cache: DependencyStore,
     sandbox_for: SandboxFor,
     limits: Limits,
     discover: Discover = find_commands,
@@ -302,17 +338,17 @@ def prepare_target(
 
     With a stored profile that still holds
         `store.load(repository)` is asked first. A profile whose `lock_digest` is the digest
-        still holds, and `discover` is not called. In `sandbox_for(profile.image)`: when the
-        archive exists, it is put back with `restore_home(target, archive)`; then each of
+        still holds, and `discover` is not called. In `sandbox_for(profile.image)`: when
+        `cache.holds(archive)`, it is put back with `restore_home(target, archive)`; then each of
         `profile.install` is run in `Phase.INSTALL`, in order. Putting the archive back never
         stands in for running them: it leaves them less to do. When each has exited with
-        status 0, the home directory is saved with `save_home(target, archive)` if the archive
-        did not exist, and the answer is `Prepared` with that profile, that Sandbox, and
+        status 0, the home directory is saved with `save_home(target, archive)` if the cache did
+        not hold the archive, and the answer is `Prepared` with that profile, that Sandbox, and
         `learned` False. Nothing is saved to the store.
 
-        When `restore_home` raises `SandboxFailed`, the archive is deleted before the error
-        goes on, so that the next run installs from nothing and does not meet the same
-        archive again.
+        When `restore_home` raises `SandboxFailed`, the archive is discarded with
+        `cache.discard(archive)` before the error goes on, so that the next run installs from
+        nothing and does not meet the same archive again.
 
     Discarding
         A stored profile is discarded with `store.discard(repository)`, and the profile is
@@ -385,7 +421,7 @@ def _prepare_with(
     profile: RepoProfile,
     repository: Path,
     target: str,
-    cache: DependencyCache,
+    cache: DependencyStore,
     sandbox_for: SandboxFor,
     limits: Limits,
 ) -> Prepared | None:
@@ -429,7 +465,7 @@ def prepare_pull_request(
     *,
     profile: RepoProfile,
     sandbox: SandboxWithHomes,
-    cache: DependencyCache,
+    cache: DependencyStore,
     limits: Limits,
 ) -> CommandFailed | None:
     """Install the dependencies of the pull request's commit with the target's Repo Profile.
@@ -441,7 +477,7 @@ def prepare_pull_request(
     `save_home` is never called.
 
     The archive is `cache.archive(repository, profile.image, digest_lock_files(repository,
-    commit, profile.lock_files))`. When it exists, it is put back with
+    commit, profile.lock_files))`. When `cache.holds(archive)`, it is put back with
     `restore_home(commit, archive)` first, so installed dependencies are used again only in
     the image they were installed in, and only for a commit that gets the digest of the commit
     they were installed for. Then each of `profile.install` is run against `commit` in
