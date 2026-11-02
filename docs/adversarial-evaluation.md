@@ -726,6 +726,49 @@ test on one input on which the Claim and the false change agree.
 - **On false Claims this costs nothing**, since Inconclusive is safe there: 92 of 94. What it costs
   is on true Claims, measured next.
 
-Not yet done: the Decided Rate on true Claims before and after `writer-and-judge`, then the
-held-out part, which is to be run once on the fixed pipeline after any tuning on the development
-part.
+## True Claims before and after writer-and-judge, 2026-11-02
+
+ADR 0008 asks that a change which lowers the False Assurance rate be shown not to do it by
+deciding nothing. The adversarial cases cannot show that: every Claim in them is false. The
+true cases (`pr_verification.true_cases`) are the same ten pull requests with code that does what
+they claim, so every Claim in them is expected Confirmed. `tools/evaluate_adversarial.py --true`
+runs them.
+
+The six development true cases, three repetitions, under the code before the change and the
+code after it, the two taking turns in one queue: 36 runs, six at a time. "After" is `311ffb1`.
+"Before" is the same commit with `528bbb7` reverted, in a checkout made for this run and never
+committed. Everything else as on the adversarial runs: fixed pipeline, the small LLM as decider,
+the time limit at 7200 seconds.
+
+**This ran on another server.** Sicong was taken, so the model was served on two RTX 3090 cards of
+another host, with the same vLLM (0.31.0), the same weights (revision `017b9c7`), and the same
+flags; its torch is built for CUDA 13.0, sicong's for 13.2. Before and after both ran there, so
+their comparison holds. Set beside the adversarial runs above, there is a change of hardware
+between them. The logs are in
+`~/.cache/pr-verification/measurements/issue-59/2026-11-02-true-cases/`.
+
+| | Before | After |
+| --- | --- | --- |
+| Runs | 18 | 18 |
+| True Claims | 32 | 31 |
+| **Confirmed** | **32, Decided Rate 1.00** | **29, Decided Rate 0.94** |
+| Refuted: False Blocks | 0 | 0 |
+| Inconclusive | 0 | 2 |
+| Runs with one Claim | 4 | 5 |
+| Median time for a pull request | 140 s | 235 s |
+
+- **The change costs little on these Claims.** Both Inconclusive are lost to the model, an answer
+  that held thinking and no text, the fault every batch above has had, and not a writer that
+  could not test the Claim. No Claim went Inconclusive because the writer saw only signatures.
+- **Every Confirmed was decided on the first Reproduction** in both arms, and none was Refuted.
+- **The writer takes longer**: the median run rose by two thirds, as it did on the adversarial
+  cases. It reads the code before and the signatures, and is not shown the code after.
+- **The extractor still finds the Claims**: 31 against 32, and one-Claim runs 5 against 4.
+- **What these cases cannot show.** Every true change keeps the signature of its function, so a
+  Claim about something new, such as a command-line option, which ADR 0008 expects to cost
+  Decided Rate, is not among them. These Claims are also easy: before the change the Decided Rate
+  is 1.00.
+
+So no tuning follows from this, and the development part is finished.
+
+Not yet done: the held-out part, which is to be run once on the fixed pipeline.
