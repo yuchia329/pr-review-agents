@@ -206,6 +206,10 @@ _open: ContextVar[tuple[_OpenSpan, ...]] = ContextVar("open spans", default=())
 thread run in a copy of the context it was started from begins with the spans open there, and
 what it opens is open on that thread alone."""
 
+_paused: ContextVar[bool] = ContextVar("tracing paused", default=False)
+"""Whether recording is paused on this thread, as `paused` says. A context variable, as `_open`
+is."""
+
 _PASSED_ON = frozenset({SpanKind.MODEL_CALL, SpanKind.SANDBOX_RUN})
 """The kinds of work that one model or Sandbox passes on to another. Work of one of these kinds
 that starts inside a span of the same kind is that span's own work, and not more of it."""
@@ -233,7 +237,7 @@ def span(kind: SpanKind, name: str) -> Iterator[dict[str, Attribute]]:
     the attributes of the span that is open.
     """
     recording = _recording
-    if recording is None:
+    if recording is None or _paused.get():
         yield {}
         return
     open_here = _open.get()
@@ -281,8 +285,11 @@ def paused() -> Iterator[None]:
     done meanwhile on another thread is recorded as usual. A durable run replays the work it
     has already done inside it, so that each piece of work is recorded once, when it is done.
     """
-    raise NotImplementedError
-    yield
+    before = _paused.set(True)
+    try:
+        yield
+    finally:
+        _paused.reset(before)
 
 
 @contextmanager

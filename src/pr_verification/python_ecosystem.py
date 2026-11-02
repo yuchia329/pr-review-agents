@@ -6,7 +6,6 @@ import json
 import os
 import posixpath
 import re
-import secrets
 import tomllib
 from collections.abc import Iterator
 from fnmatch import fnmatchcase
@@ -16,6 +15,7 @@ from typing import Any
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 
 from pr_verification.ecosystem import Commands, Placement, Results, Unreadable, Unsupported
+from pr_verification.effects import effects_in_use
 from pr_verification.repository import git
 from pr_verification.sandbox import RunResult
 
@@ -336,7 +336,7 @@ class PythonEcosystem:
         # Half of a character that takes two code units in UTF-16 has no UTF-8 of its own, and a
         # model can write one. It is written as it stands, and Python then refuses the file.
         content = base64.b64encode(reproduction.encode(errors="surrogatepass")).decode("ascii")
-        results = f".pr_verification_results_{secrets.token_hex(16)}.json"
+        results = f".pr_verification_results_{effects_in_use().token_hex(16)}.json"
         return Placement(
             path=REPRODUCTION_PATH,
             write=(*_WRITE, REPRODUCTION_PATH, content),

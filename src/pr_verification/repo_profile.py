@@ -282,11 +282,11 @@ class DependencyCache:
 
     def holds(self, archive: Path) -> bool:
         """See `DependencyStore.holds`: whether the file `archive` exists."""
-        raise NotImplementedError
+        return archive.exists()
 
     def discard(self, archive: Path) -> None:
         """See `DependencyStore.discard`: delete the file `archive`, if it exists."""
-        raise NotImplementedError
+        archive.unlink(missing_ok=True)
 
 
 @dataclass(frozen=True)
@@ -432,13 +432,13 @@ def _prepare_with(
         return None
     archive = cache.archive(repository, profile.image, digest)
     sandbox = sandbox_for(profile.image)
-    put_back = archive.exists()
+    put_back = cache.holds(archive)
     if put_back:
         try:
             sandbox.restore_home(target, archive)
         except SandboxFailed:
             # So that the next run installs from nothing, and does not meet this archive again.
-            archive.unlink(missing_ok=True)
+            cache.discard(archive)
             raise
     if _install(sandbox, profile.install, target, limits) is not None:
         return None
@@ -492,6 +492,6 @@ def prepare_pull_request(
     """
     digest = digest_lock_files(repository, commit, profile.lock_files)
     archive = cache.archive(repository, profile.image, digest)
-    if archive.exists():
+    if cache.holds(archive):
         sandbox.restore_home(commit, archive)
     return _install(sandbox, profile.install, commit, limits)

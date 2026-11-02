@@ -21,8 +21,11 @@ the same, make the same Effects in the same order and give equal `Report`s. Trac
 Effect: it records what a run does and changes nothing the run gives.
 """
 
+import secrets
+import subprocess
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Protocol
 
@@ -71,11 +74,28 @@ class OnThisMachine:
         environment: Mapping[str, str],
     ) -> bytes:
         """See `Effects.git`."""
-        raise NotImplementedError
+        # `repository` asks for git through this module, so it is read here, once both are loaded.
+        from pr_verification.repository import git_environment
+
+        done = subprocess.run(
+            ["git", *arguments],
+            cwd=repository,
+            env={**git_environment(repository), **environment},
+            input=stdin,
+            check=True,
+            capture_output=True,
+        )
+        return done.stdout
 
     def token_hex(self, size: int) -> str:
         """See `Effects.token_hex`."""
-        raise NotImplementedError
+        return secrets.token_hex(size)
+
+
+_in_use: ContextVar[Effects | None] = ContextVar("effects in use", default=None)
+"""The `Effects` in use on this thread, or None where none was set. It is a context variable,
+so a thread run in a copy of the context it was started from begins with the `Effects` in use
+there, and what it sets is in use on that thread alone."""
 
 
 @contextmanager
@@ -90,8 +110,11 @@ def effects_through(effects: Effects) -> Iterator[None]:
     started with a copy of that context uses the same, and setting them in one thread changes
     them in no other.
     """
-    raise NotImplementedError
-    yield
+    before = _in_use.set(effects)
+    try:
+        yield
+    finally:
+        _in_use.reset(before)
 
 
 def effects_in_use() -> Effects:
@@ -100,4 +123,5 @@ def effects_in_use() -> Effects:
 
     So a run that sets nothing runs git on this machine and chooses its names from this
     machine's randomness, as it did before this seam existed."""
-    raise NotImplementedError
+    effects = _in_use.get()
+    return OnThisMachine() if effects is None else effects

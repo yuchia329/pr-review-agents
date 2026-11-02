@@ -1,10 +1,11 @@
 """Reading the repository a pull request belongs to, and making one for a case, with git."""
 
 import os
-import subprocess
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
+
+from pr_verification.effects import effects_in_use
 
 # Who a commit made here is by, whatever the machine it is made on is set up to say.
 _COMMITTER = (
@@ -40,15 +41,7 @@ def git(
 
     Raises `subprocess.CalledProcessError` when git refuses, and `OSError` when it cannot be run.
     """
-    done = subprocess.run(
-        ["git", *arguments],
-        cwd=repository,
-        env={**git_environment(repository), **(environment or {})},
-        input=stdin,
-        check=True,
-        capture_output=True,
-    )
-    return done.stdout
+    return effects_in_use().git(repository, arguments, stdin=stdin, environment=environment or {})
 
 
 def resolve_commit(repository: Path, commit: str) -> str:

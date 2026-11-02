@@ -364,7 +364,16 @@ class Ledger:
         Raises `ValueError` while work is under way through `model` or `sandbox`, since what
         that work spends is not yet recorded.
         """
-        raise NotImplementedError
+        with self._lock:
+            if self._under_way:
+                raise ValueError("work is under way through the ledger, so its spend is not known")
+            return LedgerState(
+                budget=self._budget,
+                spent=self._spent,
+                stopped=self._stopped,
+                shares=tuple(self._shares),
+                claims=tuple(self._claims),
+            )
 
     @classmethod
     def restored(cls, state: LedgerState, *, clock: Clock = time.monotonic) -> "Ledger":
@@ -380,7 +389,18 @@ class Ledger:
         Raises `ValueError` when no ledger could hold `state`: when a limit of its Budget is
         not more than 0, or when it has not as many `claims` as `shares`.
         """
-        raise NotImplementedError
+        if len(state.claims) != len(state.shares):
+            raise ValueError(
+                f"a ledger holds what each Claim with a share spent: {len(state.shares)} shares "
+                f"and {len(state.claims)} Claims"
+            )
+        # Refuses a Budget with a limit not more than 0, as any ledger does.
+        ledger = cls(state.budget, clock=clock)
+        ledger._spent = state.spent
+        ledger._stopped = state.stopped
+        ledger._shares = list(state.shares)
+        ledger._claims = list(state.claims)
+        return ledger
 
     def move_share(self, amount: BudgetSpend, *, source: int, destination: int) -> None:
         """Move `amount` from the share of Claim `source` to the share of Claim `destination`.
