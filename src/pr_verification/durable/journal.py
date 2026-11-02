@@ -121,8 +121,8 @@ class Answer:
     a failing model is a `ModelFailed` in the replay as in a run on one machine."""
 
     seconds: float = 0.0
-    """How long the Effect took where it was made. 0 or more. For a CLAIM Effect, the seconds
-    of the Effects of the Claim's work, added up."""
+    """How long the Effect took where it was made. 0 or more. For a CLAIM Effect, 0.0: the time
+    the Claim's work took is in the ledger its outcome holds."""
 
 
 @dataclass(frozen=True)
