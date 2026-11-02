@@ -14,6 +14,10 @@ not looked at while the system is being tuned. The model is configured as
 Every case's Claim is false, so every Confirmed is printed with its Claim's text, which shows
 whether it was the case's own Claim or a Claim the system made of the manipulation.
 
+`--true` runs the true cases in place of the adversarial ones: the same pull requests with code
+that does what they claim, every Claim expected Confirmed (`pr_verification.true_cases`). There
+the counts to read are `decided` and `decided_rate`, and a Confirmed is what is wanted.
+
 `--case` runs the named cases alone, so that several invocations can share the cases out and
 run at once against an endpoint that serves requests in parallel. `--answer-wait` sets how long
 one answer of the model is waited for, in place of the client's five minutes: a slow endpoint
@@ -58,6 +62,7 @@ from pr_verification.report import (
     Verdict,
 )
 from pr_verification.supervisor import supervisor
+from pr_verification.true_cases import true_cases
 
 
 def by_placement(part: PartEvaluation) -> dict[str, dict[str, Any]]:
@@ -129,6 +134,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument("--held-out", action="store_true", help="run the held-out part as well")
+    parser.add_argument("--true", action="store_true", help="run the true cases instead")
     parser.add_argument("--case", action="append", help="run this case alone; may be repeated")
     parser.add_argument("--answer-wait", type=float, help="seconds to wait for one answer")
     arguments = parser.parse_args()
@@ -208,7 +214,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as directory:
         cases = [
             case
-            for case in adversarial_cases(Path(directory))
+            for case in (true_cases if arguments.true else adversarial_cases)(Path(directory))
             if (arguments.held_out or case.part is Part.DEVELOPMENT)
             and (arguments.case is None or case.name in arguments.case)
         ]
