@@ -21,6 +21,7 @@ So:
 - **On easier work the supervisor was quicker at the median, at the same cost.** It was 16% quicker on a pull request with four Claims and 18% on the Structural cases on MiniMax M3, and 21% on 15 of 18 pull requests on Qwen 3.8 once the Budget's time limit was read on the clock. On those Structural cases on Qwen 3.8 both had a Decided Rate of 0.76, and neither made a False Block or a False Assurance (`docs/model-comparisons.md`). In one comparison on Qwen 3.8 it was 17% slower, and on three pull requests it ran past the limit in every run. Those runs are a lead, not a settled result.
 - **The adversarial comparison is narrow.** It is six pull requests in three placements, made for the measurement, on one model that also did the supervising, with the time limit at 7,200 seconds and not at the default Budget. A model that answers faster has not been tried on it.
 - **The pipeline lost 16 Claims to the model, and the supervisor 1.** Why is not known. The time limit may have stopped those Claims first.
+- **Why the supervisor was quicker on easier work is not known.** It works on several Claims at once and a model chooses which, so the gain could come from either. `measure/fixed-dispatch` (#76) is planned to tell them apart: the same threads, Sandboxes, and Budget, with a fixed rule in place of the supervising model. If the supervisor beats the rule on Decided Rate or on time, the model's scheduling has real value and this decision is looked at again.
 
 ## Considered Options
 
@@ -31,6 +32,6 @@ So:
 ## Consequences
 
 - The fixed pipeline stays the default, and `PR_VERIFICATION_ORCHESTRATION=supervisor` still chooses the supervisor on the command line. The GitHub Action uses the fixed pipeline.
-- Claims are worked on one at a time, so what the supervisor gained by working on several at once is given up. A pull request with many easy Claims takes longer than it could.
+- Claims are worked on one at a time, so any time saved by working on several at once is given up. A pull request with many easy Claims takes longer than it could.
 - Measurements no longer need to run both orchestrations.
 - Code and documents that cite ADR 0003 for what limits the supervisor stay correct.
