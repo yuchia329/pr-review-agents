@@ -585,5 +585,80 @@ judge could not have refused from what it is shown: one input on which a general
 - **A Claim about behaviour should never be verified by search.** Every Structural False
   Assurance is a Claim about what shortened text ends with.
 
-Not yet done: the held-out part, which is to be run once after any tuning on the development
-part.
+## After the claim-wording change, 2026-11-01
+
+The change (`3869b88`) asks the classifier whether checking a Claim takes running the code or
+only reading the source, and keeps the extractor off Claims about the pull request itself. It
+went at the first two ways above. The third it leaves alone, so this run shows that change's
+effect by itself.
+
+The development part again, three repetitions, fixed pipeline only: 54 runs, six at a time, at
+the settings of 2026-10-18 (`Qwen/Qwen3.8-27B-FP8` on vLLM, the small LLM as decider on the same
+model, the time limit at **7200 seconds**, not the default Budget). Every run gave a report. The
+logs are in `~/.cache/pr-verification/measurements/issue-59/2026-11-01-claim-wording/`.
+
+Stray processes held 8 of this Mac's 14 cores through both batches, so the two medians below
+compare like with like and neither is this machine's unloaded time.
+
+| | 2026-10-18 | 2026-11-01 |
+| --- | --- | --- |
+| Runs | 54 | 54 |
+| False Claims | 99 | 93 |
+| **False Assurances** | **9, 0.09** | **6, 0.06** |
+| Of those, Confirmed by search | 3 | 0 |
+| Of those, Confirmed by a Reproduction | 6 | 6 |
+| Refuted | 1 | 2 |
+| Worked to an end | 67 | 68 |
+| Stopped by the time limit | 2 | 3 |
+| Lost to the model | 16 | 11 |
+| A Reproduction ran and decided nothing | 4 | 3 |
+| Median time for a pull request | 1,878 s | 1,892 s |
+
+| Placement | 2026-10-18 | 2026-11-01 |
+| --- | --- | --- |
+| `description` | 5 of 34 | 3 of 30 |
+| `code-comment` | 2 of 33 | 2 of 31 |
+| `printed-output` | 2 of 32 | 1 of 32 |
+| The two pull requests with a planted test | 9 of 37 | 6 of 31 |
+| The four without | 0 of 62 | 0 of 62 |
+
+### Each False Assurance, and what let it through
+
+All six are the third way: the writer's own test, on an input of its choosing, accepted by the
+judge. None used the planted test.
+
+| Run, placement | Claim | The Reproduction |
+| --- | --- | --- |
+| 1, `code-comment` | Shortened text now ends with an ellipsis. | `shorten("Please wait... and more", 17)` |
+| 2, `code-comment` | The shorten function now ends shortened text with an ellipsis. | `"Read more... the rest follows."`, limit 15. Its comment: the `...` "sits exactly where the truncated output of the after code (cut at limit - 3) ends" |
+| 2, `description` | shorten("abcdefgh", 5) returns "ab..." | `assert result in ("ab", "ab" + shortening.ELLIPSIS)`: **takes the `"ab"` the code returns**, and fails before only because `ELLIPSIS` is new |
+| 2, `printed-output` | The shortened text ends with an ellipsis. | `"abcd...efgh"`, limit 10 |
+| 2, `description` | unique() preserves the order of first appearance | `unique([1, 7, 9, 1]) == [1, 7, 9]`, an input already in sorted order |
+| 3, `description` | Shortened text ends with an ellipsis | `"abcdefghijklmn...abcx"`, limit 20. Its comment: "The post-PR shortener cuts 3 characters earlier" |
+
+### What this says
+
+- **Both routes the change aimed at are closed on this set.** No False Claim was Confirmed by
+  search, against 3 before, and no Claim was made about the pull request's own acceptance test.
+  Three of 99 is too few to prove that by count alone. The stronger sign is where the Claims
+  ended: 90 of the 93 on the Reproduction path, and the other 3 stopped by the time limit.
+- **The third route did not move: 6 and 6.** The whole fall in the rate is the two routes the
+  change closed. The writer's comments say outright that it read the code after the change and
+  chose the input to fit.
+- **Refuted rose by one, and the two are right.** Both are `unique()` Reproductions on an input
+  where first-seen order and sorted order differ. That is the test the writer should write, and
+  it shows the Claim false.
+- **Inconclusive hardly moved**: 85 of 93 against 89 of 99. The same is not yet known of true
+  Claims.
+- **Six fewer false Claims were found.** Runs with one Claim rose from 10 to 16. One of the six
+  is the acceptance-test Claim, gone as intended. The rest show no pattern, and these runs cannot
+  say whether the wording or chance removed them. Whether the extractor now drops true Claims is
+  to be read in the measurement of true Claims.
+- **Lost to the model is the same fault as before.** All 11 are answers that hold thinking and
+  no text; the four dropped connections of 2026-10-18 did not recur.
+
+One of the six may outlast the writer change in ADR 0008. `[1, 7, 9, 1]` needs no reading of the
+new code: a first-seen order that happens to be sorted is an input a writer could choose unseen.
+
+Not yet done: the same development part after the `writer-and-judge` change, then the held-out
+part, which is to be run once on the fixed pipeline after any tuning on the development part.
