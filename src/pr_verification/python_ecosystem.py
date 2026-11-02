@@ -1,5 +1,6 @@
 """The Python Ecosystem: pip to install, pytest to test."""
 
+import ast
 import base64
 import json
 import os
@@ -7,6 +8,7 @@ import posixpath
 import re
 import secrets
 import tomllib
+from collections.abc import Iterator
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
@@ -260,7 +262,12 @@ class PythonEcosystem:
         Empty when the path does not end in `.py`, and for text that does not parse, whatever
         `ast` raises for it.
         """
-        raise NotImplementedError
+        if not path.endswith(".py"):
+            return ()
+        try:
+            return tuple(_signatures(ast.parse(text).body))
+        except (SyntaxError, ValueError, RecursionError, MemoryError):
+            return ()
 
     def read_results(self, run: RunResult) -> Results | Unreadable:
         """See `Ecosystem.read_results`.
@@ -391,6 +398,27 @@ class PythonEcosystem:
             for category in _CATEGORIES
         )
         return _results(passed, failed, error)
+
+
+def _signatures(body: list[ast.stmt], within: str = "") -> Iterator[str]:
+    """The signature of each function and class of `body`, whose names start with `within`,
+    and those of the classes' own bodies."""
+    for node in body:
+        if isinstance(node, ast.ClassDef):
+            bases = ", ".join(ast.unparse(base) for base in (*node.bases, *node.keywords))
+            name = f"{within}{node.name}"
+            yield _decorated(node, f"class {name}({bases})" if bases else f"class {name}")
+            yield from _signatures(node.body, f"{name}.")
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            word = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+            returns = f" -> {ast.unparse(node.returns)}" if node.returns else ""
+            signature = f"{word} {within}{node.name}({ast.unparse(node.args)}){returns}"
+            yield _decorated(node, signature)
+
+
+def _decorated(node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef, signature: str) -> str:
+    """A signature with the decorators of its definition before it, each on a line of its own."""
+    return "\n".join((*(f"@{ast.unparse(each)}" for each in node.decorator_list), signature))
 
 
 def _of_the_reproduction(node_id: str) -> bool:

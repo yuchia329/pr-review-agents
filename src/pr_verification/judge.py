@@ -57,6 +57,10 @@ code that behaves as the Claim says and fail on code that does not. It does not 
 the same way whatever that behaviour is: when it asserts nothing, asserts something the Claim does
 not say, or checks only that the code exists or can be called.
 
+Where the Claim names an input, the Reproduction must use it, and where the Claim names a result,
+the Reproduction must assert it. A Reproduction that asserts another result does not test the Claim,
+and nor does one whose input holds nothing of what the Claim is about.
+
 Do not judge whether the Claim is true. You are shown the Claim and the Reproduction and nothing
 else, and you have no tools: judge from the two alone.
 

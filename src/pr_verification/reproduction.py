@@ -20,11 +20,12 @@ from pr_verification.ecosystem import (
     ReproductionEcosystem,
     Results,
     ResultsFileEcosystem,
+    SignatureEcosystem,
     Unreadable,
 )
 from pr_verification.evidence import run_on_both_commits
 from pr_verification.model import Model, ModelFailed
-from pr_verification.reading import reading_tools
+from pr_verification.reading import reading_tools, signature_tool
 from pr_verification.report import ReproductionEvidence, RunEvidence
 from pr_verification.sandbox import Command, Limits, Phase, RunResult, Sandbox, SandboxFailed
 
@@ -310,10 +311,13 @@ def _write(
     With None the judge has rejected nothing yet, and the role's task has no `rejected`."""
     if attempt_cap < 1 or step_cap < 1:
         raise ValueError(f"a cap is under 1: {attempt_cap} attempts of {step_cap} steps")
+    tools = reading_tools(repository, before)
+    if isinstance(ecosystem, SignatureEcosystem):
+        tools = (*tools, signature_tool(repository, before, after, ecosystem.signatures))
     role = Role(
         name="reproduction-writer",
         instructions=_instructions(ecosystem.reproduction_form(), rewrites=rejected is not None),
-        tools=reading_tools(repository, after),
+        tools=tools,
         step_cap=step_cap,
     )
     # What the judge rejected is the same on every attempt of the call.
@@ -461,9 +465,11 @@ request, so that it passes on code that behaves that way and fails on code that 
 judge whether the Claim is true, and do not write a test that ends the same way whatever the code
 does.
 
-Your tools read the files of the repository as they are after the pull request. Use them to learn
-how the code is called. You cannot run anything yourself: the Reproduction is run for you once you
-finish.
+Your tools read the files of the repository as they were before the pull request. Of the code after
+it you see only what the tool "changed_signatures" shows, if you have that tool: how the code the
+pull request changed is called, and not how it works. Use your tools to learn how the code is
+called, and write the test from what the Claim says. You cannot run anything yourself: the
+Reproduction is run for you once you finish.
 
 {form}
 
@@ -475,6 +481,7 @@ code "before" and "after" the pull request. A result is one of:
 - "{AttemptResult.COULD_NOT_RUN}": it did not run to an answer on both, as with a set-up error
   or an import error.
 - "{AttemptResult.SHOWS_NOTHING}": it behaved the same on both, so it shows nothing about the Claim.
+  Its "after" is null, as what the code after the pull request gave is not shown to you.
 
 When there are attempts, write a Reproduction that mends what the last one's result and output
 show to be wrong with it.
@@ -502,11 +509,13 @@ def _shown(attempt: Attempt, limit: int) -> dict[str, object]:
     def output(run: RunResult | None) -> str | None:
         return None if run is None else bounded(run.output, limit, Keep.END)
 
+    # What the code after the change gave would let the next test be fitted to it (ADR 0008).
+    hidden = attempt.result is AttemptResult.SHOWS_NOTHING
     return {
         "reproduction": attempt.reproduction,
         "result": attempt.result.value,
         "before": output(attempt.before),
-        "after": output(attempt.after),
+        "after": None if hidden else output(attempt.after),
     }
 
 

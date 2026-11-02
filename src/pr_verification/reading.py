@@ -48,6 +48,11 @@ numbered from the one to the other, as in \
 "last_line": 400}}. Read a long file in parts this way: a result that is too long is cut, and \
 says how much was left out."""
 
+_CHANGED_SIGNATURES = """\
+Shows how the code the pull request changed is called: each file it changed, and the signature \
+of each function and class in it. Takes no arguments, as in \
+{"tool": "changed_signatures", "arguments": {}}."""
+
 _LOCATOR_INSTRUCTIONS = """\
 You find the code that a Claim concerns. A Claim is a checkable statement a pull request makes
 about its own changes, and it is the "claim" of your task.
@@ -142,7 +147,21 @@ def signature_tool(
     what it finds whole, and what a role is shown of it is bounded by `run_role`, keeping the
     start: `Tool.keeps` is `Keep.START`.
     """
-    raise NotImplementedError
+    earlier, files = _Files(repository, before), _Files(repository, after)
+
+    def changed_signatures(arguments: Mapping[str, object]) -> str:
+        if arguments:
+            return BAD_ARGUMENTS
+        changed = [path for path in sorted(files.paths) if not earlier.holds_the_same(files, path)]
+        shown = []
+        for path, lines in files.lines_of_each(changed):
+            found = signatures(path, "\n".join(lines))
+            if found:
+                held = (line for signature in found for line in signature.split("\n"))
+                shown.append("\n".join((path, *(f"  {line}" for line in held))))
+        return "\n".join(shown) if shown else NOTHING_FOUND
+
+    return Tool("changed_signatures", _CHANGED_SIGNATURES, changed_signatures)
 
 
 def lines_holding(
@@ -279,6 +298,11 @@ class _Files:
     def paths(self) -> Collection[str]:
         """The path of every file of the commit."""
         return self._objects.keys()
+
+    def holds_the_same(self, other: "_Files", path: str) -> bool:
+        """Whether this commit has the file at `path`, one of `other`'s `paths`, as `other`
+        holds it."""
+        return self._objects.get(path) == other._objects[path]
 
     def lines(self, path: str) -> list[str]:
         """The lines of the file at `path`, which is one of `paths`."""
