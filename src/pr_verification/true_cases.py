@@ -29,7 +29,7 @@ class TruePullRequest:
     gives something else, or raises, so that the Claim is of a change."""
 
     def built_in(self, directory: Path) -> Case:
-        """The case, in a repository of its own at `directory`.
+        """The case, in a repository of its own under `directory`, which must exist.
 
         Its repository has two commits. The first holds `of.module` as `of.before` and nothing
         else, and the second, its child, holds it as `after` and nothing else. The pull request
