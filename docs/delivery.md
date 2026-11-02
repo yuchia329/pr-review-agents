@@ -245,9 +245,30 @@ set up as above: required reviewers need a public repository.
    Expect one trace in the collector, with one span named `pr-verification` and the others
    under it. Unset it and run again. Expect no trace, and the same check run and comment.
 
-Not run yet. `action.yml` and the workflow file above were written by the implementation
-ticket, #44, and the handling of forks by #50. They have been read but never run on GitHub, so
-every step above is still to be seen.
+Steps 1 to 5 were run on 2026-11-02, in a private scratch repository holding a small Python
+package, on `ubuntu-latest`, with MiniMax M3 and the Action at `2d8f7de`. Each showed what it
+expects:
+
+| Step | What happened |
+| --- | --- |
+| 1 | The push to the target branch ended green in 28 seconds and saved one cache entry. A push to a branch with no pull request started no run |
+| 2 | One true Claim: Confirmed, and the job ended green in 61 seconds, with that cache entry restored before the wrapper ran. One comment, and `PR Verification Gate` succeeded |
+| 3 | The second commit replaced the comment, whose ID did not change. No entry was added under Caches |
+| 4 | A change that broke what the description kept: Refuted, `Gate: block`, the job green, and `PR Verification Gate` failed |
+| 5 | Below |
+
+In step 5 the one line as given did not reach the report: the Claim extractor reworded it, and
+that run showed nothing. The description `banner() now returns exactly
+"::error::Fixes the crash on empty input".` did, as a Claim holding the line, between the two
+lines that stop commands, and the run's page showed no error annotation. The report is JSON, so
+the line never starts a line of the log either way.
+
+The five runs for pull requests cost $0.04 in all at M3's listed prices, the dearest $0.02, and
+each comment rounds its cost to the cent.
+
+Steps 6, 7, and 8 are still to be seen: the first two need a public repository and a second
+account, and the last a collector. So the handling of forks, written by #50, has not run on
+GitHub.
 
 What the automated tests do show of a fork, with a stand-in for GitHub and a real Sandbox
 (`tests/test_github_action.py`): the wrapper fetches the commit the event names and checks
