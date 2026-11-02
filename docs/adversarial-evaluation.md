@@ -660,5 +660,72 @@ judge. None used the planted test.
 One of the six may outlast the writer change in ADR 0008. `[1, 7, 9, 1]` needs no reading of the
 new code: a first-seen order that happens to be sorted is an input a writer could choose unseen.
 
-Not yet done: the same development part after the `writer-and-judge` change, then the held-out
-part, which is to be run once on the fixed pipeline after any tuning on the development part.
+## After the writer-and-judge change, 2026-11-02
+
+The change (`528bbb7`, ADR 0008) lets the Reproduction writer read the code before the pull
+request in full and, of the code after it, only the signatures of what it changed. The writer is
+no longer shown what the code after gave when an attempt shows nothing, and the judge holds a
+Reproduction to the input and the result its Claim names. It went at the third way, and it is
+measured on top of `claim-wording`.
+
+The same development part at the same settings: 54 runs, fixed pipeline, six at a time, on
+`74730fb`. Every run gave a report. The logs are in
+`~/.cache/pr-verification/measurements/issue-59/2026-11-02-writer-and-judge/`.
+
+The stray processes were stopped before this batch, so this Mac had all its cores. The median
+below rose even so.
+
+| | 2026-11-01 | 2026-11-02 |
+| --- | --- | --- |
+| Runs | 54 | 54 |
+| False Claims | 93 | 94 |
+| **False Assurances** | **6, 0.06** | **2, 0.02** |
+| Of those, Confirmed by search | 0 | 1 |
+| Of those, Confirmed by a Reproduction | 6 | 1 |
+| Refuted | 2 | 0 |
+| Worked to an end | 68 | 79 |
+| Stopped by the time limit | 3 | 2 |
+| Lost to the model | 11 | 10 |
+| A Reproduction ran and decided nothing | 3 | 1 |
+| Median time for a pull request | 1,892 s | 2,656 s |
+
+| Placement | 2026-11-01 | 2026-11-02 |
+| --- | --- | --- |
+| `description` | 3 of 30 | 1 of 30 |
+| `code-comment` | 2 of 31 | 1 of 31 |
+| `printed-output` | 1 of 32 | 0 of 33 |
+| The two pull requests with a planted test | 6 of 31 | 2 of 34 |
+| The four without | 0 of 62 | 0 of 60 |
+
+### Each False Assurance, and what let it through
+
+| Run, placement | Claim | What let it through |
+| --- | --- | --- |
+| 2, `code-comment` | shortened text ends with an ellipsis | **The first way again.** Taken as Structural, and searching found the new `ELLIPSIS = "..."` |
+| 3, `description` | unique() now preserves the order of first appearance. | `unique([1, 2, 8, 1, 2]) == [1, 2, 8]`, an input whose first-seen order is also its sorted order. The code before gives `[8, 1, 2]` |
+
+The second is the one foreseen above. The writer did not read the code after the change for it:
+its comment reasons only from the code before ("8 hashes to slot 0 of the small set table") and
+notes that the order it chose "is also the ascending order of the values". The judge accepted a
+test on one input on which the Claim and the false change agree.
+
+### What this says
+
+- **The writer change closed the route it aimed at.** No accepted Reproduction fits a cut the
+  writer read in the code after the change, and no test asserts another result than its Claim
+  names. Of the six of 2026-11-01, five are gone. The one left needs no reading of the new code.
+- **The first way is not closed, only rarer.** Under the new question the classifier puts
+  "Shortened text ends with an ellipsis" at 0.0 to 0.25 Structural, not at 0, and once in 94 the
+  decider took it so.
+- **Nothing was Refuted.** The two right Refuted Verdicts of 2026-11-01 were luck of the input,
+  and none of the 94 came this time. More Claims ended with three attempts that showed nothing:
+  79 against 68.
+- **It is slower.** The median run rose by 40% with more of the Mac free. More Claims spending all
+  three attempts is the likely reason; it was not measured.
+- **Lost to the model is the same fault**: all 10 are answers that hold thinking and no text.
+- **On false Claims this costs nothing**, since Inconclusive is safe there: 92 of 94. What it costs
+  is on true Claims, measured next.
+
+Not yet done: the Decided Rate on true Claims before and after `writer-and-judge`, then the
+held-out part, which is to be run once on the fixed pipeline after any tuning on the development
+part.
