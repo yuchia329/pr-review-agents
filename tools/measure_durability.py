@@ -46,8 +46,17 @@ Under `--out` are written:
 The baseline's stop rule is held to as each run ends: when an activation passes 1 second or a
 history 40 MB, no further run is started, `stopped.json` says why, and the design is reopened.
 
-`score --baseline DIRECTORY --crash DIRECTORY --witness LOG` prints the five measures of the
-campaign as JSON, from what the two wrote and what `tools/model_witness.py` saw.
+`targeted` kills a worker in each kind of step in turn, at each point: partway through the
+step, and once its work is done but before Temporal has its answer. A kill at a random moment
+lands mostly in the long steps, model calls and runs in the Sandbox, and seldom in one that
+takes milliseconds, so each kind is aimed at here. Its workers are `tools/durability_worker.py`,
+which kills itself on the first step of the kind a run is aimed at; `targets.json` under
+`--out` names them. Each kind is run once at each point unless `--repetitions` says more, on
+the cases in turn. A kind no step of the run is of is recorded as not reached.
+
+`score --baseline DIRECTORY --crash DIRECTORY [--targeted DIRECTORY] --witness LOG` prints the
+five measures of the campaign as JSON, from what the runs wrote and what
+`tools/model_witness.py` saw, and for the targeted runs a line for each kind and point.
 """
 
 import argparse
@@ -77,7 +86,7 @@ from pr_verification.adversarial_cases import FALSE_PULL_REQUESTS, FalsePullRequ
 from pr_verification.budget import budget_from_environment
 from pr_verification.context_bound import limits_from_environment
 from pr_verification.core import PullRequest
-from pr_verification.durable.journal import RunInput
+from pr_verification.durable.journal import EffectKind, RunInput
 from pr_verification.durable.worker import ADDRESS, connect
 from pr_verification.durable.workflows import VerifyPullRequest
 from pr_verification.evaluation import CaseRun, Part, score
@@ -98,6 +107,12 @@ are to the millisecond, and the two clocks are the one clock of this machine."""
 
 KILL_AFTER = (60.0, 1200.0)
 """The range a crash run's delay before its kill is drawn from, in seconds."""
+
+KINDS = [kind.value for kind in EffectKind if kind is not EffectKind.CLAIM] + ["close-sandbox"]
+"""Every kind of step an activity makes, which the targeted runs kill a worker in."""
+
+POINTS = ["during", "after"]
+"""Where in a step the targeted runs kill its worker (`tools/durability_worker.py`)."""
 
 RECORDED = (
     "PR_VERIFICATION_ENDPOINT",
@@ -235,8 +250,12 @@ class Workers:
         self._logs: dict[int, IO[bytes]] = {}
 
     def _command(self) -> list[str]:
+        if self._arguments.phase == "targeted":
+            worker = [sys.executable, str(Path(__file__).parent / "durability_worker.py")]
+        else:
+            worker = [str(Path(sys.executable).parent / "pr-verification-durable")]
         return [
-            str(Path(sys.executable).parent / "pr-verification-durable"),
+            *worker,
             "--address",
             self._arguments.address,
             "--task-queue",
@@ -251,7 +270,11 @@ class Workers:
     def _start(self, slot: int) -> None:
         log = self._logs.setdefault(slot, (self._out / f"workers/{slot}.log").open("ab"))
         process = subprocess.Popen(
-            self._command(), stdout=log, stderr=subprocess.STDOUT, start_new_session=True
+            self._command(),
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            env={**os.environ, "PR_VERIFICATION_TARGETS": str(self._out / "targets.json")},
         )
         self._processes[slot] = process
         append_line(
@@ -367,6 +390,8 @@ class Planned:
     name: str
     case: str
     repetition: int
+    target: dict[str, Any] | None = None
+    """For a targeted run, the kind of step to kill a worker in, and at which point."""
 
 
 class Campaign:
@@ -420,8 +445,18 @@ class Campaign:
                     **vars(case.pull_request),
                     "repository": str(case.pull_request.repository),
                 },
+                "target": planned.target,
             }
             write_json(start_path, start)
+            if planned.target is not None:
+                # Written before the run starts, so the workers see it at the run's first step.
+                targets = {
+                    name: each["target"]
+                    for name, each in self.started().items()
+                    if each.get("target") is not None
+                }
+                write_json(self.out / "targets.json.new", targets)
+                (self.out / "targets.json.new").replace(self.out / "targets.json")
         given = RunInput(
             run=planned.name,
             pull_request=PullRequest(
@@ -595,18 +630,34 @@ async def scheduled(campaign: Campaign) -> None:
                 start=1,
             )
         ]
-        waiting = [
-            planned for planned in plan if planned.name not in ended and planned.name not in started
+    elif arguments.phase == "targeted":
+        aimed = [
+            {"kind": kind, "point": point, "during": arguments.during}
+            for _ in range(arguments.repetitions)
+            for kind in arguments.kinds
+            for point in arguments.points
+        ]
+        plan = [
+            Planned(
+                f"targeted-{index:03d}",
+                names[(index - 1) % len(names)],
+                (index - 1) // len(names) + 1,
+                target,
+            )
+            for index, target in enumerate(aimed, start=1)
         ]
     else:
-        waiting = []
+        plan = []
+    waiting = [
+        planned for planned in plan if planned.name not in ended and planned.name not in started
+    ]
     counted = sum(bool(end.get("counted")) for end in ended.values())
     runs_of = Counter(start["case"] for start in started.values())
     # Runs started before are running in Temporal whatever is decided now, so each is followed.
     running = {
         asyncio.create_task(campaign.run(planned)): planned
         for planned in (
-            Planned(name, start["case"], start["repetition"])
+            Planned(name, start["case"], start["repetition"], start.get("target"))
             for name, start in started.items()
             if name not in ended
         )
@@ -829,6 +880,31 @@ def witnessed(directory: Path, runs: list[dict[str, Any]], log: Path) -> dict[st
     }
 
 
+def targeted_scores(directory: Path, witness: Path) -> dict[str, Any]:
+    """Each targeted run: the step kind and point aimed at, whether a step of that kind was
+    reached, the point the kill landed at, and whether the run still reached a report; then
+    the measures over them all."""
+    runs = ended_runs(directory)
+    return {
+        "runs": [
+            {
+                "run": run["run"],
+                "kind": run["target"]["kind"],
+                "aimed": run["target"]["point"],
+                "reached": run["kill"] is not None,
+                "landed": None if run["kill"] is None else run["kill"]["point"],
+                "counted": run["counted"],
+                "report": run["no_report"] is None,
+                "verdicts": run["verdicts"],
+            }
+            for run in runs
+        ],
+        "summary": summarised(runs),
+        "made_twice": made_twice(directory, runs),
+        "witness": witnessed(directory, runs, witness),
+    }
+
+
 def scored(arguments: argparse.Namespace) -> None:
     baseline = ended_runs(arguments.baseline)
     crash = ended_runs(arguments.crash)
@@ -850,6 +926,9 @@ def scored(arguments: argparse.Namespace) -> None:
                 "witness": witnessed(arguments.crash, crash, arguments.witness),
                 "baseline_made_twice": made_twice(arguments.baseline, baseline),
                 "baseline_witness": witnessed(arguments.baseline, baseline, arguments.witness),
+                "targeted": None
+                if arguments.targeted is None
+                else targeted_scores(arguments.targeted, arguments.witness),
             },
             indent=2,
         )
@@ -859,7 +938,7 @@ def scored(arguments: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     phases = parser.add_subparsers(dest="phase", required=True)
-    for phase in ("baseline", "crash"):
+    for phase in ("baseline", "crash", "targeted"):
         running = phases.add_parser(phase)
         running.add_argument("--out", type=Path, required=True)
         running.add_argument("--address", default=ADDRESS)
@@ -868,6 +947,11 @@ def main() -> None:
         running.add_argument("--at-once", type=int, default=6)
         if phase == "baseline":
             running.add_argument("--repetitions", type=int, default=3)
+        elif phase == "targeted":
+            running.add_argument("--repetitions", type=int, default=1)
+            running.add_argument("--kinds", nargs="+", default=KINDS)
+            running.add_argument("--points", nargs="+", choices=POINTS, default=POINTS)
+            running.add_argument("--during", type=float, default=10.0)
         else:
             running.add_argument("--count", type=int, default=180)
             running.add_argument("--seed", default="durability")
@@ -877,6 +961,7 @@ def main() -> None:
     scoring = phases.add_parser("score")
     scoring.add_argument("--baseline", type=Path, required=True)
     scoring.add_argument("--crash", type=Path, required=True)
+    scoring.add_argument("--targeted", type=Path)
     scoring.add_argument("--witness", type=Path, required=True)
     arguments = parser.parse_args()
     if arguments.phase == "score":
