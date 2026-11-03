@@ -465,6 +465,105 @@ went alone, so each before-and-after time in A mixes the change with a lighter l
 two or three repetitions on 18 pull requests and one made for the measurement are a lead, not a
 settled result.
 
+### Whether the speed comes from the supervising model, 2026-11-01 and 02
+
+The supervisor differs from the pipeline in two ways at once: it works on up to four Claims at
+the same time, and a model chooses which (#76). A third arm tells them apart:
+`FixedDispatch` in `tools/measure_fixed_dispatch.py` takes the supervising model's place and
+keeps its threads, Sandboxes, and Budget. It dispatches every untried Claim with its first
+strategy, up to four at once, and finishes when none is left. It never retries a Claim or moves
+a share of the Budget, and it answers at once.
+
+The runs were made at `3b3c832`, tagged `fixed-dispatch-base`, the commit of the comparison of
+2026-10-18 that ADR 0009 rests on. Qwen 3.8 served by vLLM on `sicong` was every role and the
+decider's small LLM (`PR_VERIFICATION_DECISION=small_llm`). The Budget was the default, 900
+seconds, 3 dollars, and 300 steps; Qwen 3.8 has no price, so only time and steps bound it. The
+three arms took turns in one queue, one run at a time, with nothing else using `sicong`. From
+11:21 on 2026-11-02 another measurement ran its Sandboxes on this machine and its model
+elsewhere; the arms took turns through it, so it fell on all three alike.
+
+```sh
+uv run python tools/measure_fixed_dispatch.py --out DIRECTORY --workload c --case 0 \
+  --repetition 1 --arm fixed-dispatch \
+  --every-role qwen-remote http://HOST:8000/v1 Qwen/Qwen3.8-27B-FP8 QWEN_REMOTE_KEY
+uv run python tools/measure_fixed_dispatch.py --summary DIRECTORY
+```
+
+The runs do not record tokens. They were counted afterwards from vLLM's log, which gives the
+tokens read and written every ten seconds, summed over each run's start and end. No pipeline
+run's window shows more than one request at a time, so nothing else is in the count.
+
+**C, one pull request with four Behavioural Claims**, three repetitions:
+
+| Arm | Claims found, seconds on the clock |
+| --- | --- |
+| Pipeline | none, 130; 5, 260; 4, 160 |
+| Fixed dispatch | 5, 309; 5, 199; 5, 257 |
+| Supervisor | 5, 296; 4, 160; 4, 105 |
+
+Every Claim found was Confirmed. In the pipeline's first run the Claim extractor answered in
+prose, and the run gave no Report.
+
+- **The supervising model chose what the rule chooses, in every run.** It dispatched the first
+  four Claims, then the fifth if there was one, then finished: no retry and no move of the
+  Budget.
+- **The time follows how many Claims the extractor found, not the arm.** At most four go at
+  once, so a fifth waits for the first four and then runs alone. With five Claims the runs took
+  199 to 309 seconds under either supervisor arm; with four, 105 and 160. The rule drew five
+  each time and the supervisor once, which is all of the supervisor's lead over the rule here.
+  The fifth Claim is most likely the title, "Fix four small helpers".
+
+**A, the development part of the Structural cases**, two repetitions, 36 runs for each arm:
+
+| | Pipeline | Fixed dispatch | Supervisor |
+| --- | --- | --- | --- |
+| Claims | 63 | 62 | 60 |
+| Decided Rate | 0.71 | 0.77 | 0.82 |
+| False Blocks, False Assurances | 0, 0 | 0, 0 | 0, 0 |
+| Seconds on the clock, median | 140.9 | 162.9 | 110.5 |
+| Runs stopped by the time limit | 0 | 0 | 4 |
+| Seconds the supervising model took, in all | | 0 | 995 |
+| Tokens read for a pull request, median and mean | 12,321, 17,802 | 10,502, 14,770 | 11,882, 21,685 |
+| Tokens written for a pull request, median and mean | 4,586, 8,414 | 6,886, 8,073 | 4,278, 10,165 |
+| Dollars for a pull request at MiniMax M3's price | 0.015 | 0.014 | 0.019 |
+
+The medians of all 36 runs mislead here, because the arms drew runs of different lengths.
+Paired, one run against the other on the same pull request and repetition:
+
+| | Decided more, fewer, the same | First quicker | Time, first over second, median (95% interval) |
+| --- | --- | --- | --- |
+| Fixed dispatch against pipeline | 8, 6, 22 | 21 of 36 | 0.86 (0.65 to 1.20) |
+| Supervisor against pipeline | 6, 3, 27 | 15 of 36 | 1.20 (0.67 to 1.36) |
+| Supervisor against fixed dispatch | 5, 5, 26 | 16 of 36 | 1.11 (0.80 to 1.39) |
+
+The intervals are of the median, from 5,000 resamples of the pairs.
+
+- **The supervising model decided no more than the rule.** It retried 8 Claims and moved a share
+  of the Budget 6 times, and decided more Claims in 5 pairs and fewer in 5. Its higher Decided
+  Rate over all runs is not in the pairs.
+- **It costs time of its own.** It answered for 995 seconds over 36 runs, about 28 a run, and
+  four of its runs were stopped by the time limit, against none under the rule.
+- **The times cannot be told apart.** The same arm on the same pull request took 1.6 to 1.8
+  times as long in one repetition as in the other, at the median of the pairs. Every interval
+  above takes in 1. Settling a difference of 10 to 15% at that noise would take a few hundred
+  pairs.
+- **Tokens and dollars do not tell them apart either.** The supervisor's mean is about a fifth
+  above the pipeline's from a few long runs; its median is not. At MiniMax M3's price each arm
+  costs one to two cents a pull request.
+
+**What the three say together.** On Qwen 3.8 the supervising model adds nothing a fixed rule
+does not: on C it made the rule's choices, and on A its own choices decided no more Claims and
+took time. Whether working on several Claims at once saves time cannot be told from these runs.
+
+**The prediction, stated before the runs, failed as written on C.** It said the rule would match
+the supervisor's time on C and on A; on C the supervisor was quicker in all three pairs. The
+cause is above: the two arms were not given the same number of Claims, and where they were, in
+one pair, the supervisor took 0.96 of the rule's time. The project owner accepted this reading,
+and that the times cannot be told apart, on 2026-11-02.
+
+Not measured: C on MiniMax M3, where the supervisor's earlier lead was seen. Three repetitions
+would cost about 0.11 dollars, but at this noise three cannot settle it, so it was dropped.
+
 ## What to keep in mind when reading the results
 
 - **Prompts were tuned on the default configuration.** Every role's instructions were written
