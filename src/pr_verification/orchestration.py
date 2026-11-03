@@ -486,21 +486,24 @@ class FixedPipeline:
                 continue
             if ledger.stopped_by() is not None:
                 break
+            work = self.work_in_place if self.work_on_claim is None else self.work_on_claim
+            as_ready = (
+                None
+                if not isinstance(ready, Ready)
+                else Ready(as_opened[ready.sandbox], ready.ecosystem)
+            )
             try:
-                if isinstance(ready, Ready) and not structural[index]:
-                    given = self._reproduce(
-                        claim,
-                        _reproducing(model, ledger, index),
-                        ledger.sandbox(as_opened[ready.sandbox], claim=index),
-                        ready.ecosystem,
-                        repository,
-                        before,
-                        after,
-                    )
-                else:
-                    given = self._verify_by_reading(
-                        claim, _reading(model, ledger, index), repository, before, after
-                    )
+                given = work(
+                    ledger,
+                    index,
+                    claim,
+                    kinds[index],
+                    as_ready,
+                    repository=repository,
+                    before=before,
+                    after=after,
+                    model=model,
+                )
             except BudgetSpent as spent:
                 if spent.claim is None:
                     break
@@ -537,7 +540,21 @@ class FixedPipeline:
         it comes, so the caller can tell which. Raises what `write_judged_reproduction` and
         `verify_structural_claim` raise.
         """
-        raise NotImplementedError
+        if kind is ClaimKind.STRUCTURAL:
+            return self._verify_by_reading(
+                claim, _reading(model, ledger, place), repository, before, after
+            )
+        if ready is None:
+            raise ValueError(f"the Claim at {place} goes on to a Reproduction, and none is ready")
+        return self._reproduce(
+            claim,
+            _reproducing(model, ledger, place),
+            ledger.sandbox(ready.sandbox, claim=place),
+            ready.ecosystem,
+            repository,
+            before,
+            after,
+        )
 
     def prepare_target_commit(
         self, repository: Path, target: str

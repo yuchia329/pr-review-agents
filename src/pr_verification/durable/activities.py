@@ -7,23 +7,37 @@ Claim still ends Inconclusive as it does in a run on one machine. Only a lost wo
 activity that ran out of time is retried: the Effect is then made again, from the start.
 """
 
+import contextvars
+import threading
 import time
-from collections.abc import Callable
-from contextlib import AbstractContextManager
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
 from pr_verification.budget import Clock
 from pr_verification.decision import Decider
-from pr_verification.durable.journal import Answer, Effect
+from pr_verification.durable.codec import encoded_size
+from pr_verification.durable.journal import Answer, Capabilities, Effect, EffectKind
 from pr_verification.ecosystem import find_commands
 from pr_verification.effects import Effects, OnThisMachine
-from pr_verification.model import Model
+from pr_verification.model import (
+    Model,
+    ModelRequest,
+    PricedModel,
+    PricedResponse,
+    RoleName,
+    ask,
+    ask_priced,
+    model_for,
+    offers_parallel_tool_calls,
+)
 from pr_verification.repo_profile import DependencyStore, Discover, ProfileStore
-from pr_verification.sandbox import ContainerSandbox, SandboxWithHomes, remove_sandbox
+from pr_verification.sandbox import ContainerSandbox, SandboxWithHomes, remove_sandbox, run_in
 
 LIMIT_REACHED = "DurableLimitReached"
 """The type of the `ApplicationError` that ends an activity or a workflow that went past a limit
@@ -111,10 +125,130 @@ class Activities:
         `ApplicationError` of type `LIMIT_REACHED`, not retryable, when the answer would take
         more than `task.payload_bytes` once encoded.
         """
-        raise NotImplementedError
+        effect = task.effect
+        if effect.kind is EffectKind.CLAIM:
+            raise ValueError("the work on a Claim is made by a workflow, not an activity")
+        started = self.resources.clock()
+        try:
+            if effect.kind in (EffectKind.MODEL, EffectKind.DECISION):
+                with _beating(self.resources.heartbeat_seconds):
+                    value = self._answer(effect)
+            else:
+                value = self._answer(effect)
+            answer = Answer(value=value, seconds=self.resources.clock() - started)
+        except Exception as raised:
+            answer = Answer(raised=raised, seconds=self.resources.clock() - started)
+        size = encoded_size(answer)
+        if size > task.payload_bytes:
+            raise ApplicationError(
+                f"the answer to a {effect.kind.value} Effect takes {size} bytes, past the "
+                f"limit of {task.payload_bytes}",
+                type=LIMIT_REACHED,
+                non_retryable=True,
+            )
+        return answer
+
+    def _answer(self, effect: Effect) -> object:
+        """What the seam gives for `effect`, or what it raises."""
+        made = self.resources
+        asked: tuple[Any, ...] = effect.asked
+        match effect.kind:
+            case EffectKind.CAPABILITIES:
+                return Capabilities(
+                    parallel_tool_calls=tuple(
+                        role
+                        for role in RoleName
+                        if offers_parallel_tool_calls(model_for(made.model, role))
+                    ),
+                    decider=made.decider is not None,
+                )
+            case EffectKind.MODEL:
+                role, request = asked
+                model = made.model if role is None else model_for(made.model, role)
+                assert isinstance(request, ModelRequest)
+                if isinstance(model, PricedModel):
+                    return ask_priced(model, request)
+                return PricedResponse(ask(model, request), 0.0)
+            case EffectKind.DECISION:
+                if made.decider is None:
+                    raise ValueError("this worker has no decider")
+                state, question = asked
+                return made.decider.decide(state, question)
+            case EffectKind.DISCOVER:
+                repository, commit = asked
+                return made.discover(repository, commit)
+            case EffectKind.GIT:
+                repository, arguments, stdin, environment = asked
+                return made.effects.git(
+                    repository,
+                    arguments,
+                    stdin=stdin,
+                    environment=dict(environment),
+                )
+            case EffectKind.TOKEN:
+                (size,) = asked
+                return made.effects.token_hex(size)
+            case EffectKind.PROFILE_LOAD:
+                return made.store.load(*asked)
+            case EffectKind.PROFILE_SAVE:
+                made.store.save(*asked)
+                return None
+            case EffectKind.PROFILE_DISCARD:
+                made.store.discard(*asked)
+                return None
+            case EffectKind.ARCHIVE:
+                return made.cache.archive(*asked)
+            case EffectKind.ARCHIVE_HOLDS:
+                return made.cache.holds(*asked)
+            case EffectKind.ARCHIVE_DISCARD:
+                made.cache.discard(*asked)
+                return None
+            case EffectKind.SANDBOX_RUN | EffectKind.HOME_SAVE | EffectKind.HOME_RESTORE:
+                return self._in_sandbox(effect)
+        raise ValueError(f"no activity makes a {effect.kind.value} Effect")
+
+    def _in_sandbox(self, effect: Effect) -> object:
+        asked: tuple[Any, ...] = effect.asked
+        name, repository, image, *rest = asked
+        step = activity.info().activity_id
+        with self.resources.open_sandbox(
+            repository,
+            image,
+            name=name,
+            step=step,
+        ) as sandbox:
+            if effect.kind is EffectKind.SANDBOX_RUN:
+                command, commit, phase, limits = rest
+                return run_in(sandbox, command, commit=commit, phase=phase, limits=limits)
+            commit, archive = rest
+            if effect.kind is EffectKind.HOME_SAVE:
+                sandbox.save_home(commit, archive)
+            else:
+                sandbox.restore_home(commit, archive)
+            return None
 
     @activity.defn(name="close_sandbox")
     def close_sandbox(self, name: str) -> None:
         """Remove the named Sandbox, with `remove_sandbox`. Removing one already gone does
         nothing, so the activity can be tried again."""
-        raise NotImplementedError
+        self.resources.remove_sandbox(name)
+
+
+@contextmanager
+def _beating(every: float) -> Iterator[None]:
+    """Heartbeat every `every` seconds from a thread of its own, while the `with` runs."""
+    done = threading.Event()
+    beat = activity.heartbeat
+
+    def keep_beating() -> None:
+        while not done.wait(every):
+            beat()
+
+    # The thread is given the activity's context, which is where Temporal keeps the activity.
+    beating = threading.Thread(target=contextvars.copy_context().run, args=(keep_beating,))
+    beating.start()
+    try:
+        yield
+    finally:
+        done.set()
+        beating.join()

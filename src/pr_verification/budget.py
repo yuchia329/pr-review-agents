@@ -106,6 +106,10 @@ class BudgetSpent(Exception):
         self.limit = limit
         self.claim = claim
 
+    def __reduce__(self) -> tuple[type["BudgetSpent"], tuple[BudgetLimit, int | None]]:
+        """Pickled as made, so that it can be kept in a durable run's history."""
+        return BudgetSpent, (self.limit, self.claim)
+
 
 _NOTHING = BudgetSpend(seconds=0.0, dollars=0.0, steps=0)
 
@@ -415,7 +419,23 @@ class Ledger:
         or `sandbox`, when `state` holds another Budget than this ledger's, and when no ledger
         could hold `state`, as `restored` says.
         """
-        raise NotImplementedError
+        if len(state.claims) != len(state.shares):
+            raise ValueError(
+                f"a ledger holds what each Claim with a share spent: {len(state.shares)} shares "
+                f"and {len(state.claims)} Claims"
+            )
+        if state.budget != self._budget:
+            raise ValueError(
+                f"the state keeps to {state.budget}, and this ledger to {self._budget}"
+            )
+        with self._lock:
+            if self._under_way:
+                raise ValueError("work is under way through the ledger, so its spend is not known")
+            self._spent = state.spent
+            self._stopped = state.stopped
+            self._shares = list(state.shares)
+            self._claims = list(state.claims)
+            self._counted_to = 0.0
 
     def move_share(self, amount: BudgetSpend, *, source: int, destination: int) -> None:
         """Move `amount` from the share of Claim `source` to the share of Claim `destination`.

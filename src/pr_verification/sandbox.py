@@ -9,6 +9,7 @@ directory, carried out and back as a file that the outside never opens.
 import io
 import json
 import os
+import re
 import select
 import subprocess
 import tarfile
@@ -198,6 +199,12 @@ class SandboxWithHomes(Sandbox, Protocol):
         ...
 
 
+_NAME = re.compile(r"[a-z0-9-]+")
+"""What the name of a named Sandbox, and of a step, may hold."""
+
+_LABEL = "pr-verification.sandbox"
+"""The label that holds the name of the named Sandbox a volume or container belongs to."""
+
 _VOLUME = "/sandbox"
 """Where a commit's volume sits inside the container."""
 
@@ -288,6 +295,10 @@ class ContainerSandbox:
         """
         self._repository = repository
         self._image = image
+        for given in (name, step):
+            if given is not None and not _NAME.fullmatch(given):
+                raise ValueError(f"{given!r} holds other than lowercase letters, digits, and -")
+        self._name, self._step = name, step
         # The volume that holds the working copy and the home directory of each commit run so far.
         self._volumes: dict[str, str] = {}
         # Asking also finds out whether there is a runtime to use.
@@ -304,6 +315,7 @@ class ContainerSandbox:
     def _run(self, command: Command, volume: str, phase: Phase, limits: Limits) -> RunResult:
         container = _docker(
             "create",
+            *self._step_container(),
             *_held_in(volume, network="bridge" if phase is Phase.INSTALL else "none"),
             "--memory", str(limits.memory_bytes),
             # The same again for memory and swap together leaves no swap to spill into.
@@ -360,6 +372,7 @@ class ContainerSandbox:
         _docker(
             "run",
             "--rm",
+            *self._step_container(),
             *_held_in(volume, network="none"),
             # The runtime would otherwise keep a second copy of the archive as the run's output.
             "--log-driver", "none",
@@ -374,7 +387,7 @@ class ContainerSandbox:
     def close(self) -> None:
         """Remove everything this Sandbox made. Calling it again does nothing."""
         volumes, self._volumes = list(self._volumes.values()), {}
-        if volumes:
+        if volumes and self._name is None:
             # One request, so that a volume the runtime will not remove does not keep the rest.
             _docker("volume", "rm", *volumes)
 
@@ -398,20 +411,57 @@ class ContainerSandbox:
         except subprocess.CalledProcessError as error:
             raise SandboxFailed(f"commit {commit!r} is not in {self._repository}") from error
         if commit not in self._volumes:
-            volume = _docker("volume", "create").strip()
-            try:
-                self._fill(volume, commit)
-            except BaseException:
-                _docker("volume", "rm", volume)
-                raise
-            self._volumes[commit] = volume
+            self._volumes[commit] = (
+                self._new_volume(commit) if self._name is None else self._named_volume(commit)
+            )
         return self._volumes[commit]
+
+    def _new_volume(self, commit: str) -> str:
+        volume = _docker("volume", "create").strip()
+        try:
+            self._fill(volume, commit)
+        except BaseException:
+            _docker("volume", "rm", volume)
+            raise
+        return volume
+
+    def _named_volume(self, commit: str) -> str:
+        """The volume of `commit` in the named Sandbox: the one an earlier instance filled, or
+        else one filled now. Another volume, made last, marks it filled whole."""
+        volume, filled = f"{self._name}-{commit}", f"{self._name}-{commit}-filled"
+        if _docker("volume", "ls", "-q", "--filter", f"name=^{filled}$").strip():
+            return volume
+        if _docker("volume", "ls", "-q", "--filter", f"name=^{volume}$").strip():
+            # Left part-filled by a process that was killed.
+            _docker("volume", "rm", "--force", volume)
+        _docker("volume", "create", *self._labels(), volume)
+        self._fill(volume, commit)
+        _docker("volume", "create", *self._labels(), filled)
+        return volume
+
+    def _labels(self) -> tuple[str, ...]:
+        return () if self._name is None else ("--label", f"{_LABEL}={self._name}")
+
+    def _step_container(self) -> tuple[str, ...]:
+        """The options that label the container of a run, and name it for this step, having
+        removed one of that name that an earlier attempt left. None for a Sandbox with no
+        name."""
+        if self._name is None:
+            return ()
+        if self._step is None:
+            return self._labels()
+        container = f"{self._name}-{self._step}"
+        if _docker("ps", "-aq", "--filter", f"name=^/{container}$").strip():
+            _docker("rm", "--force", container)
+        return (*self._labels(), "--name", container)
 
     def _fill(self, volume: str, commit: str) -> None:
         """Put the files of a commit, and an empty home directory, into a new volume."""
         # A container that is never started, there so that the runtime copies into its volume.
         # Creating it also fetches the image.
-        holder = _docker("create", "--volume", f"{volume}:{_VOLUME}", self._image, "true").strip()
+        holder = _docker(
+            "create", *self._labels(), "--volume", f"{volume}:{_VOLUME}", self._image, "true"
+        ).strip()
         try:
             with tempfile.TemporaryFile() as archive:
                 with tarfile.open(fileobj=archive, mode="w") as tar:
@@ -429,7 +479,13 @@ def remove_sandbox(name: str) -> None:
     Raises `SandboxFailed` when there is no container runtime to use, or it will not remove
     one of them.
     """
-    raise NotImplementedError
+    label = f"label={_LABEL}={name}"
+    containers = _docker("ps", "-aq", "--filter", label).split()
+    if containers:
+        _docker("rm", "--force", *containers)
+    volumes = _docker("volume", "ls", "-q", "--filter", label).split()
+    if volumes:
+        _docker("volume", "rm", "--force", *volumes)
 
 
 def _held_in(volume: str, network: str) -> tuple[str, ...]:

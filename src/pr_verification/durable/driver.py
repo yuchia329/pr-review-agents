@@ -3,12 +3,38 @@
 `pr-verification` and the Action stay as they are. This command is the way into a durable run.
 """
 
+import argparse
+import asyncio
+import os
+import secrets
+import sys
+import traceback
 from collections.abc import Sequence
+from pathlib import Path
 
-from temporalio.client import Client
+from temporalio.client import Client, WorkflowFailureError
 
+from pr_verification.budget import InvalidBudget, budget_from_environment
+from pr_verification.cli import EXIT_NO_REPORT, exit_code
+from pr_verification.configuration import (
+    InvalidConfiguration,
+    configuration_from_environment,
+    configured_models,
+)
+from pr_verification.context_bound import InvalidContextLimits, limits_from_environment
+from pr_verification.core import InvalidPullRequest, PullRequest
+from pr_verification.decision import (
+    InvalidDecisionConfiguration,
+    configured_decider,
+    decision_configuration,
+)
+from pr_verification.durable.activities import Resources
 from pr_verification.durable.journal import RunInput
-from pr_verification.durable.worker import TASK_QUEUE
+from pr_verification.durable.worker import ADDRESS, TASK_QUEUE, connect, make_worker
+from pr_verification.durable.workflows import VerifyPullRequest
+from pr_verification.model import Model
+from pr_verification.openai_compatible import model_from_environment
+from pr_verification.orchestration import fixed_pipeline
 from pr_verification.report import Report
 
 
@@ -19,7 +45,11 @@ async def verify(client: Client, given: RunInput, *, task_queue: str = TASK_QUEU
     Raises the `WorkflowFailureError` of a run that failed, as `VerifyPullRequest.run` says one
     can.
     """
-    raise NotImplementedError
+    report = await client.execute_workflow(
+        VerifyPullRequest.run, given, id=given.run, task_queue=task_queue
+    )
+    assert isinstance(report, Report)
+    return report
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -52,4 +82,116 @@ def main(argv: Sequence[str] | None = None) -> int:
         why, and exit code `EXIT_NO_REPORT`. So a failure never exits with the code of a
         block.
     """
-    raise NotImplementedError
+    arguments = _parser().parse_args(argv)
+    try:
+        if arguments.command == "worker":
+            return _work(arguments)
+        return _verify(arguments)
+    except (
+        InvalidPullRequest,
+        InvalidBudget,
+        InvalidConfiguration,
+        InvalidContextLimits,
+        InvalidDecisionConfiguration,
+        OSError,
+        UnicodeDecodeError,
+        WorkflowFailureError,
+    ) as error:
+        cause = error.cause if isinstance(error, WorkflowFailureError) else error
+        print(f"pr-verification-durable: {cause}", file=sys.stderr)
+        return EXIT_NO_REPORT
+    except Exception:
+        traceback.print_exc()
+        return EXIT_NO_REPORT
+
+
+def _work(arguments: argparse.Namespace) -> int:
+    configuration = configuration_from_environment(os.environ)
+    model: Model | None
+    if configuration is None:
+        model = model_from_environment(os.environ)
+    else:
+        model = configured_models(configuration, os.environ)
+    if model is None:
+        print(
+            "pr-verification-durable: no model is configured, so nothing can be verified: "
+            "set PR_VERIFICATION_API_KEY, or PR_VERIFICATION_ENDPOINT for a model that needs "
+            "no key",
+            file=sys.stderr,
+        )
+        return EXIT_NO_REPORT
+    decider = configured_decider(decision_configuration(os.environ), model)
+    pipeline = fixed_pipeline(arguments.state_dir)
+    resources = Resources(model=model, decider=decider, store=pipeline.store, cache=pipeline.cache)
+
+    async def work() -> None:
+        client = await connect(arguments.address)
+        worker = make_worker(
+            client,
+            resources,
+            task_queue=arguments.task_queue,
+            max_concurrent_activities=arguments.max_concurrent_activities,
+        )
+        await worker.run()
+
+    try:
+        asyncio.run(work())
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+def _verify(arguments: argparse.Namespace) -> int:
+    given = RunInput(
+        run=arguments.run or f"pr-verification-{secrets.token_hex(8)}",
+        pull_request=PullRequest(
+            repository=arguments.repo.absolute(),
+            before=arguments.before,
+            after=arguments.after,
+            title=arguments.title,
+            description=_read(arguments.description_file),
+            linked_issue=_read(arguments.linked_issue_file),
+        ),
+        budget=budget_from_environment(os.environ),
+        shown=limits_from_environment(os.environ),
+    )
+
+    async def verified() -> Report:
+        return await verify(
+            await connect(arguments.address), given, task_queue=arguments.task_queue
+        )
+
+    report = asyncio.run(verified())
+    print(report.to_json(), flush=True)
+    return exit_code(report.gate)
+
+
+def _read(file: Path | None) -> str:
+    return "" if file is None else file.read_text()
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="pr-verification-durable",
+        description="Verify the Claims of a pull request in a run that survives a lost worker.",
+    )
+    parser.add_argument("--address", default=ADDRESS, help="the Temporal server")
+    parser.add_argument("--task-queue", default=TASK_QUEUE, help="the task queue to use")
+    commands = parser.add_subparsers(dest="command", required=True)
+    worker = commands.add_parser("worker", help="run a worker until interrupted")
+    worker.add_argument(
+        "--state-dir",
+        type=Path,
+        required=True,
+        help="directory the Repo Profile and installed dependencies are kept in between runs",
+    )
+    worker.add_argument("--max-concurrent-activities", type=int, default=None)
+    verifying = commands.add_parser("verify", help="verify one pull request and print its report")
+    verifying.add_argument("--repo", type=Path, required=True, help="path to the repository")
+    verifying.add_argument("--before", required=True, help="commit before the pull request")
+    verifying.add_argument("--after", required=True, help="commit after the pull request")
+    verifying.add_argument("--title", required=True, help="pull request title")
+    verifying.add_argument("--description-file", type=Path, help="file with the description")
+    verifying.add_argument("--linked-issue-file", type=Path, help="file with the linked issue")
+    verifying.add_argument("--run", help="the run's name, which is its workflow ID")
+    return parser

@@ -49,17 +49,28 @@ The Effects
         over, however the run ended.
 """
 
-from collections.abc import Sequence
-from dataclasses import dataclass, field
+import hashlib
+import io
+import pickle
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from pathlib import Path
+from types import TracebackType
+from typing import Any, Self
 
-from pr_verification.budget import Budget, BudgetSpent, LedgerState
-from pr_verification.context_bound import ContextLimits
-from pr_verification.core import PullRequest
-from pr_verification.ecosystem import ReproductionEcosystem
-from pr_verification.model import RoleName
-from pr_verification.orchestration import Gathered
+from pr_verification.budget import Budget, BudgetSpent, Ledger, LedgerState
+from pr_verification.context_bound import ContextLimits, shown_within
+from pr_verification.core import PullRequest, run
+from pr_verification.decision import Decision, Question
+from pr_verification.ecosystem import Commands, ReproductionEcosystem, Unsupported
+from pr_verification.effects import effects_through
+from pr_verification.model import Model, ModelRequest, PricedResponse, RoleModels, RoleName
+from pr_verification.orchestration import FixedPipeline, Gathered, Ready, WorkOnClaim
+from pr_verification.repo_profile import RepoProfile
 from pr_verification.report import ClaimKind, Report
+from pr_verification.sandbox import Command, Limits, Phase, RunResult
+from pr_verification.tracing import paused
 
 PAYLOAD_BYTES = 1_500_000
 """The most one Effect, or one answer, may take once encoded (`codec.encoded_size`). Temporal
@@ -181,14 +192,15 @@ def effect_id(place: int, effect: Effect) -> str:
     history, so with the digest in the ID a replay that asks for another Effect at a place than
     its history holds fails, where without it the history's answer would be given.
     """
-    raise NotImplementedError
+    digest = hashlib.sha256(_canonical(effect.asked)).hexdigest()[:16]
+    return f"{place}-{effect.kind.value}-{digest}"
 
 
 def sandbox_name(run: str, place: int) -> str:
     """The name of the Sandbox that run `run` opened at `place` among the Sandboxes it opened,
     counted from 0. Each Sandbox a run opens is a new one, as `SandboxFor` says, so the place
     is in the name. Holds only lowercase letters, digits, and `-`, as `run` does."""
-    raise NotImplementedError
+    return f"{run}-sandbox-{place}"
 
 
 @dataclass
@@ -218,18 +230,35 @@ class Replay:
     needed: NeedsEffect | None = field(default=None, init=False)
     """The `NeedsEffect` raised, once one has been."""
 
+    _seconds: float = field(default=0.0, init=False, repr=False)
+
     def made(self, effect: Effect) -> object:
         """The answer to `effect`, which is the next Effect the code asks for, as Asking says.
 
         Raises `JournalMismatch` when the Journal holds another Effect at that place. Raises
         the answer's `raised` when it has one. Raises `NeedsEffect` past the Journal's end.
         """
-        raise NotImplementedError
+        if self.needed is not None:
+            raise self.needed
+        if self.used == len(self.journal):
+            self.needed = NeedsEffect(self.used, effect)
+            raise self.needed
+        held, answer = self.journal[self.used]
+        if held != effect:
+            raise JournalMismatch(
+                f"the Journal holds a {held.kind.value} Effect at {self.used}, and the code asked "
+                f"for a {effect.kind.value} Effect, or for one asked differently"
+            )
+        self.used += 1
+        self._seconds += answer.seconds
+        if answer.raised is not None:
+            raise answer.raised.with_traceback(None)
+        return answer.value
 
     def clock(self) -> float:
         """The replay's clock: the `seconds` of the answers given so far, added up. Starts at
         0.0 and never goes back."""
-        raise NotImplementedError
+        return self._seconds
 
 
 @dataclass(frozen=True)
@@ -326,7 +355,19 @@ def replay_run(given: RunInput, replay: Replay) -> Report:
     Raises `NeedsEffect` while the Journal does not hold every answer the run needs, and
     `JournalMismatch` as `Replay.made` raises it. Raises what the core's entry point raises.
     """
-    raise NotImplementedError
+    capabilities = replay.made(Effect(EffectKind.CAPABILITIES, ()))
+    assert isinstance(capabilities, Capabilities)
+    seams = _Seams(replay, given.run, capabilities)
+    with effects_through(seams), paused(), shown_within(given.shown):
+        pipeline = seams.pipeline(_ClaimElsewhere(replay, given, capabilities))
+        return run(
+            given.pull_request,
+            seams.model,
+            seams.decider,
+            orchestration=pipeline,
+            budget=given.budget,
+            clock=replay.clock,
+        )
 
 
 def replay_claim(given: ClaimInput, replay: Replay) -> ClaimOutcome:
@@ -344,4 +385,242 @@ def replay_claim(given: ClaimInput, replay: Replay) -> ClaimOutcome:
     Raises `NeedsEffect` and `JournalMismatch` as `replay_run` does. Raises what
     `work_in_place` raises but `BudgetSpent`.
     """
-    raise NotImplementedError
+    seams = _Seams(replay, given.run, given.capabilities)
+    ready = None
+    if given.ready is not None:
+        sandbox = _Sandbox(
+            replay, given.ready.name, given.pull_request.repository, given.ready.image
+        )
+        ready = Ready(sandbox, given.ready.ecosystem)
+    with effects_through(seams), paused(), shown_within(given.shown):
+        ledger = Ledger.restored(given.ledger, clock=replay.clock)
+        try:
+            gathered = seams.pipeline(None).work_in_place(
+                ledger,
+                given.place,
+                given.claim,
+                given.kind,
+                ready,
+                repository=given.pull_request.repository,
+                before=given.pull_request.before,
+                after=given.pull_request.after,
+                model=seams.model,
+            )
+        except BudgetSpent as spent:
+            return ClaimOutcome(None, spent, ledger.snapshot())
+        return ClaimOutcome(gathered, None, ledger.snapshot())
+
+
+def _canonical(value: object) -> bytes:
+    """`value` written so that what is equal is written the same in every process: sets and
+    dicts in a sorted order, and nothing written once and referred to after."""
+    buffer = io.BytesIO()
+    pickler = _CanonicalPickler(buffer, protocol=5)
+    pickler.fast = True
+    pickler.dump(value)
+    return buffer.getvalue()
+
+
+# The pure-Python pickler, since the one in C does not ask `reducer_override` about sets and dicts.
+class _CanonicalPickler(pickle._Pickler):
+    def reducer_override(self, obj: object) -> Any:
+        if type(obj) in (set, frozenset):
+            return type(obj), (sorted(obj, key=_canonical),)  # type: ignore[call-overload]
+        if type(obj) is dict:
+            items = sorted(obj.items(), key=lambda item: _canonical(item[0]))
+            return dict, (items,)
+        return NotImplemented
+
+
+class _Model:
+    """A role's model, whose every request is a MODEL Effect. It has a price, which is 0.0 when
+    the worker's model has none, as the ledger counts a request to such a model."""
+
+    def __init__(self, replay: Replay, role: RoleName | None, parallel: bool) -> None:
+        self._replay, self._role = replay, role
+        self.parallel_tool_calls = parallel
+
+    def complete_priced(self, request: ModelRequest) -> PricedResponse:
+        answer = self._replay.made(Effect(EffectKind.MODEL, (self._role, request)))
+        assert isinstance(answer, PricedResponse)
+        return answer
+
+    def complete(self, request: ModelRequest) -> str:
+        return self.complete_priced(request).response
+
+
+class _Decider:
+    def __init__(self, replay: Replay) -> None:
+        self._replay = replay
+
+    def decide(self, state: str, question: Question) -> Decision:
+        answer = self._replay.made(Effect(EffectKind.DECISION, (state, question)))
+        assert isinstance(answer, Decision)
+        return answer
+
+
+class _Profiles:
+    def __init__(self, replay: Replay) -> None:
+        self._replay = replay
+
+    def load(self, repository: Path) -> RepoProfile | None:
+        answer = self._replay.made(Effect(EffectKind.PROFILE_LOAD, (repository,)))
+        assert answer is None or isinstance(answer, RepoProfile)
+        return answer
+
+    def save(self, repository: Path, profile: RepoProfile) -> None:
+        self._replay.made(Effect(EffectKind.PROFILE_SAVE, (repository, profile)))
+
+    def discard(self, repository: Path) -> None:
+        self._replay.made(Effect(EffectKind.PROFILE_DISCARD, (repository,)))
+
+
+class _Dependencies:
+    def __init__(self, replay: Replay) -> None:
+        self._replay = replay
+
+    def archive(self, repository: Path, image: str, lock_digest: str) -> Path:
+        answer = self._replay.made(Effect(EffectKind.ARCHIVE, (repository, image, lock_digest)))
+        assert isinstance(answer, Path)
+        return answer
+
+    def holds(self, archive: Path) -> bool:
+        answer = self._replay.made(Effect(EffectKind.ARCHIVE_HOLDS, (archive,)))
+        assert isinstance(answer, bool)
+        return answer
+
+    def discard(self, archive: Path) -> None:
+        self._replay.made(Effect(EffectKind.ARCHIVE_DISCARD, (archive,)))
+
+
+class _Sandbox:
+    """The Sandbox named `name`, whose every use is an Effect. Closing it does nothing: the
+    workflow removes it once the run is over."""
+
+    def __init__(self, replay: Replay, name: str, repository: Path, image: str) -> None:
+        self._replay = replay
+        self.name, self.repository, self.image = name, repository, image
+
+    def run(self, command: Command, *, commit: str, phase: Phase, limits: Limits) -> RunResult:
+        asked = (self.name, self.repository, self.image, command, commit, phase, limits)
+        answer = self._replay.made(Effect(EffectKind.SANDBOX_RUN, asked))
+        assert isinstance(answer, RunResult)
+        return answer
+
+    def save_home(self, commit: str, archive: Path) -> None:
+        asked = (self.name, self.repository, self.image, commit, archive)
+        self._replay.made(Effect(EffectKind.HOME_SAVE, asked))
+
+    def restore_home(self, commit: str, archive: Path) -> None:
+        asked = (self.name, self.repository, self.image, commit, archive)
+        self._replay.made(Effect(EffectKind.HOME_RESTORE, asked))
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        kind: type[BaseException] | None,
+        error: BaseException | None,
+        at: TracebackType | None,
+    ) -> None:
+        pass
+
+
+class _Seams:
+    """Everything behind the seams of a replay, each call an Effect asked of `replay`."""
+
+    def __init__(self, replay: Replay, run: str, capabilities: Capabilities) -> None:
+        self._replay, self._run = replay, run
+        self._opened = 0
+        parallel = set(capabilities.parallel_tool_calls)
+        self.model = RoleModels(
+            _Model(replay, None, False),
+            {role: _Model(replay, role, role in parallel) for role in RoleName},
+        )
+        self.decider = _Decider(replay) if capabilities.decider else None
+
+    def git(
+        self,
+        repository: Path,
+        arguments: tuple[str, ...],
+        *,
+        stdin: bytes | None,
+        environment: Mapping[str, str],
+    ) -> bytes:
+        asked = (repository, tuple(arguments), stdin, tuple(sorted(environment.items())))
+        answer = self._replay.made(Effect(EffectKind.GIT, asked))
+        assert isinstance(answer, bytes)
+        return answer
+
+    def token_hex(self, size: int) -> str:
+        answer = self._replay.made(Effect(EffectKind.TOKEN, (size,)))
+        assert isinstance(answer, str)
+        return answer
+
+    def discover(self, repository: Path, commit: str) -> Commands | Unsupported:
+        answer = self._replay.made(Effect(EffectKind.DISCOVER, (repository, commit)))
+        assert isinstance(answer, Commands | Unsupported)
+        return answer
+
+    def open_sandbox(self, repository: Path, image: str) -> _Sandbox:
+        name = sandbox_name(self._run, self._opened)
+        self._opened += 1
+        return _Sandbox(self._replay, name, repository, image)
+
+    def pipeline(self, work_on_claim: WorkOnClaim | None) -> FixedPipeline:
+        return FixedPipeline(
+            store=_Profiles(self._replay),
+            cache=_Dependencies(self._replay),
+            open_sandbox=self.open_sandbox,
+            discover=self.discover,
+            progress_guard=self.decider,
+            work_on_claim=work_on_claim,
+        )
+
+
+class _ClaimElsewhere:
+    """Has the work on each Claim done by a CLAIM Effect: a workflow of its own."""
+
+    def __init__(self, replay: Replay, given: RunInput, capabilities: Capabilities) -> None:
+        self._replay, self._given, self._capabilities = replay, given, capabilities
+
+    def __call__(
+        self,
+        ledger: Ledger,
+        place: int,
+        claim: str,
+        kind: ClaimKind | None,
+        ready: Ready | None,
+        *,
+        repository: Path,
+        before: str,
+        after: str,
+        model: Model,
+    ) -> Gathered:
+        named = None
+        if ready is not None:
+            sandbox = ready.sandbox
+            assert isinstance(sandbox, _Sandbox)
+            named = SandboxReady(sandbox.name, sandbox.image, ready.ecosystem)
+        given = ClaimInput(
+            run=self._given.run,
+            pull_request=replace(
+                self._given.pull_request, repository=repository, before=before, after=after
+            ),
+            place=place,
+            claim=claim,
+            kind=kind,
+            ready=named,
+            ledger=ledger.snapshot(),
+            capabilities=self._capabilities,
+            shown=self._given.shown,
+            limits=self._given.limits,
+        )
+        outcome = self._replay.made(Effect(EffectKind.CLAIM, (given,)))
+        assert isinstance(outcome, ClaimOutcome)
+        ledger.adopt(outcome.ledger)
+        if outcome.spent is not None:
+            raise outcome.spent
+        assert outcome.gathered is not None
+        return outcome.gathered
