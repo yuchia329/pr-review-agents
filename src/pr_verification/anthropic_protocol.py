@@ -13,12 +13,12 @@ import httpx
 from pr_verification.model import ModelRequest, PricedResponse, TokenPrice
 from pr_verification.openai_compatible import (
     _THINKING,
-    _TIMEOUT,
     _TOKENS_PRICED,
     ANSWER_WAIT,
     _failed,
     _is_integer,
     _sendable,
+    _timeout,
     _tokens,
 )
 from pr_verification.tracing import SpanKind, span
@@ -84,6 +84,7 @@ class AnthropicModel:
         and `ValueError` for a number that is not more than 0.
         """
         self.parallel_tool_calls = parallel_tool_calls
+        self.answer_wait = answer_wait
         self._price = price
         self._url = endpoint.rstrip("/") + "/messages"
         self._model = model
@@ -92,7 +93,9 @@ class AnthropicModel:
         headers = {"anthropic-version": ANTHROPIC_VERSION}
         if self._key:
             headers["x-api-key"] = self._key
-        self._client = httpx.Client(headers=headers, timeout=_TIMEOUT, transport=transport)
+        self._client = httpx.Client(
+            headers=headers, timeout=_timeout(answer_wait), transport=transport
+        )
 
     def complete(self, request: ModelRequest) -> str:
         """Make one request to the endpoint and return the text of its answer.

@@ -36,15 +36,12 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-import httpx
-
-from pr_verification import openai_compatible
 from pr_verification.budget import budget_from_environment
 from pr_verification.core import PullRequest, run
 from pr_verification.decision import configured_decider, decision_configuration
 from pr_verification.evaluation import Case, Part, evaluate
 from pr_verification.model import Model
-from pr_verification.openai_compatible import model_from_environment
+from pr_verification.openai_compatible import ANSWER_WAIT, model_from_environment
 from pr_verification.report import ClaimKind, Report, TextChange, Verdict
 from pr_verification.repository import commit_staged, git, repository_at, resolve_commit
 from pr_verification.structural import search_for
@@ -226,12 +223,13 @@ def main() -> None:
                 sys.exit(1)
             return
 
-        if arguments.no_request_limit:
-            # For a measurement on a slow or shared server only: the client's limit on how long
-            # one request may take is a guardrail of production, and here it would make a
-            # Claim Inconclusive for the server's load rather than for anything in the code.
-            openai_compatible._TIMEOUT = httpx.Timeout(None, connect=10.0)
-        model = model_from_environment(os.environ)
+        # With --no-request-limit, for a measurement on a slow or shared server only: the
+        # client's limit on how long one request may take is a guardrail of production, and
+        # here it would make a Claim Inconclusive for the server's load rather than for
+        # anything in the code.
+        model = model_from_environment(
+            os.environ, answer_wait=None if arguments.no_request_limit else ANSWER_WAIT
+        )
         if model is None:
             parser.error("no model is configured: see docs/model-endpoints.md")
         decider = configured_decider(decision_configuration(os.environ), model)

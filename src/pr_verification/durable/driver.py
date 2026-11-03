@@ -56,7 +56,17 @@ def worker_resources(environment: Mapping[str, str], state_dir: Path) -> Resourc
     Raises what making them raises as `pr-verification` reads the environment:
     `InvalidConfiguration`, `InvalidDecisionConfiguration`, and `ModelFailed`.
     """
-    raise NotImplementedError
+    configuration = configuration_from_environment(environment)
+    model: Model | None
+    if configuration is None:
+        model = model_from_environment(environment, answer_wait=WORKER_ANSWER_WAIT)
+    else:
+        model = configured_models(configuration, environment, answer_wait=WORKER_ANSWER_WAIT)
+    if model is None:
+        return None
+    decider = configured_decider(decision_configuration(environment), model)
+    pipeline = fixed_pipeline(state_dir)
+    return Resources(model=model, decider=decider, store=pipeline.store, cache=pipeline.cache)
 
 
 async def verify(client: Client, given: RunInput, *, task_queue: str = TASK_QUEUE) -> Report:
@@ -125,13 +135,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _work(arguments: argparse.Namespace) -> int:
-    configuration = configuration_from_environment(os.environ)
-    model: Model | None
-    if configuration is None:
-        model = model_from_environment(os.environ)
-    else:
-        model = configured_models(configuration, os.environ)
-    if model is None:
+    resources = worker_resources(os.environ, arguments.state_dir)
+    if resources is None:
         print(
             "pr-verification-durable: no model is configured, so nothing can be verified: "
             "set PR_VERIFICATION_API_KEY, or PR_VERIFICATION_ENDPOINT for a model that needs "
@@ -139,9 +144,6 @@ def _work(arguments: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return EXIT_NO_REPORT
-    decider = configured_decider(decision_configuration(os.environ), model)
-    pipeline = fixed_pipeline(arguments.state_dir)
-    resources = Resources(model=model, decider=decider, store=pipeline.store, cache=pipeline.cache)
 
     async def work() -> None:
         client = await connect(arguments.address)

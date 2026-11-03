@@ -227,7 +227,7 @@ def configured_models(
     clients: dict[ModelChoice, Model] = {}
     for choice in (configuration.default, *configuration.roles.values()):
         if choice not in clients:
-            clients[choice] = _client(choice, environment, transport)
+            clients[choice] = _client(choice, environment, transport, answer_wait)
     return RoleModels(
         clients[configuration.default],
         {role: clients[choice] for role, choice in configuration.roles.items()},
@@ -235,7 +235,10 @@ def configured_models(
 
 
 def _client(
-    choice: ModelChoice, environment: Mapping[str, str], transport: httpx.BaseTransport | None
+    choice: ModelChoice,
+    environment: Mapping[str, str],
+    transport: httpx.BaseTransport | None,
+    answer_wait: float | None,
 ) -> Model:
     """The client that reaches the model `choice` names, as `configured_models` says."""
     key = ""
@@ -257,4 +260,5 @@ def _client(
         transport,
         price,
         parallel_tool_calls=choice.parallel_tool_calls,
+        answer_wait=answer_wait,
     )

@@ -18,8 +18,8 @@ ANSWER_WAIT = 300.0
 wait. A local model may first have to be loaded, and httpx on its own gives up after five
 seconds."""
 
-# A local model may first have to be loaded, and httpx on its own gives up after five seconds.
-_TIMEOUT = httpx.Timeout(300.0, connect=10.0)
+# Connecting is waited for this long, whatever the answer wait.
+_CONNECT_WAIT = 10.0
 # Some models put their thinking in front of the answer, in the same text.
 _THINKING = re.compile(r"\A\s*<think>.*?</think>", re.DOTALL)
 _LONGEST_FAILURE = 500
@@ -62,13 +62,16 @@ class OpenAICompatibleModel:
         capability every request, and all that comes of it, is as it was before either
         existed."""
         self.parallel_tool_calls = parallel_tool_calls
+        self.answer_wait = answer_wait
         self._price = price
         self._url = endpoint.rstrip("/") + "/chat/completions"
         self._model = model
         self._name = f"{model} at {endpoint}"
         self._key = _sendable(key, self._name)
         headers = {"Authorization": f"Bearer {self._key}"} if self._key else {}
-        self._client = httpx.Client(headers=headers, timeout=_TIMEOUT, transport=transport)
+        self._client = httpx.Client(
+            headers=headers, timeout=_timeout(answer_wait), transport=transport
+        )
 
     def complete(self, request: ModelRequest) -> str:
         return self._ask(request)[0]
@@ -176,7 +179,15 @@ def model_from_environment(
         key=key,
         transport=transport,
         price=_price_from(environment),
+        answer_wait=answer_wait,
     )
+
+
+def _timeout(answer_wait: float | None) -> httpx.Timeout:
+    """How long a client made with `answer_wait` waits, as `OpenAICompatibleModel` says."""
+    if answer_wait is not None and not answer_wait > 0:
+        raise ValueError(f"the answer wait must be more than 0 seconds, not {answer_wait}")
+    return httpx.Timeout(answer_wait, connect=_CONNECT_WAIT)
 
 
 def _price_from(environment: Mapping[str, str]) -> TokenPrice | None:
