@@ -123,7 +123,9 @@ what made it fit, the last of them because only text is sent. The server then ho
 
 Even at 37 tokens a second, a request that thinks at length takes minutes: an answer of 10,000
 tokens takes four and a half. The client waits five minutes for one answer, and the Reproduction
-writer can need more (see "Why the runs are slow" in `docs/adversarial-evaluation.md`).
+writer can need more (see "Why the runs are slow" in `docs/adversarial-evaluation.md`). A worker
+of a durable run (`pr-verification-durable worker`) waits 59 minutes, a minute less than Temporal
+gives the step.
 
 ## Manual check against a real endpoint
 

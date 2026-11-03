@@ -17,6 +17,7 @@ import httpx
 from pr_verification.anthropic_protocol import ANTHROPIC_ENDPOINT, AnthropicModel
 from pr_verification.model import REASONING_ROLES, Model, RoleModels, RoleName, TokenPrice
 from pr_verification.openai_compatible import (
+    ANSWER_WAIT,
     DEFAULT_ENDPOINT,
     DEFAULT_MODEL,
     OpenAICompatibleModel,
@@ -196,8 +197,12 @@ def configured_models(
     configuration: Configuration,
     environment: Mapping[str, str],
     transport: httpx.BaseTransport | None = None,
+    *,
+    answer_wait: float | None = ANSWER_WAIT,
 ) -> RoleModels:
     """Make the models `configuration` names, each role's as the configuration assigns it.
+
+    Every client is made with `answer_wait`, as the clients read it.
 
     One client is made for each different `ModelChoice` among `configuration.default` and
     `configuration.roles`, of the class its `protocol` names, with the choice's `endpoint`,

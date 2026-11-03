@@ -9,7 +9,7 @@ import os
 import secrets
 import sys
 import traceback
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from temporalio.client import Client, WorkflowFailureError
@@ -37,6 +37,27 @@ from pr_verification.openai_compatible import model_from_environment
 from pr_verification.orchestration import fixed_pipeline
 from pr_verification.report import Report
 
+WORKER_ANSWER_WAIT = 3540.0
+"""How many seconds a worker's models wait for the answer to one request: 60 seconds less than
+the start-to-close timeout of a model step (`activity_options`). So a model that does not answer
+in time fails in its client first, and its `ModelFailed` is the step's answer, recorded and not
+tried again, where Temporal would time the step out and send the request once more."""
+
+
+def worker_resources(environment: Mapping[str, str], state_dir: Path) -> Resources | None:
+    """The `Resources` of a worker that `pr-verification-durable worker` runs, or None when no
+    model is configured.
+
+    They are made from `environment` as `pr-verification` makes what it runs with: the model
+    or models, and the decider, as its `main` makes them, and the fixed pipeline's store and
+    cache as `fixed_pipeline` makes them on `state_dir`. Every model client among them is made
+    with `answer_wait` `WORKER_ANSWER_WAIT`.
+
+    Raises what making them raises as `pr-verification` reads the environment:
+    `InvalidConfiguration`, `InvalidDecisionConfiguration`, and `ModelFailed`.
+    """
+    raise NotImplementedError
+
 
 async def verify(client: Client, given: RunInput, *, task_queue: str = TASK_QUEUE) -> Report:
     """Start `VerifyPullRequest` with `given`, with the workflow ID `given.run`, on
@@ -60,9 +81,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     `worker`
         Runs a worker (`make_worker`) until it is interrupted, then returns 0. Its `Resources`
-        are made from the environment as `pr-verification` makes what it runs with: the model
-        or models, and the decider, as its `main` makes them, and the fixed pipeline's store
-        and cache as `fixed_pipeline` makes them on the directory `--state-dir` names, which
+        are `worker_resources` of the environment and the directory `--state-dir` names, which
         is required. `--max-concurrent-activities N` is passed on as
         `max_concurrent_activities`. What `pr-verification` handles as a model that is not
         configured is handled the same: one line on standard error starting

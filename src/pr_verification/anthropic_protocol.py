@@ -15,6 +15,7 @@ from pr_verification.openai_compatible import (
     _THINKING,
     _TIMEOUT,
     _TOKENS_PRICED,
+    ANSWER_WAIT,
     _failed,
     _is_integer,
     _sendable,
@@ -48,6 +49,10 @@ class AnthropicModel:
     """Whether the model offers parallel tool calls, as `offers_parallel_tool_calls`
     (`pr_verification.model`) reads it. False unless the model was made with it true."""
 
+    answer_wait: float | None
+    """How many seconds a request waits for the endpoint's answer, or None for no limit: the
+    `answer_wait` the client was made with."""
+
     def __init__(
         self,
         endpoint: str,
@@ -57,6 +62,7 @@ class AnthropicModel:
         price: TokenPrice | None = None,
         *,
         parallel_tool_calls: bool = False,
+        answer_wait: float | None = ANSWER_WAIT,
     ) -> None:
         """`endpoint` is the base URL up to and including `/v1`, with or without a `/` after
         it, and `model` is the model's name as the endpoint knows it. `transport` is for a
@@ -71,6 +77,11 @@ class AnthropicModel:
         no price. It changes nothing about `complete`. `parallel_tool_calls` is the
         model's attribute of that name, false unless given as for the OpenAI-compatible
         client, and changes nothing about a request.
+
+        `answer_wait` is how long a request waits for the endpoint's answer, as for the
+        OpenAI-compatible client: `ANSWER_WAIT` seconds unless given, None for no limit, a
+        request not answered in time failing as an endpoint that could not be reached does,
+        and `ValueError` for a number that is not more than 0.
         """
         self.parallel_tool_calls = parallel_tool_calls
         self._price = price

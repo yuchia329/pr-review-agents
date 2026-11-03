@@ -13,6 +13,11 @@ from pr_verification.tracing import SpanKind, span
 DEFAULT_ENDPOINT = "https://api.minimax.io/v1"
 DEFAULT_MODEL = "MiniMax-M3"
 
+ANSWER_WAIT = 300.0
+"""How many seconds a client waits for the answer to one request, unless it is made with another
+wait. A local model may first have to be loaded, and httpx on its own gives up after five
+seconds."""
+
 # A local model may first have to be loaded, and httpx on its own gives up after five seconds.
 _TIMEOUT = httpx.Timeout(300.0, connect=10.0)
 # Some models put their thinking in front of the answer, in the same text.
@@ -23,6 +28,10 @@ _TOKENS_PRICED = 1_000_000
 
 
 class OpenAICompatibleModel:
+    answer_wait: float | None
+    """How many seconds a request waits for the endpoint's answer, or None for no limit: the
+    `answer_wait` the client was made with."""
+
     def __init__(
         self,
         endpoint: str,
@@ -32,6 +41,7 @@ class OpenAICompatibleModel:
         price: TokenPrice | None = None,
         *,
         parallel_tool_calls: bool = False,
+        answer_wait: float | None = ANSWER_WAIT,
     ) -> None:
         """`price` is what the provider charges for this model, or None for a model that has no
         price, as a local one has none. It changes nothing about `complete`.
@@ -40,6 +50,12 @@ class OpenAICompatibleModel:
         parallel tool calls, as `offers_parallel_tool_calls` (`pr_verification.model`) reads
         it. It is false unless given, since not every model behind this protocol can be
         relied on to ask for several tools at once, and it changes nothing about a request.
+
+        `answer_wait` is how many seconds a request waits for the endpoint's answer once it is
+        sent, `ANSWER_WAIT` unless given, or None to wait without limit. Connecting is waited
+        for 10 seconds whatever it is. A request not answered in time raises `ModelFailed`
+        as an endpoint that could not be reached does. Raises `ValueError` when `answer_wait`
+        is a number that is not more than 0.
 
         This client does not offer prompt caching. It sends the same request whatever
         `ModelRequest.cache_instructions` is, so on a provider that offers neither
@@ -131,9 +147,14 @@ class OpenAICompatibleModel:
 
 
 def model_from_environment(
-    environment: Mapping[str, str], transport: httpx.BaseTransport | None = None
+    environment: Mapping[str, str],
+    transport: httpx.BaseTransport | None = None,
+    *,
+    answer_wait: float | None = ANSWER_WAIT,
 ) -> OpenAICompatibleModel | None:
     """None when neither a key nor an endpoint is set. A pipeline sets a missing secret to "".
+
+    The model is made with `answer_wait`, as `OpenAICompatibleModel` reads it.
 
     The model's price is read from `PR_VERIFICATION_INPUT_PRICE` and
     `PR_VERIFICATION_OUTPUT_PRICE`, each in dollars for a million tokens, and is given to the
