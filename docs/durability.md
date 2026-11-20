@@ -1,6 +1,6 @@
 # Durability of a run that loses its worker
 
-Measured on commit `6e49a1f965cf156c6c6f39cce14913d098972821`, branch `measure/durability`. The Mac ran Temporal's dev server, six workers, and the local Docker Sandboxes. The model was `Qwen/Qwen3.8-27B-FP8` served by vLLM on sicong, through the witness proxy. The decider was `small_llm`. The Budget's time limit was 7,200 seconds. The protocol is section 6.1 of `docs/execution_plan_temporal_eks.md`. The score is `~/.cache/pr-verification/measurements/durability/2026-11-03/score-180.json`, and the histories and the witness log are in that directory.
+Measured on commit `6e49a1f965cf156c6c6f39cce14913d098972821`, branch `measure/durability`. The Mac ran Temporal's dev server, six workers, and the local Docker Sandboxes. The model was `Qwen/Qwen3.8-27B-FP8` served by vLLM on sicong, through the witness proxy. The decider was `small_llm`. The Budget's time limit was 7,200 seconds. The protocol is the docstring of `tools/measure_durability.py`. The score is `~/.cache/pr-verification/measurements/durability/2026-11-03/score-180.json`, and the histories and the witness log are in that directory.
 
 The baseline and the targeted runs, and the first 20 counted crash runs, were taken on 2026-11-03. The crash sample was continued from 2026-11-17 and reached 180 counted runs on 2026-11-19.
 

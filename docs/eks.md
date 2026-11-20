@@ -1,19 +1,19 @@
 # The EKS stack and the Kubernetes Sandbox
 
-Stages B1 and B2 of `docs/execution_plan_temporal_eks.md`, run on 2026-11-19 in `us-east-1` from branch `infra/eks`, which starts at `5eaca92`. The stack is `infra/`. The Sandbox is `src/pr_verification/kubernetes_sandbox.py`. The worker ran on the Mac, reached Temporal on the cluster through `kubectl port-forward`, and created each Sandbox Job through `kubectl`. The model was `Qwen/Qwen3.8-27B-FP8` served by vLLM on sicong, over Tailscale, with no witness proxy. The decider was `small_llm`. The Budget's time limit was 7,200 seconds. The records are in `~/.cache/pr-verification/measurements/eks/2026-11-19/`: the smoke output, both contract runs, the report, the five workflow histories, and the worker's output.
+Run on 2026-11-19 in `us-east-1` from branch `infra/eks`, which starts at `5eaca92`. The stack is `infra/`. The Sandbox is `src/pr_verification/kubernetes_sandbox.py`. The worker ran on the Mac, reached Temporal on the cluster through `kubectl port-forward`, and created each Sandbox Job through `kubectl`. The model was `Qwen/Qwen3.8-27B-FP8` served by vLLM on sicong, over Tailscale, with no witness proxy. The decider was `small_llm`. The Budget's time limit was 7,200 seconds. The records are in `~/.cache/pr-verification/measurements/eks/2026-11-19/`: the smoke output, both contract runs, the report, the five workflow histories, and the worker's output.
 
-## Both exits are met
+## What was checked
 
-| Exit | Result |
+| Check | Result |
 | --- | --- |
-| B1: `terraform apply`, a hello-world Job on each node, `terraform destroy` | All three worked. 46 resources, and none left after destroy |
-| B1, by hand before B2: deny-all, strict mode, and a positive control | `timeout`, `timeout`, `connected`, as expected |
-| B2: the shared contract suite on EKS | 33 of 33, after the two fixes below. 32 of 33 before them |
-| B2: one real run with this Sandbox | `eks-real-048-2` reached a report |
+| The stack: `terraform apply`, a hello-world Job on each node, `terraform destroy` | All three worked. 46 resources, and none left after destroy |
+| Network policy, by hand before the Sandbox ran: deny-all, strict mode, and a positive control | `timeout`, `timeout`, `connected`, as expected |
+| The Sandbox's shared contract suite on EKS | 33 of 33, after the two fixes below. 32 of 33 before them |
+| One real run with this Sandbox | `eks-real-048-2` reached a report |
 
 The stack was up for about three hours, from the first apply to the end of destroy.
 
-## How the stack differs from the plan
+## Choices made to keep the experiment cheap
 
 There is no NAT gateway. Both nodes and the cluster use the two public subnets, and each node has a public address and reaches the internet through the internet gateway. This was chosen to save the NAT's cost for an experiment. Postgres has no public address, and its security group admits only the cluster. Strict network policy and IMDSv2 with hop limit 1 are unchanged.
 
@@ -51,8 +51,8 @@ The first apply also failed once on a DNS lookup of `iam.amazonaws.com` from the
 
 ## Known limits
 
-**The worker ran on the Mac.** Every model request, git command, and `kubectl` call came from there, so a dropped port-forward or a sleeping Mac pauses a run. A Sandbox or model step that fails while the worker is still connected is an answer, recorded and not retried. B4 moves the worker into the cluster.
+**The worker ran on the Mac.** Every model request, git command, and `kubectl` call came from there, so a dropped port-forward or a sleeping Mac pauses a run. A Sandbox or model step that fails while the worker is still connected is an answer, recorded and not retried. Running the worker in the cluster is not yet done.
 
-**No volume clean-up.** The plan's CronJob that removes volumes older than 6 hours was not built. A named Sandbox's volumes are removed by the run's `close_sandbox` activity, so a run that never ends leaves its volumes on the sandbox node's data disk.
+**No volume clean-up.** A CronJob that removes volumes older than 6 hours was not built. A named Sandbox's volumes are removed by the run's `close_sandbox` activity, so a run that never ends leaves its volumes on the sandbox node's data disk.
 
 **The database certificate is not checked.** The connection to Postgres is encrypted, but the client does not verify the server's certificate.

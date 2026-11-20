@@ -1,7 +1,7 @@
 # What the cluster runs after the nodes exist. Strict network policy is already on, so each
 # of these namespaces has a policy. The sandbox namespace is the one KubernetesSandbox uses
 # until a Tenant has its own: install-labelled pods may use the network, and every other pod
-# in the namespace may not. Stage B3 narrows install to the PyPI proxy.
+# in the namespace may not.
 
 # RDS for PostgreSQL 16 refuses connections without TLS (rds.force_ssl). The connection is
 # encrypted, but the server certificate is not checked, since the RDS CA bundle is not mounted.

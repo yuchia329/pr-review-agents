@@ -1,4 +1,4 @@
-# Stage B1, the EKS stack. From this directory, with infra/terraform.tfvars in place:
+# The EKS stack. From this directory, with infra/terraform.tfvars in place:
 #
 #   terraform init
 #   terraform plan

@@ -5,7 +5,7 @@ ADR 0010 kept the fixed pipeline and replays it against a Journal. It left one c
 - **180 of 180 counted runs reached a report.** A run counted only when a SIGKILL landed on a step that was in flight and the history shows that step was made again.
 - **A completed step was not made again.** The count of those, over every ended crash run, is 0.
 - **The stop rule did not fire.** The longest `VerifyClaim` activation was 0.683 seconds. The largest `VerifyClaim` history was 219,835 bytes.
-- **The durable design stays.** Generators and an async rewrite are not taken up. Stage B is a separate choice, at Gate A, and this result does not start it.
+- **The durable design stays.** Generators and an async rewrite are not taken up. Running on a cluster is a separate choice, and this result does not start it.
 
 ## Consequences
 
