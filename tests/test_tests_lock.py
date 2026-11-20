@@ -69,6 +69,59 @@ def test_editing_source_on_an_impl_branch_is_allowed(repository: Path) -> None:
     assert result.returncode == 0
 
 
+def send_hook(event: dict[str, object]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), "hook"],
+        input=json.dumps(event),
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_cursor_edit_without_cwd_is_judged_from_the_workspace_root(repository: Path) -> None:
+    result = send_hook(
+        {
+            "tool_name": "Write",
+            "tool_input": {"file_path": str(repository / "tests" / "test_greeting.py")},
+            "workspace_roots": [str(repository)],
+            "hook_event_name": "preToolUse",
+        }
+    )
+
+    assert result.returncode == 2
+    assert "tests/test_greeting.py" in result.stderr
+
+
+def test_cursor_edit_of_source_without_cwd_is_allowed(repository: Path) -> None:
+    result = send_hook(
+        {
+            "tool_name": "Write",
+            "tool_input": {"file_path": str(repository / "src" / "greeting.py")},
+            "workspace_roots": [str(repository)],
+            "hook_event_name": "preToolUse",
+        }
+    )
+
+    assert result.returncode == 0
+
+
+def test_cursor_shell_with_an_empty_cwd_reports_a_changed_test(repository: Path) -> None:
+    changed = change_a_test(repository)
+
+    result = send_hook(
+        {
+            "tool_name": "Shell",
+            "tool_input": {"command": "true", "cwd": ""},
+            "cwd": "",
+            "workspace_roots": [str(repository)],
+            "hook_event_name": "postToolUse",
+        }
+    )
+
+    assert result.returncode == 2
+    assert changed in result.stderr
+
+
 @pytest.mark.parametrize("branch", ["main", "tests/greeting", "contract/greeting", "simplify"])
 def test_editing_a_test_file_off_an_impl_branch_is_allowed(repository: Path, branch: str) -> None:
     git(repository, "checkout", "--quiet", "-B", branch)

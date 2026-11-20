@@ -1,6 +1,6 @@
 """Keeps tests/ locked while on an impl/ branch.
 
-    tests_lock.py hook                                 judge a Claude Code hook event on stdin
+    tests_lock.py hook                                 judge a hook event on stdin
     tests_lock.py pull-request --branch B --base REF   judge the pull request checked out here
 
 Exits 2, with the reason on stderr, when it refuses or cannot tell; 0 otherwise.
@@ -64,11 +64,28 @@ def changed_test_files(root: str, *bases: str) -> list[str]:
     return sorted({*tracked.splitlines(), *untracked.splitlines()})
 
 
+def event_directory(event: dict[str, Any]) -> str:
+    """Where the hook event's paths are relative to.
+
+    Claude Code names it ``cwd``. Cursor leaves ``cwd`` out of a file edit and sends
+    ``workspace_roots``, and on a shell command it sends ``cwd`` as an empty string.
+    """
+    cwd = event.get("cwd")
+    if isinstance(cwd, str) and cwd:
+        return cwd
+    roots = event.get("workspace_roots")
+    if isinstance(roots, list):
+        for root in roots:
+            if isinstance(root, str) and root:
+                return root
+    return os.getcwd()
+
+
 def touched_by_event(event: dict[str, Any]) -> list[str]:
-    """The locked files one Claude Code hook event is about to write, or has left changed."""
+    """The locked files one hook event is about to write, or has left changed."""
     tool_input = event["tool_input"]
     path = tool_input.get("file_path") or tool_input.get("notebook_path")
-    target = os.path.realpath(os.path.join(event["cwd"], path or ""))
+    target = os.path.realpath(os.path.join(event_directory(event), path or ""))
     root = _repository_root(target)
     if root is None or not is_locked_branch(_git(root, "branch", "--show-current")):
         return []

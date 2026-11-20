@@ -1,5 +1,7 @@
 # Working rules
 
+These rules apply in Cursor and in Claude Code. `README.md` says what the system is, how it works, and where each document is.
+
 Read `CONTEXT.md` for the project's vocabulary and `docs/adr/` for decisions already made before changing anything. Use those terms in code, tests, and commit messages.
 
 ## Three tickets per group of work
@@ -34,9 +36,9 @@ On an `impl/` branch you may read and run everything under `tests/`. You may not
 - Do not skip tests, swallow exceptions, or replace real work with stand-ins.
 - If a test looks wrong or contradicts the contract, stop and report it. Do not work around it.
 
-Two locks enforce this, both running `tools/tests_lock.py`:
+The locks run `tools/tests_lock.py`:
 
-- A Claude Code hook (`.claude/settings.json`) refuses a file edit under `tests/`, and after every shell command reports any file under `tests/` that no longer matches where the branch left `main`.
+- A hook in `.claude/settings.json` refuses a file edit under `tests/`, and after every shell command reports any file under `tests/` that no longer matches where the branch left `main`. Cursor and Claude Code both load it.
 - Before an `impl/` branch merges, the same check is run by hand from the branch:
 
   ```sh
