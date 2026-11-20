@@ -1,0 +1,44 @@
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="EXKSBOUNDARY"
+
+--EXKSBOUNDARY
+Content-Type: application/node.eks.aws
+
+---
+apiVersion: node.eks.aws/v1alpha1
+kind: NodeConfig
+spec:
+  cluster:
+    name: ${cluster_name}
+    apiServerEndpoint: ${endpoint}
+    certificateAuthority: ${certificate_authority}
+    cidr: ${service_cidr}
+%{ if pod_pids_limit > 0 ~}
+  kubelet:
+    config:
+      podPidsLimit: ${pod_pids_limit}
+%{ endif ~}
+%{ if mount_data ~}
+--EXKSBOUNDARY
+Content-Type: text/x-shellscript; charset="us-ascii"
+
+#!/bin/bash
+set -euxo pipefail
+mkdir -p /mnt/sandbox-data
+root_source="$(findmnt -n -o SOURCE /)"
+root_disk="$(lsblk -no pkname "$root_source" 2>/dev/null || basename "$root_source")"
+for disk in /dev/nvme*n1 /dev/xvd[b-z]; do
+  [ -b "$disk" ] || continue
+  base="$(basename "$disk")"
+  [ "$base" = "$root_disk" ] && continue
+  if ! blkid "$disk" >/dev/null 2>&1; then
+    mkfs.ext4 -F "$disk"
+  fi
+  uuid="$(blkid -s UUID -o value "$disk")"
+  grep -q "$uuid" /etc/fstab || echo "UUID=$uuid /mnt/sandbox-data ext4 defaults,nofail 0 2" >> /etc/fstab
+  mountpoint -q /mnt/sandbox-data || mount /mnt/sandbox-data
+  chmod 755 /mnt/sandbox-data
+  break
+done
+%{ endif ~}
+--EXKSBOUNDARY--

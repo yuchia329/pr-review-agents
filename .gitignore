@@ -3,3 +3,11 @@ __pycache__/
 .mypy_cache/
 .pytest_cache/
 .hypothesis/
+
+# Terraform state and local values. The lock file is kept.
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.*
+infra/*.tfvars
+!infra/*.tfvars.example
+infra/crash.log
