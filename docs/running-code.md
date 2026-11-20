@@ -12,6 +12,11 @@ The Sandbox is a local container (ADR 0001). It needs the `docker` command and a
 runtime on the same machine that answers it. Without one, making a `ContainerSandbox` raises
 `SandboxFailed`.
 
+A durable worker can run its Sandboxes on the EKS cluster that `infra/` builds instead. With
+`PR_VERIFICATION_SANDBOX=kubernetes`, `pr-verification-durable worker` uses `KubernetesSandbox`
+(`src/pr_verification/kubernetes_sandbox.py`): one Job per run on the sandbox node, through
+`kubectl` and its current context. `container` is the default.
+
 Each run is a new container. What it is given:
 
 - The files of one commit, as a working copy it may write to, and a home directory. Both are kept

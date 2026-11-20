@@ -9,7 +9,7 @@ import os
 import secrets
 import sys
 import traceback
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from temporalio.client import Client, WorkflowFailureError
@@ -28,14 +28,22 @@ from pr_verification.decision import (
     configured_decider,
     decision_configuration,
 )
-from pr_verification.durable.activities import Resources
+from pr_verification.durable.activities import OpenNamedSandbox, Resources
 from pr_verification.durable.journal import RunInput
 from pr_verification.durable.worker import ADDRESS, TASK_QUEUE, connect, make_worker
 from pr_verification.durable.workflows import VerifyPullRequest
+from pr_verification.kubernetes_sandbox import KubernetesSandbox
+from pr_verification.kubernetes_sandbox import remove_sandbox as remove_kubernetes_sandbox
 from pr_verification.model import Model
 from pr_verification.openai_compatible import model_from_environment
 from pr_verification.orchestration import fixed_pipeline
 from pr_verification.report import Report
+from pr_verification.sandbox import ContainerSandbox, remove_sandbox
+
+SANDBOX_VARIABLE = "PR_VERIFICATION_SANDBOX"
+"""The environment variable that says where a worker's Sandboxes run: `container`, the default,
+for a `ContainerSandbox` on the worker's machine, or `kubernetes` for a `KubernetesSandbox` on
+the cluster `infra/` builds."""
 
 WORKER_ANSWER_WAIT = 3540.0
 """How many seconds a worker's models wait for the answer to one request: 60 seconds less than
@@ -51,11 +59,15 @@ def worker_resources(environment: Mapping[str, str], state_dir: Path) -> Resourc
     They are made from `environment` as `pr-verification` makes what it runs with: the model
     or models, and the decider, as its `main` makes them, and the fixed pipeline's store and
     cache as `fixed_pipeline` makes them on `state_dir`. Every model client among them is made
-    with `answer_wait` `WORKER_ANSWER_WAIT`.
+    with `answer_wait` `WORKER_ANSWER_WAIT`. The Sandboxes are opened and removed as
+    `SANDBOX_VARIABLE` says.
 
     Raises what making them raises as `pr-verification` reads the environment:
-    `InvalidConfiguration`, `InvalidDecisionConfiguration`, and `ModelFailed`.
+    `InvalidConfiguration`, `InvalidDecisionConfiguration`, and `ModelFailed`. Raises
+    `InvalidConfiguration` as well when `SANDBOX_VARIABLE` is neither `container` nor
+    `kubernetes`.
     """
+    open_sandbox, remove = _sandbox(environment)
     configuration = configuration_from_environment(environment)
     model: Model | None
     if configuration is None:
@@ -66,7 +78,23 @@ def worker_resources(environment: Mapping[str, str], state_dir: Path) -> Resourc
         return None
     decider = configured_decider(decision_configuration(environment), model)
     pipeline = fixed_pipeline(state_dir)
-    return Resources(model=model, decider=decider, store=pipeline.store, cache=pipeline.cache)
+    return Resources(
+        model=model,
+        decider=decider,
+        store=pipeline.store,
+        cache=pipeline.cache,
+        open_sandbox=open_sandbox,
+        remove_sandbox=remove,
+    )
+
+
+def _sandbox(environment: Mapping[str, str]) -> tuple[OpenNamedSandbox, Callable[[str], None]]:
+    chosen = environment.get(SANDBOX_VARIABLE) or "container"
+    if chosen == "container":
+        return ContainerSandbox, remove_sandbox
+    if chosen == "kubernetes":
+        return KubernetesSandbox, remove_kubernetes_sandbox
+    raise InvalidConfiguration(f"{SANDBOX_VARIABLE} is {chosen!r}, not container or kubernetes")
 
 
 async def verify(client: Client, given: RunInput, *, task_queue: str = TASK_QUEUE) -> Report:
