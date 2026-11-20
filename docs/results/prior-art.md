@@ -68,10 +68,10 @@ No tool found counts what this project counts. The nearest measures:
 
 | Run | Time for a pull request | Model cost | Wrong answers | Recorded in |
 | --- | --- | --- | --- | --- |
-| Structural cases, MiniMax M3, 2026-10-12 | 101 s development, 48 s held-out | Not priced | False Assurance 2 of 12 and 1 of 8; no False Block | `docs/structural-cases.md` |
-| Hand-made and Structural development cases, MiniMax M3, 2026-10-12 | 144 to 145 s | $0.015 to $0.017 | False Assurance 2; no False Block | `docs/context-bound.md` |
-| Hand-made Behavioural cases, MiniMax M3, three repetitions | Fixed pipeline 475 s, supervisor 495 s, reading-only baseline 23 s | $0.039, $0.079, $0.006 | False Block rate 0, 0, and 0.33 for the baseline | `docs/model-comparisons.md`, branch `impl/models` |
-| Adversarial cases, Qwen3.8 27B on vLLM, the Budget's time limit at 1,800 s, 42 runs | Mean 1,571 to 2,090 s by pull request | None | 4 of 78 false Claims Confirmed | `docs/adversarial-evaluation.md`, branch `measure/adversarial-rate` |
+| Structural cases, MiniMax M3, 2026-10-12 | 101 s development, 48 s held-out | Not priced | False Assurance 2 of 12 and 1 of 8; no False Block | `docs/results/structural-cases.md` |
+| Hand-made and Structural development cases, MiniMax M3, 2026-10-12 | 144 to 145 s | $0.015 to $0.017 | False Assurance 2; no False Block | `docs/how-it-works/agent-limits.md` |
+| Hand-made Behavioural cases, MiniMax M3, three repetitions | Fixed pipeline 475 s, supervisor 495 s, reading-only baseline 23 s | $0.039, $0.079, $0.006 | False Block rate 0, 0, and 0.33 for the baseline | `docs/results/model-comparisons.md`, branch `impl/models` |
+| Adversarial cases, Qwen3.8 27B on vLLM, the Budget's time limit at 1,800 s, 42 runs | Mean 1,571 to 2,090 s by pull request | None | 4 of 78 false Claims Confirmed | `docs/results/adversarial-evaluation.md`, branch `measure/adversarial-rate` |
 | One adversarial case, side by side | MiniMax M3 977 s, Qwen3.8 1,145 s, both stopped at the Budget's time limit | $0.08, none | | The same |
 
 In the side-by-side case 98% and 99% of the time was waiting for the model, and the longest
@@ -112,7 +112,7 @@ single answers were 23,065 and 30,986 tokens. The writer's step that writes the 
 What is known here: 98% to 99% of a pull request's time is the model writing; the step that
 writes the test thinks for thousands of tokens, mostly working out by hand what the code
 returns; and attempts 2 and 3 take 80% of the writer's time while changing no Verdict on 46
-false Claims. Rewording one rule halved the time in a trial (`docs/adversarial-evaluation.md`
+false Claims. Rewording one rule halved the time in a trial (`docs/results/adversarial-evaluation.md`
 on its branch).
 
 ### What others do
@@ -183,7 +183,7 @@ on its branch).
    it may also make tests better.
 4. **Try a few short attempts side by side in place of three in a row**, each run in the
    Sandbox, the first to show a difference going to the judge. A further Sandbox costs about
-   13 seconds to make ready (`docs/supervisor.md`), against minutes of thinking.
+   13 seconds to make ready (`docs/results/model-comparisons.md`), against minutes of thinking.
 5. **Treat a capped or empty answer as one failed step**, never as a lost Claim, if a cap is
    set at all.
 
@@ -272,7 +272,7 @@ the classifier sent to the Structural verifier, where any new text is enough.
 ### Deciding fewer Claims than reading does
 
 - The reading-only baseline decided 0.83 of Claims and the system 0.36, on two cases, with the
-  baseline Refuting a true Claim in two of its three runs (`docs/model-comparisons.md` on
+  baseline Refuting a true Claim in two of its three runs (`docs/results/model-comparisons.md` on
   `impl/models`).
 - The published test writers decide 31% to 70% of their instances with models of 2024 and
   2025 [tg-04] [tg-10]. Abstaining helps them too: AssertFlip answered 326 of 433 instances,
@@ -291,7 +291,7 @@ the classifier sent to the Structural verifier, where any new text is enough.
 - That is an agent inside a role, as this project's roles already are. No source found
   compares an LLM supervisor over roles with a fixed pipeline. Here it cost twice as much and
   decided the same. Where it can pay is time: dispatching four Claims at once took 0.39 of the
-  time when each request took 20 seconds (`docs/supervisor.md`).
+  time when each request took 20 seconds (`docs/results/model-comparisons.md`).
 
 ### Context larger than the window
 
@@ -324,7 +324,7 @@ the classifier sent to the Structural verifier, where any new text is enough.
 
 - Ellipsis checks each answer against a schema and asks again: 92% are right the first time,
   99.7% after retries [gq-25]. Here, showing every role its finish whole took the writer's
-  unreadable answers from 3 of 38 to none (`docs/agent-loops.md`).
+  unreadable answers from 3 of 38 to none (`docs/how-it-works/agent-limits.md`).
 
 ### Evaluation sets
 
@@ -371,24 +371,6 @@ model with the last word. Three checks follow for this project: that nothing a p
 brings is run outside the Sandbox, as a linter's settings were at CodeRabbit; that hidden HTML
 comments in a description are at least reported, since attacks hid there; and that nothing a
 pull request can write reaches the store the Repo Profile is read from.
-
-## What to do, in order
-
-| | Change | Grounds | Where it belongs |
-| --- | --- | --- | --- |
-| 1 | Measure the writer with lower effort, with thinking off, and with a thinking budget, on Qwen3.8 and MiniMax M3, beside the reworded rule | The controls exist and are unused [ls-09] [ls-10] [ls-11]; CodeRabbit's result says time may not fall [cr-01] | #59's measurement; changes nothing in `src/`; needs a go, since it uses the server |
-| 2 | Retry after a failed run, and measure whether retrying after `shows_nothing` rescues true Claims; give the writer the changed files and where its tests live; the reworded rule | The repair loops published, SWT-Bench's result on context, this project's trial | A group of its own (contract, tests, implementation) |
-| 3 | Guard the Structural path by the confidence of the decision that a Claim is Structural | All four adversarial False Assurances | A group of its own; the most direct cut in False Assurance |
-| 4 | State the number of Claims the ADR 0006 limits need, or report the bound beside each rate | The 3-in-N rule [ls-21] | With the harness's check of the limits |
-| 5 | A longer model window for the SWE-bench measurement; the commit's Python and a package index held to its date | 18 of 25 Claims lost to the window; 24 of 28 instances not installed | The measurement first; the Sandbox change as a group of its own |
-| 6 | Several short attempts side by side | Otter++, Agentless, NoThinking, Greptile v5 | After 1 and 2 show what one attempt costs |
-| 7 | Skip drafts; run on `ready_for_review` and `edited`; one run at a time for each pull request | The table above | The delivery workflow |
-| 8 | Report hidden HTML comments; check what runs outside the Sandbox and what can reach the Repo Profile's store | The incidents above | Review Findings and the delivery workflow |
-
-A measured comparison this page could not make: PR-Agent is open source, and its ticket check
-judges a pull request against its issue by reading. Run on this project's cases with the same
-model, it would give a False Assurance and a False Block rate for a reading tool that is not
-this project's own. That is a run, and waits for a go.
 
 ## What was looked for and not found
 

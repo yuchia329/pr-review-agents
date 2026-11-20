@@ -22,8 +22,8 @@ development part of the Structural cases, cloned under `--clones`. A run writes
 `--summary DIRECTORY` prints the arms side by side from what is there, as
 `tools/compare_configurations.py` prints them.
 
-The runs recorded in `docs/model-comparisons.md` were made at `fixed-dispatch-base`, the commit
-ADR 0009's comparison ran.
+The runs recorded in `docs/results/model-comparisons.md` were made at `fixed-dispatch-base`, the
+commit ADR 0009's comparison ran.
 """
 
 import argparse

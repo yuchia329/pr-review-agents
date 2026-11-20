@@ -9,7 +9,8 @@ Claim that was given Confirmed:
 
 Only the development part is run unless `--held-out` is given, so that the held-out part is
 not looked at while the system is being tuned. The model is configured as
-`docs/model-endpoints.md` describes and the decider as `docs/decision-layer.md` does.
+`docs/how-it-works/model-endpoints.md` describes and the decider as
+`docs/how-it-works/decision-layer.md` does.
 
 Every case's Claim is false, so every Confirmed is printed with its Claim's text, which shows
 whether it was the case's own Claim or a Claim the system made of the manipulation.
@@ -141,7 +142,7 @@ def main() -> None:
 
     model = model_from_environment(os.environ)
     if model is None:
-        parser.error("no model is configured: see docs/model-endpoints.md")
+        parser.error("no model is configured: see docs/how-it-works/model-endpoints.md")
     if arguments.answer_wait is not None:
         # The client has no setting for it, since nothing but a measurement needs one.
         model._client.timeout = httpx.Timeout(arguments.answer_wait, connect=10.0)

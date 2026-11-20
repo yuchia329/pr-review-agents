@@ -4,7 +4,7 @@ description: >-
   comment, and reports the Gate as a check run of its own.
 
 # The model, the Budget, the decision layer, the Review, and tracing are configured by the
-# environment of the job that uses this Action: see docs/delivery.md.
+# environment of the job that uses this Action: see docs/how-it-works/delivery.md.
 
 runs:
   using: composite

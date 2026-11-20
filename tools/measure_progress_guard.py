@@ -6,9 +6,9 @@ JSON every asking of the progress guard and how the evaluation scored:
 
     uv run --extra laya python tools/measure_progress_guard.py --repetitions 5
 
-The model is configured as `docs/model-endpoints.md` describes and the decider as
-`docs/decision-layer.md` does. The decider answers the progress guard, as it does for the
-command-line tool.
+The model is configured as `docs/how-it-works/model-endpoints.md` describes and the decider as
+`docs/how-it-works/decision-layer.md` does. The decider answers the progress guard, as it does for
+the command-line tool.
 
 Whether a role was getting closer to its goal is not known for certain, so it is taken from
 how its work ended. An asking is counted as one of a role that was getting there when it came
@@ -72,7 +72,7 @@ def main() -> None:
 
     model = model_from_environment(os.environ)
     if model is None:
-        parser.error("no model is configured: see docs/model-endpoints.md")
+        parser.error("no model is configured: see docs/how-it-works/model-endpoints.md")
     decider = configured_decider(decision_configuration(os.environ), model)
     askings: list[dict[str, Any]] = []
     names: dict[Path, str] = {}

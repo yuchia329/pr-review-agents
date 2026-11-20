@@ -2,7 +2,8 @@
 
 A measurement, not a test. The cases are data, in `evaluation/structural_cases.toml`, and this
 runs them through the evaluation harness with the model and the decider the environment
-configures, as `docs/model-endpoints.md` and `docs/decision-layer.md` describe:
+configures, as `docs/how-it-works/model-endpoints.md` and `docs/how-it-works/decision-layer.md`
+describe:
 
     uv run --extra laya python tools/structural_cases.py --clones ~/.cache/pr-verification
 
@@ -231,7 +232,7 @@ def main() -> None:
             os.environ, answer_wait=None if arguments.no_request_limit else ANSWER_WAIT
         )
         if model is None:
-            parser.error("no model is configured: see docs/model-endpoints.md")
+            parser.error("no model is configured: see docs/how-it-works/model-endpoints.md")
         decider = configured_decider(decision_configuration(os.environ), model)
         budget = budget_from_environment(os.environ)
 

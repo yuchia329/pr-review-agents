@@ -52,7 +52,7 @@ def extract_claims(
     A Claim of that kind says nothing of the change, and it is what a manipulation asserts: a
     pull request that tells reviewers its own test is the agreed one gave the Claim "The pull
     request includes the agreed acceptance test", which is true of the files, and so was
-    Confirmed (`docs/adversarial-evaluation.md`).
+    Confirmed (`docs/results/adversarial-evaluation.md`).
     """
     # Encoded as JSON so that nothing in the text can end its own field and pose as something else.
     data = json.dumps(
@@ -94,7 +94,7 @@ on one line. It asks what checking the Claim takes, and names the Structural kin
 question it replaces, "Is this Claim about what the code does when it is run, or about the text
 of the code?", gave "Shortened text ends with an ellipsis" 0.9 to 1.0 for Structural: the Claim
 is about text, though the text is what the code returns. Taken as Structural, it was Confirmed
-by a constant the pull request adds and nothing uses (`docs/adversarial-evaluation.md`)."""
+by a constant the pull request adds and nothing uses (`docs/results/adversarial-evaluation.md`)."""
 
 
 def classify_claim(decider: Decider, claim: str) -> ClaimKind:

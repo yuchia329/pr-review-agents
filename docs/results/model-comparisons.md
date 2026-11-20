@@ -13,7 +13,7 @@ Each uses the fixed pipeline unless told otherwise.
 
 | Variable | Meaning | When unset |
 | --- | --- | --- |
-| `PR_VERIFICATION_CONFIGURATION` | `default` or `self-hosted` | One model for every role, as `docs/model-endpoints.md` describes |
+| `PR_VERIFICATION_CONFIGURATION` | `default` or `self-hosted` | One model for every role, as `docs/how-it-works/model-endpoints.md` describes |
 
 With it set, `PR_VERIFICATION_ENDPOINT` and `PR_VERIFICATION_MODEL` are not read, and each model
 takes its key from the variable its configuration names: `PR_VERIFICATION_API_KEY` for MiniMax
@@ -23,7 +23,7 @@ Any other value, `ceiling` among them, exits with code 2 and no report. The comm
 the variable. The GitHub Action does not, and configures its one model as before.
 
 `self-hosted` keeps the models on the machine. The decision layer is configured apart
-(`docs/decision-layer.md`): Laya runs in the process, and Jev is reached over the network, so
+(`docs/how-it-works/decision-layer.md`): Laya runs in the process, and Jev is reached over the network, so
 a run that is to stay on the machine does not choose Jev.
 
 ## Two optional capabilities
@@ -39,7 +39,7 @@ a run that is to stay on the machine does not choose Jev.
 - **Parallel tool calls.** A role run on a model that offers them may ask for up to 4 tools
   in one step. They are run one after another, so what is saved is requests to the model. The
   results of one step share the limit on what a role is shown of one result
-  (`docs/context-bound.md`), so asking for more at once shows a role no more.
+  (`docs/how-it-works/agent-limits.md`), so asking for more at once shows a role no more.
 
 On a provider that offers neither, every request is what it was before either existed.
 
@@ -102,7 +102,7 @@ Claim in three repetitions is one Claim. With no error in n distinct Claims, the
 a one-sided 95% interval is `1 - 0.05^(1/n)` [ls-21]: 2% can be shown only after no False
 Block in 149 true Claims, and 5% only after no False Assurance in 59 false Claims. The
 harness's own check of the limits is #71. The keys in square brackets here are those of the
-Sources table in `docs/prior-art.md`.
+Sources table in `docs/results/prior-art.md`.
 
 | Provider | Status | Why |
 | --- | --- | --- |
@@ -255,7 +255,7 @@ The two hand-made development cases, once each. Every run gave a report.
 | Dollars for a pull request | 0 | 0 | 0 |
 
 - **Two pull requests are too few to rank anything.** Each rate is a share of four or five
-  Claims from one repetition, and `docs/structural-cases.md` records that a Verdict varies
+  Claims from one repetition, and `docs/results/structural-cases.md` records that a Verdict varies
   from run to run.
 - **The baseline decided every Claim and the system half of them, on these two cases.** The
   baseline states a Verdict from the model's word, so it is Inconclusive only when the model
@@ -274,16 +274,92 @@ The two hand-made development cases, once each. Every run gave a report.
 
 Qwen 3.8 stays experimental: it has not been run on the held-out part that ADR 0006 reads.
 
-Still to run and record here, each with the command above:
+## The LLM supervisor
 
-- the ceiling against the default, more than once and on more cases;
-- self-hosted against the default;
-- GPT-6 Luna (`gpt-6-luna`, 0.10 and 0.50 dollars for a million tokens) against Gemini 3.5
-  Flash-Lite (`gemini-3.5-flash-lite`, 0.30 and 2.50) in the light roles. The project owner
-  chose GPT-6 Luna over the GPT-5.6 Luna the spec names, as newer and cheaper;
-- the reading-only baseline against the system on more Behavioural cases than the two
-  hand-made ones;
-- the effect of prompt caching and of parallel tool calls on time and cost.
+The supervisor is the second orchestration (ADR 0003). It stays as the alternative the fixed
+pipeline is measured against: ADR 0009 makes the fixed pipeline the design, and says why. A
+model decides how effort is spent on the Claims of a pull request: which Claim is worked on, in what order, how many at once, with
+how much of the Budget, and whether to try again. It decides nothing else. Each Verdict and the
+Gate are computed by code from the Evidence the roles record, whatever the supervising model
+says.
+
+It is chosen by configuration, and the fixed pipeline stays the default:
+
+| Variable | Meaning | When unset |
+| --- | --- | --- |
+| `PR_VERIFICATION_ORCHESTRATION` | `pipeline` or `supervisor` | `pipeline` |
+
+Any other value exits with code 2 and no report. The command line reads the variable. The
+GitHub Action does not yet, and uses the fixed pipeline.
+
+What code keeps from outside the model:
+
+- The supervisor is shown structured Claims and summaries of results: counts, and Verdicts
+  and reasons that code computed. It is never shown the pull request's title, description, or
+  diff, or anything a role read or a Sandbox printed. The full results are kept for the report.
+- One request holds what is so now and the summaries of the step before, and no transcript. It
+  shows at most 12 Claims of 300 characters each and 4 results, however many Claims there are.
+- A step may dispatch up to 4 roles. They run at the same time, each on its own thread, and
+  each Reproduction in a Sandbox of its own.
+- A share of the Budget can be moved only from a Claim that has been tried or can never be,
+  and the ledger enforces the totals.
+- A finish is refused while a Claim has had no Verification attempt and the Budget is not
+  spent. When the supervisor reaches its step cap of 24, or its model fails, code gives each
+  Claim left untried its attempt, one at a time.
+
+`pr_verification.supervisor` states all of this in full.
+
+### Time for one pull request: dispatching together against one at a time
+
+`tools/measure_supervisor.py` verifies one pull request with several Claims twice, with the
+supervisor dispatching every Claim in one step and then one Claim in each step:
+
+```sh
+uv run python tools/measure_supervisor.py --claims 4 --model-seconds 5 --repetitions 3
+```
+
+The pull request is the hand-made case `hand-made/median-of-an-even-count`, and the Sandbox is
+the real one. Only the dispatching differs, so every model is a stand-in that always answers
+the same: the roles' model writes for each Claim the same Reproduction, which decides it, and
+accepts it as the judge. Each Claim takes two requests for a role's work, and `--model-seconds`
+is how long each takes, in place of a real model's own time. Each run starts with nothing kept,
+so it installs the dependencies in every Sandbox it makes ready.
+
+#### Results, 2026-10-12
+
+Four Claims, three runs of each, on an Apple M4 Pro (14 cores) with Docker 28.4.0. Every run
+gave four Confirmed Verdicts and reached no limit of the Budget. The times are medians, and the
+three runs of each were within 1 second of one another.
+
+| Seconds for each request to a role | Together | One at a time | Together takes |
+| --- | --- | --- | --- |
+| 0 | 28.5 s | 15.8 s | 1.8 times as long |
+| 5 | 38.5 s | 55.6 s | 0.69 times as long |
+| 20 | 68.0 s | 175.5 s | 0.39 times as long |
+
+- **Dispatching together is slower when the model answers at once.** Each Reproduction of a
+  step needs a Sandbox to itself, and the three further Sandboxes are made ready one after
+  another before any dispatch starts. That took about 13 seconds here, for a repository with
+  no dependencies of its own. One at a time, a single Sandbox does for all four Claims.
+- **It is faster once the model's time is what a run is made of.** At 5 seconds a request the
+  four Claims take 10 seconds of waiting on the model and not 40, and at 20 seconds 40 and not
+  160. A hosted model's requests take seconds, so that is the case to expect.
+- **Together spends more of the Budget's time.** The Budget's seconds were then seconds of
+  work, in which work done at the same time each counted, as they no longer are for the pull
+  request since ADR 0007. With requests of 5 seconds, a run together
+  recorded 79 seconds of work and a run one at a time 55. Making the further Sandboxes
+  ready is about 13 of those 24 seconds. Where the rest went was not measured.
+
+Not measured:
+
+- **A real model.** The stand-in answers every request in the same time and is right the first
+  time. With a real model the Claims differ in the attempts they need, and an endpoint that
+  serves one request at a time gives back none of the waiting.
+- **A repository with dependencies to install.** Making a further Sandbox ready then costs
+  more, though what is installed is put back from the dependency cache when there is one. Each
+  run here started with none.
+- **What a supervising model chooses.** Both ways of dispatching were scripted. Whether a
+  model dispatches together when that is faster is a question for the evaluation.
 
 ## The supervisor against the fixed pipeline, 2026-10-16 and 17
 

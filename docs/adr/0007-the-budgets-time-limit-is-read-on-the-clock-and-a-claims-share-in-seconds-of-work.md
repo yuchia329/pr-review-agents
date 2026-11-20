@@ -4,7 +4,7 @@ The Budget's time limit was the most seconds of work, in which each piece of wor
 full, though others were done at the same time. That was fair while one piece of work was done
 at a time, as the fixed pipeline does. The supervisor works on up to four Claims at once, so its
 seconds of work ran ahead of the clock: in experiments A and C (#47,
-`docs/model-comparisons.md`) the time limit stopped the supervisor 9 times and the fixed
+`docs/results/model-comparisons.md`) the time limit stopped the supervisor 9 times and the fixed
 pipeline never, 6 of them with less than 900 seconds on the clock, the earliest at 584. The
 design meant to save time was the one the time limit cut short.
 

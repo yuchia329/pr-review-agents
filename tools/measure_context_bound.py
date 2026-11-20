@@ -8,9 +8,9 @@ the harness scored and how large the requests to the model were:
 
     uv run --extra laya python tools/measure_context_bound.py --clones ~/.cache/pr-verification
 
-The model is configured as `docs/model-endpoints.md` describes, the decider as
-`docs/decision-layer.md` does, and the limits as `docs/context-bound.md` does. `--clones` is
-the directory `tools/structural_cases.py` clones its repositories into.
+The model is configured as `docs/how-it-works/model-endpoints.md` describes, the decider as
+`docs/how-it-works/decision-layer.md` does, and the limits as `docs/how-it-works/agent-limits.md`
+does. `--clones` is the directory `tools/structural_cases.py` clones its repositories into.
 
 Run once with the limits to be measured, and once with both set far above anything a role
 reads, as 1000000000 is, which is how a run went before there was a bound: nothing is cut.
@@ -70,7 +70,7 @@ def main() -> None:
 
     configured = model_from_environment(os.environ)
     if configured is None:
-        parser.error("no model is configured: see docs/model-endpoints.md")
+        parser.error("no model is configured: see docs/how-it-works/model-endpoints.md")
     priced = isinstance(configured, PricedModel)
     sized = SizedAndPriced(configured) if priced else Sized(configured)
     # The decider asks through the same model, so what it sends is sized as well.

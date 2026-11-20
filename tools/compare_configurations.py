@@ -17,8 +17,8 @@ long a pull request took from start to end, time with no work under way included
 
 A `--run` is `<configuration>/<orchestration>`. The configuration is one of the named ones
 (`pr_verification.configuration`) or one made here with `--light`. Each needs the keys its
-models name, as `docs/model-endpoints.md` describes, and the decider is configured as
-`docs/decision-layer.md` does, with the configuration's default model as its small LLM.
+models name, as `docs/how-it-works/model-endpoints.md` describes, and the decider is configured as
+`docs/how-it-works/decision-layer.md` does, with the configuration's default model as its small LLM.
 
 `--light NAME ENDPOINT MODEL KEY_VARIABLE INPUT_PRICE OUTPUT_PRICE` makes a configuration
 called NAME that has that model in the light roles, which are the Claim extractor and the small

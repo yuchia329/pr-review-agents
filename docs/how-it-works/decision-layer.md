@@ -15,7 +15,7 @@ Three implementations sit behind the one interface, chosen by configuration.
 
 A variable set to an empty string counts as unset. Anything else the decision layer cannot use
 stops the command with exit code 2 and one line naming the variable. The small LLM is the model
-of `docs/model-endpoints.md`.
+of `docs/how-it-works/model-endpoints.md`.
 
 Under `laya` and `jev`, a decision is passed to the small LLM in three cases, and each decision
 records which path it took (`made_by`, `passed_on`, `first_asked`):
@@ -170,19 +170,3 @@ No decision failed. What the numbers say:
   model is out of scope for this spec.
 - **What Laya keeps is that nothing leaves the machine.** A Claim is Untrusted Content from the
   pull request, and under Jev it is sent to TypeSafe.
-
-What is still to do:
-
-- Jev's confidence on these cases, to fit a threshold for it: the tool prints accuracy and not
-  the probabilities. Its price is $0.042 for a million input tokens, about $0.00001 for a
-  decision of this size, which is what was passed as `--jev-dollars-per-decision`.
-- Whether the default should stay Laya. The spec names Laya the default, and these numbers
-  argue for Jev or the small LLM until Laya is fine-tuned. That is the project owner's choice.
-- A hosted small LLM, with its price, in place of the local one, whose 22.9 seconds is the
-  speed of this machine and not of the model.
-- More cases, and cases taken from real pull requests, before a threshold is fitted. With
-  thirty, one Claim moves the accuracy by 0.03.
-- Until then, `PR_VERIFICATION_DECISION=small_llm` answers every decision with the small LLM
-  and loads nothing. On these cases that differs from the default in 1 decision of 30, the one
-  Laya kept for itself.
-- The times on a machine with no GPU at all, such as a hosted pipeline runner.

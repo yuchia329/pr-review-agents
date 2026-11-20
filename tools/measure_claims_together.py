@@ -11,11 +11,12 @@ what each run gave and spent and how long it took on the clock, and then the two
 `--every-role NAME ENDPOINT MODEL KEY_VARIABLE` measures a model served where no named
 configuration says, as `tools/compare_configurations.py` takes it.
 
-`docs/supervisor.md` measured the same question with stand-in models that answer every request
-in a fixed time. Here the model is a real one, so the Claims differ in how much work they take,
-as they do on a real pull request. The configuration's models need the keys it names, as
-`docs/model-comparisons.md` describes, and the decider is configured as `docs/decision-layer.md`
-does, with the configuration's default model as its small LLM.
+`docs/results/model-comparisons.md` measured the same question with stand-in models that answer
+every request in a fixed time. Here the model is a real one, so the Claims differ in how much work
+they take, as they do on a real pull request. The configuration's models need the keys it names,
+as `docs/results/model-comparisons.md` describes, and the decider is configured as
+`docs/how-it-works/decision-layer.md` does, with the configuration's default model as its small
+LLM.
 
 The seconds the comparison shows are the Budget's seconds for a pull request, on the clock
 while work was under way (ADR 0007). Each run's seconds on the clock from start to end are
@@ -24,8 +25,8 @@ seconds of work, in which work done at the same time each counted.
 
 One decider serves both orchestrations, and the fixed pipeline runs first. With Laya as the
 decider, it loads on its first use, so its load falls in the pipeline's first run: the runs
-recorded in `docs/model-comparisons.md` used `PR_VERIFICATION_DECISION=small_llm`, which loads
-nothing.
+recorded in `docs/results/model-comparisons.md` used `PR_VERIFICATION_DECISION=small_llm`, which
+loads nothing.
 
 All four Claims are true, and each fix fails its test before the pull request and passes it
 after, so each can be Confirmed under the Refuted rule as it stands.

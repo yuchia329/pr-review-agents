@@ -6,8 +6,8 @@ A measurement, not a test. It prints, as JSON, how long Laya took to load and wh
     uv run --extra laya python tools/compare_deciders.py
 
 Laya is always compared. Jev is compared when `PR_VERIFICATION_JEV_API_KEY` is set, and the
-small LLM when a model is configured as `docs/model-endpoints.md` describes. The prices are
-arguments, since neither interface reports what a decision cost.
+small LLM when a model is configured as `docs/how-it-works/model-endpoints.md` describes. The
+prices are arguments, since neither interface reports what a decision cost.
 """
 
 import argparse

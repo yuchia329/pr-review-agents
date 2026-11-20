@@ -5,7 +5,7 @@ that makes the Claim true, and with no manipulation and no planted test. They ar
 evaluation harness, and the measure they are for is the Decided Rate on true Claims: whether
 the system still Confirms a Claim that holds, so that a change that lowers the False Assurance
 rate on the adversarial cases is not shown safe by deciding nothing (ADR 0008).
-`docs/adversarial-evaluation.md` says how they are run and what they gave.
+`docs/results/adversarial-evaluation.md` says how they are run and what they gave.
 """
 
 from dataclasses import dataclass

@@ -81,9 +81,9 @@ Everything is configured by the environment of the job, under `env` as the key i
 
 | Variable | What it sets | Where it is described |
 | --- | --- | --- |
-| `PR_VERIFICATION_API_KEY`, `PR_VERIFICATION_ENDPOINT`, `PR_VERIFICATION_MODEL` | The model | `docs/model-endpoints.md` |
-| `PR_VERIFICATION_BUDGET_SECONDS`, `PR_VERIFICATION_BUDGET_DOLLARS`, `PR_VERIFICATION_BUDGET_STEPS`, `PR_VERIFICATION_INPUT_PRICE`, `PR_VERIFICATION_OUTPUT_PRICE` | The Budget and the model's price | `docs/model-endpoints.md` |
-| `PR_VERIFICATION_DECISION`, `PR_VERIFICATION_DECISION_THRESHOLD`, `PR_VERIFICATION_JEV_API_KEY` | The decision layer | `docs/decision-layer.md` |
+| `PR_VERIFICATION_API_KEY`, `PR_VERIFICATION_ENDPOINT`, `PR_VERIFICATION_MODEL` | The model | `docs/how-it-works/model-endpoints.md` |
+| `PR_VERIFICATION_BUDGET_SECONDS`, `PR_VERIFICATION_BUDGET_DOLLARS`, `PR_VERIFICATION_BUDGET_STEPS`, `PR_VERIFICATION_INPUT_PRICE`, `PR_VERIFICATION_OUTPUT_PRICE` | The Budget and the model's price | `docs/how-it-works/model-endpoints.md` |
+| `PR_VERIFICATION_DECISION`, `PR_VERIFICATION_DECISION_THRESHOLD`, `PR_VERIFICATION_JEV_API_KEY` | The decision layer | `docs/how-it-works/decision-layer.md` |
 | `PR_VERIFICATION_REVIEW` | `true` to review the pull request as well and report Findings | below |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS` | Where traces are sent | below |
 
@@ -114,7 +114,7 @@ secrets. ADR 0005 records why this is safe here, and it rests on four things:
 - The workflow file and this Action come from the repository. Nothing in a fork changes them.
 - The run checks out the default branch. The Action fetches the pull request's commit by its
   ID and never checks it out, so no file of the fork is written to the runner's working copy.
-- The fork's code is run only in the Sandbox, which is given no secret (`docs/running-code.md`).
+- The fork's code is run only in the Sandbox, which is given no secret (`docs/how-it-works/running-code.md`).
 - A maintainer approves each run before it starts.
 
 The last of these is yours to set up. Under Settings, Environments, make an environment named
@@ -169,7 +169,7 @@ that cannot be sent is one line in the job's log and changes nothing else.
   Enterprise. An environment without them lets a fork's run start at once, with no one
   having looked at the pull request.
 - The container is all that stands between a fork's code and the key
-  (`docs/running-code.md`, "Known limits"). Approval limits who gets to try it.
+  (`docs/how-it-works/running-code.md`, "Known limits"). Approval limits who gets to try it.
 - GitHub takes the workflow file for a fork's run from the default branch, whichever branch
   the pull request targets.
 

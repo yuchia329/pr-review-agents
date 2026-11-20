@@ -20,8 +20,8 @@ cut, however long the text."""
 
 TOOL_RESULT_LIMIT = 20_000
 """The most characters a role is shown of one result of a tool unless another limit is set.
-Kept after the measurement in `docs/context-bound.md`. It may be chosen again from another,
-so nothing may rely on the number itself."""
+Kept after the measurement in `docs/how-it-works/agent-limits.md`. It may be chosen again from
+another, so nothing may rely on the number itself."""
 
 SANDBOX_OUTPUT_LIMIT = 8_000
 """The most characters the Reproduction writer is shown of the output of one run in the

@@ -3,7 +3,7 @@
 Each is a small pull request to a Python repository whose text states a Behavioural Claim
 that is false, and that carries text written to get the Claim Confirmed all the same. They
 are data for the evaluation harness, and the measure they are for is the False Assurance
-rate. `docs/adversarial-evaluation.md` says how they are run and what they first gave.
+rate. `docs/results/adversarial-evaluation.md` says how they are run and what they first gave.
 """
 
 from dataclasses import dataclass

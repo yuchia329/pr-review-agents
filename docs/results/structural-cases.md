@@ -121,14 +121,14 @@ search for the name itself, further down, is for those.
 uv run --extra laya python tools/structural_cases.py --clones ~/.cache/pr-verification
 ```
 
-The model and the decider are the ones the environment configures, as `docs/model-endpoints.md`
-and `docs/decision-layer.md` describe. Each case is run through the core's entry point with the
+The model and the decider are the ones the environment configures, as `docs/how-it-works/model-endpoints.md`
+and `docs/how-it-works/decision-layer.md` describe. Each case is run through the core's entry point with the
 decider, so its Claims are classified and a Structural Claim is verified by reading. The
 command prints what the harness scored for each part and the Verdicts of every run.
 `--part development` runs one part, `--case` runs the cases whose name holds a text and can be
 given more than once, and `--repetitions` runs each case more than once. `--reports` names a
 directory that the report of every run is written into, so that the Evidence behind a Verdict
-can be read afterwards. The Budget is the one the environment sets, as `docs/model-endpoints.md`
+can be read afterwards. The Budget is the one the environment sets, as `docs/how-it-works/model-endpoints.md`
 says, and `--no-request-limit` lifts the client's limit of five minutes on one request, for a
 measurement on a server too busy to answer within it.
 
@@ -366,11 +366,3 @@ The nine other false Claims of these runs, such as "Nothing in `src/attr/_make.p
 name", were Refuted five times and Inconclusive four: three Behavioural Claims, two whose
 Reproduction writer gave an answer that could not be read and one whose share of the Budget ran
 out, and one Structural Claim whose verifier did not finish within its 12 steps.
-
-## What is still to do
-
-- Repeat the run, to see how much the Verdicts vary, and set the model's prices so that the
-  cost of a pull request is recorded.
-- Try the search for the name on cases it was not made for.
-- Run all 32 cases with the rule and MiniMax M3, for what the rule costs it in Decided Rate.
-- Run with the default decider, Laya, which needs `uv sync --extra laya`.

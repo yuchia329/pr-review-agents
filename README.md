@@ -48,13 +48,13 @@ Two errors matter. A **False Assurance** is a false claim Confirmed: the worst e
 
 | Question | What was measured | Record |
 | --- | --- | --- |
-| Can a pull request that lies, and tries to manipulate the system, get a false claim Confirmed? | On cases held out from all tuning, no: 0 False Assurances in 62 false claims, over 36 runs | [Adversarial evaluation](docs/adversarial-evaluation.md#the-held-out-part-once-2026-11-02) |
-| Does it still confirm true claims? | 21 of 22 true claims Confirmed, and no False Block | [The same run](docs/adversarial-evaluation.md#the-held-out-part-once-2026-11-02) |
-| Did fixing the failures work? | False Assurances fell from 9 of 99 to 6 of 93, then to 2 of 94, over two changes. Each failure was traced to its cause before the change was made | [Adversarial evaluation](docs/adversarial-evaluation.md#after-the-writer-and-judge-change-2026-11-02) |
-| Is a multi-agent supervisor better than a fixed pipeline? | No. The same error rate, and 3.4 times slower at the median. The supervising model decided no more claims than a fixed rule in its place. So the system uses the fixed pipeline | [Side by side](docs/adversarial-evaluation.md#the-fixed-pipeline-and-the-supervisor-side-by-side-2026-10-18-to-19) |
-| Does a run survive losing its worker? | A worker was killed with SIGKILL in the middle of a step in 180 runs. All 180 finished with a report, and no finished step was run twice | [Durability](docs/durability.md) |
-| Does it run on Kubernetes? | The EKS stack, 46 resources, was built with Terraform and destroyed with nothing left. The sandbox's contract tests passed 33 of 33 as Kubernetes Jobs, and a full run finished with a report | [EKS](docs/eks.md) |
-| Does it work on real pull requests? | As a GitHub Action: a true claim Confirmed in 61 seconds, and a breaking change Refuted with the check failed. Five runs cost $0.04 | [Delivery](docs/delivery.md#manual-check-of-the-workflow) |
+| Can a pull request that lies, and tries to manipulate the system, get a false claim Confirmed? | On cases held out from all tuning, no: 0 False Assurances in 62 false claims, over 36 runs | [Adversarial evaluation](docs/results/adversarial-evaluation.md#the-held-out-part-once-2026-11-02) |
+| Does it still confirm true claims? | 21 of 22 true claims Confirmed, and no False Block | [The same run](docs/results/adversarial-evaluation.md#the-held-out-part-once-2026-11-02) |
+| Did fixing the failures work? | False Assurances fell from 9 of 99 to 6 of 93, then to 2 of 94, over two changes. Each failure was traced to its cause before the change was made | [Adversarial evaluation](docs/results/adversarial-evaluation.md#after-the-writer-and-judge-change-2026-11-02) |
+| Is a multi-agent supervisor better than a fixed pipeline? | No. The same error rate, and 3.4 times slower at the median. The supervising model decided no more claims than a fixed rule in its place. So the system uses the fixed pipeline | [Side by side](docs/results/adversarial-evaluation.md#the-fixed-pipeline-and-the-supervisor-side-by-side-2026-10-18-to-19) |
+| Does a run survive losing its worker? | A worker was killed with SIGKILL in the middle of a step in 180 runs. All 180 finished with a report, and no finished step was run twice | [Durability](docs/results/durability-and-eks.md#durability-of-a-run-that-loses-its-worker) |
+| Does it run on Kubernetes? | The EKS stack, 46 resources, was built with Terraform and destroyed with nothing left. The sandbox's contract tests passed 33 of 33 as Kubernetes Jobs, and a full run finished with a report | [EKS](docs/results/durability-and-eks.md#the-eks-stack-and-the-kubernetes-sandbox) |
+| Does it work on real pull requests? | As a GitHub Action: a true claim Confirmed in 61 seconds, and a breaking change Refuted with the check failed. Five runs cost $0.04 | [Delivery](docs/how-it-works/delivery.md#manual-check-of-the-workflow) |
 
 Each record gives its commit, model, settings, and what it cannot show. All of them are in [docs/](docs/).
 
@@ -101,7 +101,7 @@ CONTEXT.md               the vocabulary
 
 ## Running it
 
-It needs Python 3.12, [uv](https://docs.astral.sh/uv/), and Docker. The model is any OpenAI-compatible endpoint ([docs/model-endpoints.md](docs/model-endpoints.md)).
+It needs Python 3.12, [uv](https://docs.astral.sh/uv/), and Docker. The model is any OpenAI-compatible endpoint ([docs/how-it-works/model-endpoints.md](docs/how-it-works/model-endpoints.md)).
 
 ```sh
 uv sync
@@ -122,4 +122,4 @@ uv run pr-verification-durable verify --repo path/to/repository --before <commit
     --title "Fix the crash on empty input"
 ```
 
-As a GitHub Action, add one workflow file and one secret: [docs/delivery.md](docs/delivery.md). For EKS, the steps are at the top of [infra/versions.tf](infra/versions.tf).
+As a GitHub Action, add one workflow file and one secret: [docs/how-it-works/delivery.md](docs/how-it-works/delivery.md). For EKS, the steps are at the top of [infra/versions.tf](infra/versions.tf).

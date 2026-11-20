@@ -130,18 +130,6 @@ The False Assurance rate is **0 of 8**. What the numbers say:
   against a limit of 120, on a machine that was busy with other work at the time. The times are
   this machine's on that night and say nothing of the model.
 
-What is still to do:
-
-- The measurement with a model that can do the Reproduction writer's work, a hosted one or a
-  stronger local one, at the default Budget and with three repetitions. Nothing but the
-  environment needs to change to run it. Until then there is no number to set against the
-  security claims.
-- The held-out part. It has not been run at all, so it is still unseen, and its first run should
-  be with that model.
-- Whether the Claim extractor should take a fenced answer. More than half of these runs were
-  lost to one, here and in `docs/agent-loops.md`.
-- More pull requests. Ten of them, with six to tune on, is few.
-
 ## Results, 2026-10-13: the writer's work gets done, and the measurement is not finished
 
 Two models were tried on the development part, one of them at two time limits. No run was
@@ -241,28 +229,6 @@ minutes.
   model was run for three repetitions, and the held-out part has not been run, so it is still
   unseen.
 
-### What is still to do
-
-- Run the development part to the end on one model, three repetitions. The next try is
-  `qwen3.8` served by vLLM on a remote machine, which only the environment needs to say:
-
-  ```sh
-  export PR_VERIFICATION_ENDPOINT=http://<host>:8000/v1
-  export PR_VERIFICATION_MODEL=<the name vLLM serves it under>
-  export PR_VERIFICATION_DECISION=small_llm
-  uv run python tools/evaluate_adversarial.py --repetitions 3 2> adversarial.log
-  ```
-
-  Serve it with a context of at least 32768 tokens. Try the default Budget first: if a request
-  there takes a few seconds and not 28, 900 seconds should be enough, and the result needs no
-  note about the time limit.
-- Find out why preparing the code failed, before the next run or during it. A case that cannot
-  install pytest is a case not measured, and it looks the same as a safe Verdict in the scores.
-- Read what the writer does with `shortened-with-an-ellipsis` and, in the held-out part,
-  `version-numbers-compared-as-numbers`. If no Reproduction ever shows a difference there, the
-  judge is not being tested by this set, and the set needs a case that gets one to it.
-- Then the held-out part, once, on the same model and Budget.
-
 ## Why the runs are slow, 2026-10-14: the writer thinks at length, on every model
 
 Every model tried so far has let the time limit stop most Claims. To see whether the machines
@@ -317,27 +283,6 @@ system does not find out anyway.
 
 Every Claim of this set is false, and the code shows it. That may be why this writer step is so
 long here; whether it is as long on a true Claim has not been measured.
-
-### What is still to do
-
-- Run the development part on qwen3.8 on the vLLM server with a time limit long enough for that
-  thinking: 1800 seconds was enough for one case with the server to itself, and nine cases at
-  once each get about 31 tokens a second, not 37. A run of the 18 cases at 1800 seconds, nine at
-  once, had 14 of 18 Claims stopped by the time limit in its first nine runs. 7200 seconds is the
-  next try. It is not the default Budget, and the results will say so.
-- The long writer step is a property of the system, not of this measurement. Shortening it
-  changes what the writer is asked or allowed to write, which the tests pin, so it is a group of
-  work of its own and not part of this one. What the trace suggests:
-  - **Cap the length of an answer for each role**, as the protocol lets a request do, so that one
-    answer cannot fill the context as the one of 30,986 tokens did. An answer cut at the cap
-    would then be one failed step of the writer, which tries again, and not a Claim lost.
-  - **The instructions alone do not stop it.** The writer is already told "Do not judge whether
-    the Claim is true", and both models worked out by hand whether it holds all the same. After
-    an attempt that "shows nothing", the writer is also told to "mend what the last one's result
-    and output show to be wrong with it". On a false Claim nothing was wrong with it, which may
-    be why the second and third attempts think as long as the first. Neither has been tried.
-  - Not turning thinking off. It is cheap on most steps, and nothing measured shows it is not
-    what makes the writer's Reproductions right.
 
 ## What the writer thinks about, and three things tried, 2026-10-14 night
 
@@ -413,7 +358,7 @@ them was to be measured on true cases made from SWE-bench Verified.
   gave no report: the Claim extractor answered with prose and no list.
 - So the context these repositories need is more than this server gives, and the question is
   still open. It needs either a longer context on the server or a smaller share of it per
-  request (`docs/context-bound.md`).
+  request (`docs/how-it-works/agent-limits.md`).
 
 ## The development part at 1800 seconds on the vLLM server, 2026-10-13 to 14
 

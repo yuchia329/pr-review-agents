@@ -123,7 +123,7 @@ what made it fit, the last of them because only text is sent. The server then ho
 
 Even at 37 tokens a second, a request that thinks at length takes minutes: an answer of 10,000
 tokens takes four and a half. The client waits five minutes for one answer, and the Reproduction
-writer can need more (see "Why the runs are slow" in `docs/adversarial-evaluation.md`). A worker
+writer can need more (see "Why the runs are slow" in `docs/results/adversarial-evaluation.md`). A worker
 of a durable run (`pr-verification-durable worker`) waits 59 minutes, a minute less than Temporal
 gives the step.
 
@@ -213,4 +213,4 @@ with neither variable set and gave exit code 2 on its HTTP 404, since `pr-verifi
 was not on the machine.
 
 Not run yet: the check of the Anthropic-protocol client, for want of a key, and `self-hosted`
-with the model in place. `docs/model-comparisons.md` describes the configurations.
+with the model in place. `docs/results/model-comparisons.md` describes the configurations.
