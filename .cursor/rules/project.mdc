@@ -1,0 +1,12 @@
+---
+description: How this project is built, in Cursor and in Claude Code
+alwaysApply: true
+---
+
+# Project
+
+Follow `AGENTS.md`. It is the working agreement for Cursor and for Claude Code. `README.md` says what the system is, how it works, and where each document is. `CONTEXT.md` is the vocabulary. `docs/adr/` holds the decisions already made. Use those terms in code, tests, and commit messages.
+
+On an `impl/` branch, `tests/` is locked. The hook in `.claude/settings.json` runs `tools/tests_lock.py`. Cursor loads that hook, and Claude Code loads it too. It refuses an edit under `tests/`, and after a shell command it reports any file there that no longer matches where the branch left `main`. Do not change `tools/tests_lock.py`, `.claude/`, or `.github/` on that branch. If a test looks wrong or contradicts the contract, stop and report it.
+
+Before committing, run the four checks named in `AGENTS.md`. A tests ticket waits for the project owner. Contract and implementation tickets merge when those checks pass.
