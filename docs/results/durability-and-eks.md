@@ -114,7 +114,7 @@ The first apply also failed once on a DNS lookup of `iam.amazonaws.com` from the
 
 ### Known limits
 
-**The worker ran on the Mac.** Every model request, git command, and `kubectl` call came from there, so a dropped port-forward or a sleeping Mac pauses a run. A Sandbox or model step that fails while the worker is still connected is an answer, recorded and not retried. Running the worker in the cluster is not yet done.
+**The worker ran on the Mac.** Every model request, git command, and `kubectl` call came from there, so a dropped port-forward or a sleeping Mac pauses a run. A Sandbox or model step that fails while the worker is still connected is an answer, recorded and not retried.
 
 **No volume clean-up.** A CronJob that removes volumes older than 6 hours was not built. A named Sandbox's volumes are removed by the run's `close_sandbox` activity, so a run that never ends leaves its volumes on the sandbox node's data disk.
 

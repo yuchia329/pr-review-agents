@@ -266,7 +266,7 @@ the line never starts a line of the log either way.
 The five runs for pull requests cost $0.04 in all at M3's listed prices, the dearest $0.02, and
 each comment rounds its cost to the cent.
 
-Steps 6, 7, and 8 are still to be seen: the first two need a public repository and a second
+Steps 6, 7, and 8 were not run: the first two need a public repository and a second
 account, and the last a collector. So the handling of forks, written by #50, has not run on
 GitHub.
 

@@ -290,7 +290,7 @@ It is chosen by configuration, and the fixed pipeline stays the default:
 | `PR_VERIFICATION_ORCHESTRATION` | `pipeline` or `supervisor` | `pipeline` |
 
 Any other value exits with code 2 and no report. The command line reads the variable. The
-GitHub Action does not yet, and uses the fixed pipeline.
+GitHub Action does not, and uses the fixed pipeline.
 
 What code keeps from outside the model:
 
