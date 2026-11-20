@@ -42,6 +42,8 @@ packages = ["src/pr_verification"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["tools"]
+addopts = "-m 'not eks'"
+markers = ["eks: the Sandbox contract on the EKS cluster from infra/"]
 
 [tool.mypy]
 strict = true
