@@ -11,3 +11,5 @@ infra/*.tfstate.*
 infra/*.tfvars
 !infra/*.tfvars.example
 infra/crash.log
+
+.DS_Store
